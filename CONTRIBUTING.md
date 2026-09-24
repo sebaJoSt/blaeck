@@ -31,8 +31,8 @@ python extras\scripts\checkprototype.py
 ```
 
 This is not a build or runtime test. State which checks you actually ran in your pull
-request; do not imply that unrun checks passed. See the README's
-[validation status](README.md#validation-status) for the current limitations and host runner.
+request; do not imply that unrun checks passed.
+The host suite is run with `python extras\scripts\testserver.py` and requires a C++ compiler.
 The legacy documentation checker and CI workflows have not yet been migrated.
 
 ## Editor setup

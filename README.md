@@ -1,212 +1,194 @@
-# blaeck
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="extras/blaeck-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="extras/blaeck-light.svg">
+  <img src="extras/blaeck-light.svg" alt="blaeck" height="75">
+</picture>
 
-One Arduino package, one device class, one protocol core. Attach a **Blaeck** device to a
-Stream or to an already-started TCP server. **Version 7.0.0 is in development and has
-not been released.**
+---
 
-Based on BlaeckSerial `25b5434e3433d6c46309a75beb244b389d8dec80` and
-BlaeckTCP `68ca1a19c0f7139bb7e496333541476b2bccd20f`.
-The original repositories are unchanged.
+blaeck is an Arduino library. It sends any value your sketch holds - sensor readings,
+calculated results, text - over Serial or TCP as binary data, using the
+[blaeck protocol](https://sebajost.github.io/blaeck-protocol/).
 
-## One public API
+It is the first part of a chain:
+
+1. **Your Arduino sketch** uses blaeck to register each variable it sends as a *signal* -
+   a temperature, a counter, a switch position. You can also register the commands the board
+   accepts and the events it fires.
+2. **Loggbok**, a data logging tool, reads the signals over Serial or TCP and stores
+   them in a database. It is also an MQTT bridge: it publishes the signals and commands to a
+   broker.
+3. **Home Assistant** subscribes to that broker and creates one entity for each: a sensor for
+   a signal, a slider or button for a command.
+
+Because your sketch declares what it has, the host can discover its signals and controls.
+A signal with a unit arrives in Home Assistant as a sensor with that unit. The connection,
+MQTT broker and Home Assistant integration still need to be configured.
+
+Loggbok is an internal tool and is not publicly released. The protocol is documented, so you
+can write your own host. You can also send commands from a serial monitor or TCP terminal.
+
+**Version 7.0.0 is in development and has not been released.**
+
+## A first sketch
+
+These two sketches send the same simulated temperature and pressure readings.
+Choose Serial or TCP.
+
+### Serial
+
+Connect the host to the board's serial port at **115200 baud**.
 
 ```cpp
 #include <Blaeck.h>
 
 Blaeck device;
-float Temperature = 21.0f;
+
+float temperature;
+long pressure;
 
 void setup()
 {
   Serial.begin(115200);
-  device.begin(Serial).withSignals(1);
-  device.addSignal(F("Temperature"), &Temperature);
+  device.begin(Serial).withSignals(2);
+
+  device.DeviceName = "Weather Station";
+
+  device.addSignal(F("Temperature"), &temperature);
+  device.addSignal(F("Pressure"), &pressure);
 }
 
 void loop()
 {
+  temperature = 20.0f + random(100) / 10.0f;
+  pressure = 1000 + random(30);
+
   device.tick();
 }
 ```
 
-For TCP, supply a listening server instead:
+### TCP
+
+This version uses an Arduino Ethernet shield and the **Ethernet** library with DHCP.
+The example MAC address must be unique on your network. Connect the host to the IP
+address printed on Serial, on **TCP port 23**.
 
 ```cpp
 #include <Blaeck.h>
 #include <Ethernet.h>
 
+byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
 EthernetServer server(23);
 Blaeck device;
 
+float temperature;
+long pressure;
+
 void setup()
 {
-  // Bring Ethernet up first.
+  Serial.begin(115200);
+
+  if (Ethernet.begin(mac) == 0)
+  {
+    Serial.println(F("DHCP failed. Check the Ethernet connection and restart."));
+    while (true)
+      delay(1000);
+  }
+
   server.begin();
-  device.begin(server).withClients(4).withSignals(1);
-  // Register the same signals, commands, state and events here.
+  device.begin(server).withSignals(2).withDebugStream(&Serial);
+
+  device.DeviceName = "Weather Station";
+
+  device.addSignal(F("Temperature"), &temperature);
+  device.addSignal(F("Pressure"), &pressure);
+
+  Serial.print(F("Connect on port 23 at "));
+  Serial.println(Ethernet.localIP());
 }
 
 void loop()
 {
+  temperature = 20.0f + random(100) / 10.0f;
+  pressure = 1000 + random(30);
+
   device.tick();
+  Ethernet.maintain();
 }
 ```
 
-Streams and servers are passed by reference, not pointer or port number. There are no
-public `BlaeckSerial`/`BlaeckTCP` classes or transport-specific headers in this library.
-Use `Blaeck.h` even when the original standalone libraries remain installed.
-The device and handle types share the `blaeck` namespace; `Blaeck.h` also makes them
-available without qualification, so sketches still write `Blaeck device;`.
+Three calls do the work:
 
-**No mandatory third-party library dependencies.** Stream-only sketches use the Arduino
-core alone. TCP users supply their chosen networking library explicitly.
-CRC32 is bundled in `src/detail/BlaeckCRC32.h`, adapted from
-[Rob Tillaart's CRC library](https://github.com/RobTillaart/CRC) with its MIT license
-retained in the file. Its fixed protocol parameters preserve the existing checksum format.
+- `begin(Serial)` hands blaeck the serial port you opened. On a board with more than one
+  port you can pass `Serial1` instead. For TCP, `begin(server)` takes the listening server
+  you started. `.withSignals(2)` reserves room for two signals.
+- `addSignal(...)` registers a variable. blaeck keeps a pointer to it and reads it
+  whenever it sends data, so you only have to keep the variable up to date.
+- `tick()` reads incoming commands and sends the values when they are due. Call it in every
+  `loop()`.
 
-**TelnetStream is optional:** include `<TelnetPrint.h>`, bring the network up, then use:
+The host decides how often data is sent. It sends `<BLAECK.ACTIVATE,1000>` to get one frame
+per second, and `<BLAECK.DEACTIVATE>` to stop interval-driven data.
+The data frames are binary, not readable text in a terminal.
 
-```cpp
-TelnetPrint.begin();
-device.begin(TelnetPrint);
-```
+TCP sketches need the networking library for their board; see [networking](docs/network.md) for supported server requirements
+and the optional TelnetStream setup.
 
-That retains its existing networking selection and wrappers without making it a Blaeck
-dependency. Direct-server PlatformIO projects use normal dependency discovery; TelnetStream
-projects may still need `lib_ldf_mode = deep`.
+## Documentation
+
+| Guide | What it covers |
+|---|---|
+| [Signals](docs/signals.md) | Registering values, naming them, and describing how they are shown |
+| [Commands](docs/commands.md) | Reacting to commands, and declaring them as controls |
+| [State channels](docs/state-channels.md) | Reporting a value that is displayed but not logged |
+| [Events](docs/events.md) | Reporting that something happened |
+| [Sending data](docs/sending-data.md) | Intervals, sending it yourself, timestamps, buffered writes |
+| [Configuration](docs/configuration.md) | Table sizes and compile-time settings |
+| [Networking](docs/network.md) | Servers, client limits, terminal output and transport errors |
 
 ## Examples
 
-There is one set of topic sketches:
+The examples are in `examples/`. In the Arduino IDE, open them with
+**File > Examples > blaeck**.
 
-`Basic`, `Signals`, `Commands`, `StateChannels`, `EventChannels`, `WriteModes`,
-and `WaveformGenerator`.
+The main examples include a [NetworkSetup.h tab](examples/Basic/NetworkSetup.h) with
+ready-made Ethernet setup for Mega/GIGA shields and ESP32-PoE/WT32-ETH01 boards.
+Leave `USE_TCP` at `0` for Serial or set it to `1` for TCP and configure the included tab.
+Using `NetworkSetup.h` is optional. You can use your own networking libraries and setup instead.
 
-Each sketch shows both connection choices directly. Serial is the default; set **USE_TCP**
-to `1` at the top of the sketch to select TCP. The networking tab provides the board's
-server type as **NetworkSetup::Server**:
+Start with **Basic**, then **Signals** and **Commands**. Follow with **StateChannels** and
+**EventChannels**, then **WaveformGenerator** to see the pieces working together.
 
-```cpp
-#if USE_TCP
-#include "NetworkSetup.h"
-NetworkSetup::Server server(23);
-#endif
-```
+| Example | What it teaches |
+|---|---|
+| [Basic](examples/Basic) | The smallest sketch that logs two values |
+| [Signals](examples/Signals) | Numeric, boolean and text signals, metadata, and numbered arrays |
+| [Commands](examples/Commands) | Plain commands and typed dashboard controls |
+| [StateChannels](examples/StateChannels) | Values shown but never logged, from variables, getters or explicit writes |
+| [EventChannels](examples/EventChannels) | Declaring and reporting occurrences |
+| [WaveformGenerator](examples/WaveformGenerator) | A complete, controllable waveform dashboard |
+| [WriteModes](examples/WriteModes) | Immediate writes versus updated-only data sent on the host's interval |
+| [more / ConfigurableSignals](examples/more/ConfigurableSignals) | Choose which signals to log through commands and save the selection in EEPROM |
+| [more / SHT31TempHumiditySensor](examples/more/SHT31TempHumiditySensor) | Read a real temperature and humidity sensor; requires Adafruit SHT31 |
+| [more / TimestampsRTC](examples/more/TimestampsRTC) | Wall-clock timestamps using the UNO R4's RTC |
+| [more / TimestampsNTP](examples/more/TimestampsNTP) | Network-synchronized timestamps |
+| [more / WiFi](examples/more/WiFi) | WiFi-specific connection setup |
+| [more / ESP32C6BugBoard](examples/more/ESP32C6BugBoard) | An ESP32-C6 board-specific example |
+| [more / BridgeESP32PoE](examples/more/BridgeESP32PoE) | A bridge between a UART and TCP |
 
-In `setup()`, both paths use the normal device API:
+## Reference
 
-```cpp
-Serial.begin(115200);
+Public API documentation is in `src/Blaeck.h`. Your editor shows it when you hover over a call.
 
-#if USE_TCP
-networkBegin(23);
-server.begin();
-device.begin(server).withSignals(2);
-#else
-device.begin(Serial).withSignals(2);
-#endif
+The frame formats are described in the
+[blaeck protocol specification](https://sebajost.github.io/blaeck-protocol/).
 
-// Shared signal/command/state/event registration follows.
-```
+## Help and licence
 
-Only connection setup and its short table-sizing chain are repeated. There is no
-ConnectionSetup wrapper. In `loop()`, the device's tick method runs Blaeck; a `#if USE_TCP`
-block calls `networkLoop()` for network maintenance. All feature code stays in one sketch.
+For questions and bug reports, see [SUPPORT.md](SUPPORT.md). To contribute, see
+[CONTRIBUTING.md](CONTRIBUTING.md). blaeck is licensed under the MIT licence
+([LICENSE.md](LICENSE.md)).
 
-Uncomment `#define NETWORK_WITH_SERVICES` in the TCP include block for OTA/Bonjour. The
-[WaveformGenerator README](examples/WaveformGenerator/README.md) covers prerequisites.
-Services are off by default. GIGA QSPI OTA storage remains embedded in `NetworkSetup.h`.
-
-The `more` submenu holds hardware-specific sketches: ConfigurableSignals, SHT31TempHumiditySensor,
-TimestampsRTC, TimestampsNTP, WiFi, ESP32C6BugBoard, and BridgeESP32PoE.
-
-Sketches remain self-contained. Edit Basic's NetworkSetup.h, then synchronize existing copies:
-
-```powershell
-python extras\scripts\syncnetwork.py
-python extras\scripts\syncnetwork.py --check
-```
-
-## Behavior and compatibility
-
-- `Blaeck` is one concrete class owning the catalog and active connection, with no core
-  base class or virtual transport hooks. `Blaeck.cpp` implements protocol/catalog logic
-  and lifecycle; `BlaeckTransport.cpp` implements Stream and TCP session handling.
-- Both `begin()` overloads return the same `BlaeckBeginRef` handle. Table sizing,
-  `.withClients()` and `.withDebugStream()` can be chained in any order.
-- The small typed server adapter in `src/detail/BlaeckServerAdapter.h` is header-defined.
-  It requires proper `accept()` behavior and never guesses with `available()`.
-- One device uses one connection at a time. `begin(otherConnection)` detaches the old one;
-  separate `Blaeck` objects can use separate connections with independent catalogs.
-- The caller owns and starts the stream/server. Keep it alive while attached.
-  `end()` and destruction close accepted TCP clients but never stop the supplied stream/server.
-  No second consumer may accept from that same server.
-- `begin()` resets the signal catalog as before: attach first, then register signals.
-  Partial input from an earlier attachment is discarded.
-- `Terminal` writes text to the attached Stream, or only to TCP terminals (never TCP hosts).
-  Connection callbacks and `.withClients()` are TCP-specific. Using `.withClients()` for a
-  Stream reports `NotServer` rather than silently pretending there are multiple clients.
-- Stream buffering defaults to off on AVR and on elsewhere. TCP buffering defaults to on.
-  The default is selected when attaching. An explicit `setBufferedWrites()` selection is
-  retained across later `begin()` calls.
-- **Both connection types report `blaeck` version `7.0.0`.** The lowercase library name
-  matches the package brand. The C++ class remains `Blaeck`, with header `Blaeck.h`.
-  Uppercase protocol framing and command names (`<BLAECK:`, `BLAECK.GET_DEVICES`, etc.)
-  are unchanged.
-- Hosts must recognize the exact `blaeck` identity and its v7 capabilities. Loggbok's
-  updated source supports this identity over Serial and TCP; older Loggbok releases
-  may not. Legacy `BlaeckSerial` and `BlaeckTCP` identities are supported there through v6.
-
-See [network](docs/network.md) for server requirements, storage, ownership and errors.
-
-## Configuration
-
-Use one **BlaeckConfig.h**, loaded by the internal `detail/BlaeckDefaults.h` and visible to
-sketch and library translation units. Shared feature flags and command-buffer settings
-apply to both connection types. Legacy
-`BlaeckSerialConfig.h`/`BlaeckTCPConfig.h` files cause an explicit migration error.
-
-Independent defaults remain available:
-
-```cpp
-#define BLAECK_SERIAL_BUFFERED_WRITES_DEFAULT false
-#define BLAECK_TCP_BUFFERED_WRITES_DEFAULT true
-```
-
-`BLAECK_BUFFERED_WRITES_DEFAULT` overrides both unless a connection-specific default is set.
-`BLAECK_USB_PACKET_BYTES` applies only to streams; `BLAECK_TCP_NO_DELAY_DEFAULT` applies only
-to servers/clients supporting that setting. See [configuration](docs/configuration.md).
-
-## Validation status
-
-For contribution guidelines and editor setup, see [CONTRIBUTING.md](CONTRIBUTING.md).
-For reporting problems, see [SUPPORT.md](SUPPORT.md).
-
-**This unified-public-class revision has source checks only, as requested. It has not
-been compiled or runtime-tested.** Build and size results from the earlier two-class
-prototype do not validate this revision.
-
-```powershell
-python extras\scripts\checkprototype.py
-```
-
-Updated fixtures are ready for separately authorized validation:
-
-- `extras/tests/SerialOnly`: Stream attachment with no concrete networking library.
-- `extras/tests/Combined`: two Blaeck devices, both connection types, multiple translation units.
-- `extras/tests/TelnetServer`: the optional TelnetPrint route.
-- `extras/tests/host`: simulated clients/streams using the real protocol and transports.
-  Assertions cover the concrete class and unified begin handle, routing, reuse, failures,
-  teardown, connection changes, defaults and explicit overrides, unified wire identity,
-  CRC32 reference vectors and incremental updates, USB padding, and rejection of
-  `available()`-only servers.
-
-The host suite is run with a C++ compiler; no external CRC library is needed:
-
-```powershell
-python extras\scripts\testserver.py
-```
-
-No firmware has been uploaded. Hardware interoperability, OTA operation and release
-readiness remain unverified. No builds, flashing, commits, pushes or publishing without
-authorization.
+The internal CRC32 helper is adapted from
+[Rob Tillaart's CRC library](https://github.com/RobTillaart/CRC), with its MIT notice
+retained in `src/detail/BlaeckCRC32.h`.
