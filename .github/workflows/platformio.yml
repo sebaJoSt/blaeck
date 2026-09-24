@@ -1,0 +1,78 @@
+name: PlatformIO
+
+on:
+  push:
+    paths: ["src/**", "examples/**", "extras/tests/**", "extras/scripts/testserver.py", "library.*", ".github/workflows/platformio.yml"]
+  pull_request:
+    paths: ["src/**", "examples/**", "extras/tests/**", "extras/scripts/testserver.py", "library.*", ".github/workflows/platformio.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Mega / ${{ matrix.transport }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [serial, tcp]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build main examples
+        env:
+          TRANSPORT: ${{ matrix.transport }}
+        run: |
+          options=()
+          if [ "$TRANSPORT" = tcp ]; then
+            options+=(--project-option="build_flags=-DUSE_TCP=1")
+            options+=(--project-option="lib_deps=arduino-libraries/Ethernet@^2.0.2")
+          fi
+          for ex in Basic Signals Commands StateChannels EventChannels WriteModes WaveformGenerator; do
+            pio ci --board=megaatmega2560 --lib="." "${options[@]}" "examples/$ex"
+          done
+      - name: Build connection fixtures
+        env:
+          TRANSPORT: ${{ matrix.transport }}
+        run: |
+          if [ "$TRANSPORT" = serial ]; then
+            pio ci --board=megaatmega2560 --lib="." extras/tests/SerialOnly
+          else
+            pio ci --board=megaatmega2560 --lib="." \
+              --project-option="lib_deps=arduino-libraries/Ethernet@^2.0.2" extras/tests/Combined
+            pio ci --board=megaatmega2560 --lib="." \
+              --project-option="lib_deps=arduino-libraries/Ethernet@^2.0.2, jandrassy/TelnetStream@^1.3.0" \
+              --project-option="lib_ldf_mode=deep" extras/tests/TelnetServer
+          fi
+      - name: Check package export paths
+        if: matrix.transport == 'serial'
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("library.json").read_text())
+          for path in manifest["export"]["include"]:
+              if not Path(path).exists():
+                  raise SystemExit("Missing export path: " + path)
+          PY
+      - name: Pack without publishing
+        if: matrix.transport == 'serial'
+        run: |
+          mkdir -p "$RUNNER_TEMP/blaeck-package"
+          pio pkg pack --output "$RUNNER_TEMP/blaeck-package"
+
+  host:
+    name: Native protocol and transport suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - run: python extras/scripts/testserver.py

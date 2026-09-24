@@ -3930,8 +3930,15 @@ public:
   // Migration guard: start a server yourself, then pass that object rather than its port.
   BlaeckBeginRef begin(uint16_t port) = delete;
 
-  // Detaches a stream or closes accepted clients; never stops the caller's stream/server.
-  // Also called by the destructor and before attaching to another server.
+  /*!
+    @brief   Detaches the stream or closes accepted TCP clients.
+
+    Never stops the caller's stream or server. Also called by the destructor.
+
+    @code
+      device.end();
+    @endcode
+  */
   void end();
 
   enum class TransportError : byte
@@ -3944,7 +3951,28 @@ public:
     NotServer
   };
 
+  /*!
+    @brief   Returns the transport's current error status.
+
+    Separate from table-registration rejections reported by hasRejections().
+    TCP client storage is allocated on the first read() or tick(), so check afterward.
+
+    @code
+      if (device.transportError() != Blaeck::TransportError::None)
+        device.printTransportError(&Serial);
+    @endcode
+  */
   TransportError transportError() const { return _transportError; }
+  /*!
+    @brief   Prints the current transport error, if any.
+
+    @param   out  Where to print. A null pointer produces no output.
+    @return  True if an error was printed.
+
+    @code
+      device.printTransportError(&Serial);
+    @endcode
+  */
   bool printTransportError(Print *out) const;
 
   /*!

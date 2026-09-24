@@ -1,0 +1,37 @@
+name: Check API Docs
+
+on:
+  push:
+    paths: ["src/**", "extras/scripts/checkdocs.py", "extras/tests/DocCodeBlocks/**", "extras/tests/host/**", ".github/workflows/check-docs.yml"]
+  pull_request:
+    paths: ["src/**", "extras/scripts/checkdocs.py", "extras/tests/DocCodeBlocks/**", "extras/tests/host/**", ".github/workflows/check-docs.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - name: Install documentation parser
+        run: pip install libclang
+      - name: Check public API documentation
+        run: python extras/scripts/checkdocs.py src/Blaeck.h -- -Iextras/tests/host
+      - name: Extract doc examples
+        run: python extras/scripts/checkdocs.py src/Blaeck.h --extract -- -Iextras/tests/host
+      - name: Compile doc examples
+        uses: arduino/compile-sketches@v1
+        with:
+          fqbn: arduino:avr:mega
+          platforms: |
+            - name: arduino:avr
+          libraries: |
+            - source-path: ./
+            - name: Ethernet
+          sketch-paths: |
+            - extras/tests/DocCodeBlocks

@@ -59,9 +59,10 @@ Every new public name should have an example showing how a sketch uses it.
 - Use `F()` for strings where that overload is supported.
 - Keep examples small. Show the feature being described, not a complete application.
 
-The documentation checker and doc-example compilation from the legacy repositories
-have not yet been migrated. Do not claim that these examples are automatically compiled
-or that CI checks their coverage.
+`checkdocs.py` checks coverage and extracts examples for the Check API Docs workflow,
+which compiles them on Mega. Shared sketch values and handlers belong in
+`extras/tests/DocCodeBlocks/preamble.h`; add only the prerequisites an example needs.
+Deleted methods are excluded from coverage.
 
 ## Implementation comments
 
@@ -78,7 +79,10 @@ From the repository root:
 ```powershell
 python extras\scripts\checkprototype.py
 python extras\scripts\syncnetwork.py --check
+python extras\scripts\checkdocs.py src\Blaeck.h -- -Iextras\tests\host
 ```
 
-These check structure, packaging and synchronized networking tabs. They do not check
-documentation coverage, compile examples or establish runtime correctness.
+These check structure, packaging, synchronized networking tabs and documentation
+coverage. The documentation checker requires `libclang` and compatible C++ headers;
+see [CONTRIBUTING.md](../CONTRIBUTING.md) for setup and extraction.
+None of these commands compiles examples or establishes runtime correctness.

@@ -33,7 +33,26 @@ python extras\scripts\checkprototype.py
 This is not a build or runtime test. State which checks you actually ran in your pull
 request; do not imply that unrun checks passed.
 The host suite is run with `python extras\scripts\testserver.py` and requires a C++ compiler.
-The legacy documentation checker and CI workflows have not yet been migrated.
+
+For API documentation coverage, install `libclang` and run:
+
+```powershell
+python extras\scripts\checkdocs.py src\Blaeck.h -- -Iextras\tests\host
+python extras\scripts\checkdocs.py src\Blaeck.h --extract -- -Iextras\tests\host
+```
+
+The second command generates the ignored `DocCodeBlocks.ino`; it does not compile it.
+The parser needs C++ standard-library headers compatible with libclang. On Windows
+with a newer Visual Studio STL, append
+`-std=c++17 -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH` after the include argument
+if the STL rejects libclang's version. This affects documentation parsing only;
+Arduino builds still use the board core's compiler settings.
+
+GitHub Actions defines Arduino Serial/TCP example and fixture builds, PlatformIO
+builds and package checks, native host tests, API documentation coverage and
+doc-example compilation, plus source/NetworkSetup-copy checks. These workflows do not
+publish packages. Hardware and host-integration drivers remain manual; see
+[the harness instructions](extras/tests/harness/README.md).
 
 ## Editor setup
 

@@ -1,0 +1,96 @@
+name: Compile Examples
+
+on:
+  push:
+    paths: ["src/**", "examples/**", "extras/tests/**", "library.*", ".github/workflows/compile-examples.yml"]
+  pull_request:
+    paths: ["src/**", "examples/**", "extras/tests/**", "library.*", ".github/workflows/compile-examples.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.fqbn }} / ${{ matrix.transport }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {fqbn: "arduino:avr:mega", core: "arduino:avr", transport: serial}
+          - {fqbn: "arduino:esp32:nano_nora", core: "arduino:esp32", transport: serial}
+          - {fqbn: "arduino:samd:mkrzero", core: "arduino:samd", transport: serial}
+          - {fqbn: "arduino:renesas_uno:unor4wifi", core: "arduino:renesas_uno", transport: serial}
+          - {fqbn: "arduino:mbed_giga:giga", core: "arduino:mbed_giga", transport: serial}
+          - {fqbn: "arduino:avr:mega", core: "arduino:avr", transport: tcp}
+          - {fqbn: "arduino:mbed_giga:giga", core: "arduino:mbed_giga", transport: tcp}
+          - {fqbn: "esp32:esp32:esp32-poe", core: "esp32:esp32", transport: tcp}
+          - {fqbn: "esp32:esp32:wt32-eth01", core: "esp32:esp32", transport: tcp}
+          - {fqbn: "esp32:esp32:esp32c6", core: "esp32:esp32", transport: spi-ethernet}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: arduino/setup-arduino-cli@v2
+      - name: Install board core and libraries
+        env:
+          CORE: ${{ matrix.core }}
+          TRANSPORT: ${{ matrix.transport }}
+        run: |
+          urls=()
+          if [ "$CORE" = esp32:esp32 ]; then
+            urls+=(--additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json)
+          fi
+          arduino-cli core update-index "${urls[@]}"
+          arduino-cli core install "$CORE" "${urls[@]}"
+          arduino-cli lib update-index
+          if [ "$TRANSPORT" = serial ]; then
+            arduino-cli lib install "Adafruit SHT31 Library"
+          fi
+          if [ "$CORE" = arduino:avr ] || [ "$CORE" = arduino:mbed_giga ]; then
+            arduino-cli lib install Ethernet TelnetStream
+          fi
+      - name: Compile sketches
+        env:
+          FQBN: ${{ matrix.fqbn }}
+          TRANSPORT: ${{ matrix.transport }}
+        run: |
+          flags=()
+          if [ "$TRANSPORT" = tcp ]; then
+            flags+=(--build-property compiler.cpp.extra_flags=-DUSE_TCP=1)
+          fi
+          compile() {
+            arduino-cli compile --fqbn "$FQBN" --library . "${flags[@]}" "$1"
+          }
+          if [ "$TRANSPORT" = spi-ethernet ]; then
+            compile examples/more/ESP32C6BugBoard
+            exit 0
+          fi
+          for ex in Basic Signals Commands StateChannels EventChannels WriteModes WaveformGenerator; do
+            compile "examples/$ex"
+          done
+          if [ "$TRANSPORT" = serial ]; then
+            compile extras/tests/SerialOnly
+            compile examples/more/SHT31TempHumiditySensor
+            if [ "$FQBN" = arduino:avr:mega ] || [ "$FQBN" = arduino:mbed_giga:giga ]; then
+              for sketch in extras/tests/harness/*/*.ino; do
+                compile "$(dirname "$sketch")"
+              done
+            fi
+            case "$FQBN" in
+              arduino:avr:mega) compile examples/more/ConfigurableSignals ;;
+              arduino:renesas_uno:unor4wifi)
+                compile examples/more/TimestampsRTC
+                compile examples/more/WiFi ;;
+              arduino:esp32:nano_nora) compile examples/more/WiFi ;;
+            esac
+          else
+            case "$FQBN" in
+              arduino:avr:mega|arduino:mbed_giga:giga)
+                compile extras/tests/Combined
+                compile extras/tests/TelnetServer ;;
+              esp32:esp32:esp32-poe)
+                compile examples/more/TimestampsNTP
+                compile examples/more/BridgeESP32PoE ;;
+              esp32:esp32:wt32-eth01) compile examples/more/TimestampsNTP ;;
+            esac
+          fi
