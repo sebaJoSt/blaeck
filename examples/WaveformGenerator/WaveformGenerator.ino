@@ -207,8 +207,8 @@ void setup()
   device.addEventChannel(F("Activity"), F("idle_warning,resumed"))
       .withIcon(F("mdi:bell-alert"));
 
-  // Silent unless a table ran out of room, in which case it prints how many entries each
-  // dropped and the begin() call that would have fitted them.
+  // Silent unless a registration was rejected; prints counts and table capacities.
+  // The debug stream gives details, including invalid declarations or insufficient memory.
   device.printRejections(&Serial);
 
   lastMicros = micros();

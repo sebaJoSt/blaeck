@@ -84,7 +84,7 @@ libraries may still allocate their own socket storage.
 `ClientLimitLocked`, or `NotServer`. A zero client count is rejected, retaining the previous
 limit; calling `.withClients()` after `begin(stream)` reports `NotServer`.
 Allocation failure is latched: no clients are accepted and no tight allocation retry loop
-runs. Call `begin(server)` again, with a smaller client limit if needed, to retry.
+runs.
 
 Errors are reported once to a configured debug stream when possible. A terminal cannot
 report an allocation failure that prevented it from being accepted, so use a separate

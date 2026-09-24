@@ -394,6 +394,72 @@ static void unifiedConnections()
   assert(usb.flushes == 2);
 }
 
+static void diagnosticMessages()
+{
+  Capture debug;
+  Blaeck unattached;
+  assert(unattached.printTransportError(&debug));
+  assert(debug.text.find("begin(stream) or begin(server)") != std::string::npos);
+
+  auto handler = [](const char *, const char *const *, byte) {};
+  for (bool tcp : {false, true})
+  {
+    FakeStream stream;
+    FakeServer<> server;
+    Blaeck device;
+    auto setup = tcp ? device.begin(server) : device.begin(stream);
+    setup.withSignals(0).withCommands(1).withDebugStream(&debug);
+    debug.text.clear();
+    assert(!device.printRejections(&debug) && debug.text.empty());
+
+    float value = 0;
+    device.addSignal("RAM", &value);
+    device.addSignal(F("Flash"), &value);
+    assert(debug.text.find("Dropped 'RAM': table full at 0.") != std::string::npos);
+    assert(debug.text.find("Dropped 'Flash': table full at 0.") != std::string::npos);
+    assert(debug.text.find("Increase .withSignals() on the original begin() chain")
+           != std::string::npos);
+    assert(debug.text.find("begin(Serial)") == std::string::npos);
+    device.onCommand("BLAECK.RESERVED", handler);
+    assert(device.getRejectedCommandCount() == 1);
+
+    debug.text.clear();
+    assert(device.printRejections(&debug));
+    assert(debug.text.find("2 signal registrations rejected; table capacity: 0.")
+           != std::string::npos);
+    assert(debug.text.find("1 command registrations rejected; table capacity: 1.")
+           != std::string::npos);
+    assert(debug.text.find("invalid or conflicting names") != std::string::npos);
+    assert(debug.text.find("Increase") == std::string::npos);
+    assert(debug.text.find("begin(Serial)") == std::string::npos);
+  }
+
+  // Every table can fail allocation without being full.
+  for (int table = 0; table < 5; ++table)
+  {
+    FakeStream stream;
+    Blaeck device;
+    device.begin(stream).withSignals(1).withCommands(1).withStateChannels(1)
+        .withEventChannels(1).withEventTypes(1).withDebugStream(&debug);
+    float value = 0;
+    debug.text.clear();
+    failAfter = table == 4 ? 1 : 0; // For event types, allocate the channel first.
+    switch (table)
+    {
+    case 0: device.addSignal(F("Value"), &value); break;
+    case 1: device.onCommand("COMMAND", handler); break;
+    case 2: device.addStateChannel(F("Value"), &value); break;
+    case 3:
+    case 4: device.addEventChannel(F("Activity"), F("started")); break;
+    }
+    failAfter = -1;
+    assert(device.hasRejections());
+    assert(debug.text.find("No RAM") != std::string::npos);
+    assert(debug.text.find("table full") == std::string::npos);
+    assert(debug.text.find("Increase") == std::string::npos);
+  }
+}
+
 static void crc32Behavior()
 {
   blaeck::detail::BlaeckCRC32 crc;
@@ -431,6 +497,7 @@ static void crc32Behavior()
 
 int main()
 {
+  diagnosticMessages();
   crc32Behavior();
   sessionBehavior(false);
   sessionBehavior(true);

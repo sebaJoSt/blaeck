@@ -65,10 +65,10 @@ bool Blaeck::printTransportError(Print *out) const
   switch (_transportError)
   {
   case TransportError::NotStarted:
-    out->println(F("call begin(server) before read() or tick()."));
+    out->println(F("call begin(stream) or begin(server) before read() or tick()."));
     break;
   case TransportError::OutOfMemory:
-    out->println(F("transport allocation failed; reduce client count and call begin(server) again."));
+    out->println(F("transport allocation failed; reduce client count in setup()."));
     break;
   case TransportError::InvalidClientCount:
     out->println(F("withClients() requires 1 to 255; previous limit retained."));

@@ -58,8 +58,10 @@ fixed, and a later `with...()` is refused.
 An entry that has no slot is dropped. Your sketch still runs, still logs, and is simply missing
 a signal or a control - which is why it is worth asking.
 
-`withDebugStream()` names a stream for the library to report on. It prints each entry as it is
-dropped, with the call that would have kept it. It may be the same stream the data goes to.
+`withDebugStream()` names a stream for the library to report on. Enable it before registration
+to see why an entry was rejected. For a full table, the message identifies the setting to
+increase on the original `begin()` chain, before registering entries. Do not call `begin()`
+again just to resize a table. The debug stream may be the same stream the data goes to.
 
 On a board with only one `Serial`, end `setup()` with this instead:
 
@@ -67,12 +69,18 @@ On a board with only one `Serial`, end `setup()` with this instead:
 device.printRejections(&Serial);
 ```
 
-It prints one line per table that dropped something, and nothing at all when everything fitted:
+It prints one line per table with registration rejections, and nothing when there were none:
 
 ```
-Blaeck dropped what it had no room for:
-  3 signal(s) dropped, table holds 8 - begin(Serial).withSignals(11)
+Blaeck registration rejections:
+  3 signal registrations rejected; table capacity: 8.
+  Possible causes include full tables, invalid or conflicting names, invalid event types, or insufficient memory.
+  Enable withDebugStream() before registration for details.
 ```
+
+These counts are not solely capacity errors. Increasing a table will not fix an invalid
+declaration or insufficient memory. Allocation failures are reported as memory failures,
+not as a recommendation to increase capacity.
 
 It is safe on the Blaeck stream because no data has been written yet at the end of `setup()`.
 

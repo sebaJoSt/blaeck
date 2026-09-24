@@ -2709,12 +2709,12 @@ public:
              files values under the old names.
 
     @code
-      device.deleteSignals();
+      device.clearAllSignals();
       device.addSignal(F("Temperature"), &Temperature);
       device.writeSymbols();
     @endcode
   */
-  void deleteSignals();
+  void clearAllSignals();
 
   /*!
     @brief   Reports whether any signal could not be added.
@@ -2795,7 +2795,7 @@ public:
              values under the wrong names.
 
     @code
-      device.deleteSignals();
+      device.clearAllSignals();
       device.addSignal(F("Temperature"), &Temperature);
       device.writeSymbols();
     @endcode
@@ -3644,10 +3644,11 @@ public:
   */
   bool hasRejections() const;
   /*!
-    @brief   Prints what was dropped, and which begin() setting to raise.
+    @brief   Prints registration rejection counts and each affected table's capacity.
 
-    One line per table, and nothing when everything fitted, so it can be called at
-    the end of setup() every time.
+    Prints nothing when there were no rejections. A rejection can mean a full table,
+    an invalid declaration or insufficient memory; increasing capacity may not help.
+    Enable withDebugStream() before registration for details.
 
     @param   out  Where to print. The data port is fine when called from setup().
     @return  True if anything was printed.
@@ -4220,15 +4221,14 @@ protected:
     TABLE_COMMANDS
   };
   void _setTableCapacity(TableId table, unsigned int count);
-  // Prints what was dropped and which begin() setting to raise, e.g. F("withSignals").
+  // For a full table, prints what was dropped and which original begin() setting to raise.
   void _warnTableFull(const __FlashStringHelper *table, unsigned int capacity,
                       const char *droppedName);
   void _warnTableFull(const __FlashStringHelper *table, unsigned int capacity,
                       const __FlashStringHelper *droppedName);
   // One line of printRejections(), for a table that dropped something.
   void _printRejectionLine(Print *out, const __FlashStringHelper *what,
-                           const __FlashStringHelper *chainCall, uint16_t dropped,
-                           unsigned int capacity);
+                           uint16_t dropped, unsigned int capacity);
 
   // The largest size any table accepts. Handles store their index as int16_t, with negative
   // values meaning rejected. In practice RAM runs out long before this.

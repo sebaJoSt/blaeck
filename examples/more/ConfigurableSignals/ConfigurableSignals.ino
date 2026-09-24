@@ -160,7 +160,7 @@ void UpdateSineNumbers()
 
 void UpdateLoggingSignals()
 {
-  device.deleteSignals();
+  device.clearAllSignals();
 
   // The name is a literal plus a counter, which withNameSuffix() says without building
   // it: the prefix stays in flash and the digits are produced when the name is sent. That
