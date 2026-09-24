@@ -8,19 +8,19 @@
   another board just needs its own RTC library inside GetRTCUnixTimeMicros().
   For timestamp modes without RTC hardware, see docs/sending-data.md.
 
+  Connect Loggbok to the serial port at 115200 baud. This sketch uses a fixed
+  example start time, not the actual wall clock; see setup() before relying on it.
+
   Author: Sebastian Strobl,
-  More information on: https://github.com/sebaJoSt/BlaeckSerial
+  More information on: https://github.com/sebaJoSt/blaeck
 */
 
-#include "RTC.h"
 #include <Blaeck.h>
+#include "RTC.h"
 
-#define ExampleVersion "1.0"
-
-// Instantiate a new Blaeck object
 Blaeck device;
 
-// Signals
+// Signals retain pointers to these variables, so keep them alive for the device's lifetime.
 float sine;
 
 unsigned long long GetRTCUnixTimeMicros()
@@ -34,10 +34,8 @@ unsigned long long GetRTCUnixTimeMicros()
 
 void setup()
 {
-  // Initialize Serial port
   Serial.begin(115200);
 
-  // Setup the Real Time Clock
   RTC.begin();
 
   // Set the start time (UTC). The date is arbitrary - it only gives the RTC
@@ -46,11 +44,10 @@ void setup()
   RTCTime startTime(13, Month::AUGUST, 2025, 14, 00, 00, DayOfWeek::WEDNESDAY, SaveLight::SAVING_TIME_ACTIVE);
   RTC.setTime(startTime);
 
-  // Setup Blaeck
   device.begin(Serial).withSignals(1);
 
   device.DeviceName = "TimestampsRTC";
-  device.DeviceFWVersion = ExampleVersion;
+  device.DeviceFWVersion = "1.0";
 
   device.addSignal(F("Sine_1"), &sine);
 

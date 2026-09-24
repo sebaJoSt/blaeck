@@ -14,18 +14,22 @@
   Running is true only during normal operation. LastError reports the last fault,
   not the current status. Uptime is the only signal, so it alone is logged.
 
-  Author: Sebastian Strobl, https://github.com/sebaJoSt/BlaeckSerial
+  Leave USE_TCP at 0 for Serial, or set it to 1 for TCP. Connect Loggbok to the
+  serial port at 115200 baud, or to the printed network address on TCP port 23.
+
+  Author: Sebastian Strobl, https://github.com/sebaJoSt/blaeck
 */
 
 #include <Blaeck.h>
-#define HOST_NAME "StateChannels"
+
 #ifndef USE_TCP
 #define USE_TCP 0  // 0: Serial, 1: TCP
 #endif
 
+#define HOST_NAME "StateChannels"
+
 #if USE_TCP
-// Uncomment to enable OTA/Bonjour; see WaveformGenerator/README.md.
-// #define NETWORK_WITH_SERVICES
+// #define NETWORK_WITH_SERVICES  // Optional OTA and Bonjour; see WaveformGenerator/README.md.
 #include "NetworkSetup.h"
 NetworkSetup::Server server(23);
 #endif
@@ -46,7 +50,6 @@ bool isRunning()
 
 void setup()
 {
-
   Serial.begin(115200);
 
 #if USE_TCP

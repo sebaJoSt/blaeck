@@ -18,8 +18,12 @@
   control follows, so it shows what the board really did instead of assuming
   the command worked.
 
+  Leave USE_TCP at 0 for Serial, or set it to 1 for TCP. Connect Loggbok to the
+  serial port at 115200 baud, or to the printed network address on TCP port 23.
+  For manual commands, use a serial monitor or a TCP terminal respectively.
+
   Author: Sebastian Strobl,
-  More information on: https://github.com/sebaJoSt/BlaeckSerial
+  More information on: https://github.com/sebaJoSt/blaeck
 
   Command syntax:
 
@@ -42,7 +46,7 @@
                                       state channel with how long the board
                                       has been running.
 
-  Plain commands, callable by a host or serial monitor but not auto-discovered as controls:
+  Plain commands, callable by a host or terminal but not auto-discovered as controls:
 
         <SwitchLED,1>                 Turn on the LED
         <SwitchLED,0>                 Turn off the LED
@@ -58,25 +62,22 @@
 */
 
 #include <Blaeck.h>
-#define HOST_NAME "Commands"
+#include <stdlib.h>
+
 #ifndef USE_TCP
 #define USE_TCP 0  // 0: Serial, 1: TCP
 #endif
 
+#define HOST_NAME "Commands"
+
 #if USE_TCP
-// Uncomment to enable OTA/Bonjour; see WaveformGenerator/README.md.
-// #define NETWORK_WITH_SERVICES
+// #define NETWORK_WITH_SERVICES  // Optional OTA and Bonjour; see WaveformGenerator/README.md.
 #include "NetworkSetup.h"
 NetworkSetup::Server server(23);
 #endif
-#include <stdlib.h>
 
-#define ExampleVersion "1.0"
-
-// Instantiate a new Blaeck object
 Blaeck device;
 
-// Sets the pin number:
 const int ledPin = LED_BUILTIN;
 
 // Mirrors the LED. Registered as a signal so <LED> can point at it.
@@ -90,10 +91,8 @@ void setLed(bool on);
 
 void setup()
 {
-  // Set the digital pin as output:
   pinMode(ledPin, OUTPUT);
 
-  // Setup Blaeck, room for one signal
   Serial.begin(115200);
 
 #if USE_TCP
@@ -105,9 +104,8 @@ void setup()
   device.begin(Serial).withSignals(1);
 #endif
 
-  // Names the device wherever it turns up
   device.DeviceName = HOST_NAME;
-  device.DeviceFWVersion = ExampleVersion;
+  device.DeviceFWVersion = "1.0";
 
   // The state signal the typed switch below refers to
   device.addSignal(F("LED_State"), &ledState);
@@ -184,8 +182,8 @@ void onLED(const char *command, const char *const *params, byte paramCount)
 /* Typed button: no value to parse.
 
    A button has no state signal, so it answers on the "Status" state channel
-   instead. That is a frame and reaches Home Assistant; device.Terminal.println() would
-   only reach a serial monitor.
+   instead. Loggbok forwards that frame to Home Assistant; device.Terminal.println()
+   is only text feedback for a serial monitor or TCP terminal.
 */
 void onPing(const char *command, const char *const *params, byte paramCount)
 {

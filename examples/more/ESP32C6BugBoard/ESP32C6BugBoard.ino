@@ -1,9 +1,9 @@
 /*
   ESP32C6BugBoard.ino
 
-  This is a sample sketch to show how to use the Blaeck library to transmit data
-  from the ESP32-C6-Bug (V2.1.0) + ESP32-BUG-ETH (V1.0.0) to your PC (Client),
-  at the interval a host asks for.
+  Two numbers sent over Ethernet from the ESP32-C6-Bug (V2.1.0) with the
+  ESP32-BUG-ETH add-on (V1.0.0), at the interval a host requests.
+  Serial is for diagnostics; Blaeck hosts and terminals connect over TCP.
 
   Setup:
     See README.md in this folder.
@@ -21,15 +21,20 @@
     library refuses. Typing a BLAECK. command there turns it into a host too, and binary
     frames follow.
 
-  created by Sebastian Strobl
-  More information on: https://github.com/sebaJoSt/BlaeckTCP
- */
+  Author: Sebastian Strobl,
+  More information on: https://github.com/sebaJoSt/blaeck
+*/
 
+#include <Blaeck.h>
 #include <ETH.h>
 #include <NetworkServer.h>
 #include <SPI.h>
-#include <Blaeck.h>
 
+#define HOST_NAME "ESP32C6BugBoard"
+#define SERVER_PORT 23
+#define MAX_CLIENTS 8
+
+// W5500 Ethernet add-on wiring.
 #define ETH_TYPE ETH_PHY_W5500
 #define ETH_ADDR 1
 #define ETH_CS 5
@@ -41,13 +46,7 @@
 #define ETH_SPI_MISO 2
 #define ETH_SPI_MOSI 7
 
-#define EXAMPLE_VERSION "1.0"
-#define HOST_NAME "ESP32C6BugBoard"
-#define SERVER_PORT 23
 NetworkServer server(SERVER_PORT);
-#define MAX_CLIENTS 8
-
-// Instantiate a new Blaeck object
 Blaeck device;
 
 // The fallback address, for when no DHCP server answers, e.g. a board cabled straight to a PC.
@@ -56,7 +55,7 @@ IPAddress dns(192, 168, 10, 1);
 IPAddress gateway(192, 168, 10, 1);
 IPAddress subnet(255, 255, 0, 0);
 
-// Signals
+// Signals retain pointers to these variables, so keep them alive for the device's lifetime.
 float randomSmallNumber;
 long randomBigNumber;
 
@@ -101,10 +100,8 @@ void setup()
   Serial.begin(115200);
   delay(500);
 
-  // Register ETH event handler
   Network.onEvent(onEvent);
 
-  // Initialize ETH
   SPI.begin(ETH_SPI_SCK, ETH_SPI_MISO, ETH_SPI_MOSI);
   ETH.begin(ETH_TYPE, ETH_ADDR, ETH_CS, ETH_IRQ, ETH_RST, SPI);
 
@@ -120,7 +117,7 @@ void setup()
     ETH.config(ip, gateway, subnet, dns);
   }
 
-  // Setup Blaeck. The library reports on the terminal connections.
+  // Library diagnostics go to TCP terminals, not host connections.
   server.begin();
   device.begin(server)
       .withClients(MAX_CLIENTS)
@@ -130,9 +127,8 @@ void setup()
   device.DeviceName = HOST_NAME;
   // This wiring is for a specific board that the generic ESP32C6 build target cannot name.
   device.DeviceHWVersion = "ESP32-C6-Bug V2.1.0";
-  device.DeviceFWVersion = EXAMPLE_VERSION;
+  device.DeviceFWVersion = "1.0";
 
-  // Add signals to Blaeck
   device.addSignal(F("Small Number"), &randomSmallNumber);
   device.addSignal(F("Big Number"), &randomBigNumber);
 }

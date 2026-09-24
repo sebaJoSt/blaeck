@@ -2,27 +2,25 @@
   SHT31TempHumiditySensor.ino
 
   Reads temperature and humidity from an Adafruit SHT31 sensor over I2C,
-  then sends both values to Loggbok.
+  then sends both values to Loggbok over Serial at 115200 baud.
 
-  Requires the Adafruit SHT31 library.
+  Requires the Adafruit SHT31 library and a sensor on the board's I2C pins
+  at address 0x44. Readings are refreshed once per second; the host chooses
+  how often they are logged.
 
   Author: Sebastian Strobl,
-  More information on: https://github.com/sebaJoSt/BlaeckSerial
-
+  More information on: https://github.com/sebaJoSt/blaeck
 */
 
-#include "Adafruit_SHT31.h"
 #include <Blaeck.h>
-
-#define ExampleVersion "1.0"
-
-float temperature;
-float humidity;
+#include "Adafruit_SHT31.h"
 
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
-
-// Instantiate a new Blaeck object
 Blaeck device;
+
+// Signals retain pointers to these variables, so keep them alive for the device's lifetime.
+float temperature;
+float humidity;
 
 void setup()
 {
@@ -39,11 +37,10 @@ void setup()
   // with it on is too high.
   // sht31.heater(true);
 
-  // Setup Blaeck
   device.begin(Serial).withSignals(2);
 
   device.DeviceName = "SHT31TempHumiditySensor";
-  device.DeviceFWVersion = ExampleVersion;
+  device.DeviceFWVersion = "1.0";
 
   device.addSignal(F("Temperature [°C]"), &temperature)
       .withDisplayName(F("Temperature"))

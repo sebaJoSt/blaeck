@@ -7,7 +7,6 @@ void EEPROMConfiguration()
 
 void EEPROMWriteDefaultValuesAtFirmwareUpdate()
 {
-  // Check if FIRMWARE was updated
   char storedfirmware[sizeof(FW_VERSION)];
   EEPROM.get(EEPROM_ADDR_FW_VERSION, storedfirmware);
   // A board that has never held this layout returns whatever was there, which need not end
@@ -16,7 +15,6 @@ void EEPROMWriteDefaultValuesAtFirmwareUpdate()
   storedfirmware[sizeof(storedfirmware) - 1] = '\0';
 
   if (strcmp(storedfirmware, FW_VERSION) != 0)
-  //--INIT EEPROM - Write Default Values
   {
     bool isActivated[MAXIMUM_SIGNALS + 1];
     for (byte i = 0; i <= MAXIMUM_SIGNALS; i++)
@@ -32,7 +30,6 @@ void EEPROMWriteDefaultValuesAtFirmwareUpdate()
     EEPROM.put(EEPROM_ADDR_FW_VERSION, FW_VERSION);
     EepromCommit();
   }
-  // END FIRMWARE Update Case
 }
 
 void EEPROMReadStartupValues()

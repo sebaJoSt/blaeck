@@ -19,36 +19,36 @@
 
   These are binary data frames, not readable text in a serial monitor.
 
+  Leave USE_TCP at 0 for Serial, or set it to 1 for TCP. Connect Loggbok to the
+  serial port at 115200 baud, or to the printed network address on TCP port 23.
+
   Author: Sebastian Strobl,
-  More information on: https://github.com/sebaJoSt/BlaeckSerial
+  More information on: https://github.com/sebaJoSt/blaeck
 */
 
 #include <Blaeck.h>
-#define HOST_NAME "WriteModes"
+
 #ifndef USE_TCP
 #define USE_TCP 0  // 0: Serial, 1: TCP
 #endif
 
+#define HOST_NAME "WriteModes"
+
 #if USE_TCP
-// Uncomment to enable OTA/Bonjour; see WaveformGenerator/README.md.
-// #define NETWORK_WITH_SERVICES
+// #define NETWORK_WITH_SERVICES  // Optional OTA and Bonjour; see WaveformGenerator/README.md.
 #include "NetworkSetup.h"
 NetworkSetup::Server server(23);
 #endif
 
-#define ExampleVersion "1.0"
-
-// Instantiate a new Blaeck object
 Blaeck device;
 
-// Signals
+// Signals retain pointers to these variables, so keep them alive for the device's lifetime.
 float Immediate = 0.0f;
 float Marked = 0.0f;
 float Updated = 0.0f;
 
 void setup()
 {
-  // Setup Blaeck
   Serial.begin(115200);
 
 #if USE_TCP
@@ -61,9 +61,8 @@ void setup()
 #endif
 
   device.DeviceName = HOST_NAME;
-  device.DeviceFWVersion = ExampleVersion;
+  device.DeviceFWVersion = "1.0";
 
-  // Add signals to Blaeck
   device.addSignal(F("Immediate"), &Immediate);
   device.addSignal(F("Marked"), &Marked);
   device.addSignal(F("Updated"), &Updated);

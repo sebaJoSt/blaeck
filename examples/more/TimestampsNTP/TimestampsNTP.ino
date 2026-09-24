@@ -9,18 +9,17 @@
   be logged with a timestamp in 1970. If NTP is unreachable, the serial monitor reports
   it and the sketch keeps waiting.
 
+  Open the serial monitor at 115200 baud to see the network address and sync status.
+  Once synchronized, connect Loggbok to that address on TCP port 23.
+
   For timestamps without a network clock, see docs/network.md. For an RTC instead, see
   Blaeck's more/TimestampsRTC example on the Arduino UNO R4.
 
   Author: Sebastian Strobl,
-  More information on: https://github.com/sebaJoSt/BlaeckTCP
+  More information on: https://github.com/sebaJoSt/blaeck
 */
 
-#define HOST_NAME "TimestampsNTP"
-#include "NetworkSetup.h"
 #include <Blaeck.h>
-
-#define ExampleVersion "1.0"
 
 #if !defined(ARDUINO_ARCH_ESP32)
 #error "TimestampsNTP needs an ESP32 network clock. See docs/network.md for timestamp modes without a clock source."
@@ -28,14 +27,15 @@
 #include <sys/time.h>
 #include <time.h>
 
-// Instantiate a new Blaeck object
-Blaeck device;
-
-// The port hosts and terminals connect to.
+#define HOST_NAME "TimestampsNTP"
 #define SERVER_PORT 23
+
+#include "NetworkSetup.h"
 NetworkSetup::Server server(SERVER_PORT);
 
-// Signals
+Blaeck device;
+
+// Signals retain pointers to these variables, so keep them alive for the device's lifetime.
 float sine;
 
 unsigned long long GetNtpUnixTimeMicros()
@@ -47,7 +47,6 @@ unsigned long long GetNtpUnixTimeMicros()
 
 void setup()
 {
-  // Initialize Serial port
   Serial.begin(115200);
 
   // Gets the board online; see NetworkSetup.h.
@@ -62,12 +61,11 @@ void setup()
     networkLoop();
   }
 
-  // Setup Blaeck, with room for one signal
   server.begin();
   device.begin(server).withSignals(1);
 
   device.DeviceName = HOST_NAME;
-  device.DeviceFWVersion = ExampleVersion;
+  device.DeviceFWVersion = "1.0";
 
   device.addSignal(F("Sine_1"), &sine);
 
@@ -82,7 +80,7 @@ void loop()
   // Reads what has come in and writes the signals when the interval is up.
   device.tick();
 
-  // Keeps the network running: the DHCP lease, and OTA and Bonjour where they are on.
+  // Maintains DHCP and optional network services.
   networkLoop();
 }
 

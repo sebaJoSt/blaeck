@@ -1,9 +1,9 @@
 /*
   WiFi.ino
 
-  This is a sample sketch to show how to use the Blaeck library to transmit data
-  over WiFi to your PC (Client), at the interval a host asks for. It runs on the
-  Arduino UNO R4 WiFi and on ESP32 boards.
+  Two numbers sent over WiFi at the interval a host requests.
+  Runs on the Arduino UNO R4 WiFi and ESP32 boards. Serial is for diagnostics;
+  Blaeck hosts and terminals connect over TCP.
 
   Setup:
     Enter your network's name and password in the arduino_secrets.h tab.
@@ -21,34 +21,31 @@
     library refuses. Typing a BLAECK. command there turns it into a host too, and binary
     frames follow.
 
-  created by Sebastian Strobl
-  More information on: https://github.com/sebaJoSt/BlaeckTCP
- */
+  Author: Sebastian Strobl,
+  More information on: https://github.com/sebaJoSt/blaeck
+*/
 
+#include <Blaeck.h>
 #if defined(ARDUINO_UNOWIFIR4)
 #include <WiFiS3.h>
 #else
 #include <WiFi.h>
 #endif
 #include "arduino_secrets.h"
-#include <Blaeck.h>
 
-#define EXAMPLE_VERSION "1.0"
 #define HOST_NAME "WiFi"
 #define SERVER_PORT 23
-WiFiServer server(SERVER_PORT);
 #define MAX_CLIENTS 4
 
-// Instantiate a new Blaeck object
+WiFiServer server(SERVER_PORT);
 Blaeck device;
 
-// Signals
+// Signals retain pointers to these variables, so keep them alive for the device's lifetime.
 float randomSmallNumber;
 long randomBigNumber;
 
 void setup()
 {
-  // Open serial communications (used for debug output only)
   Serial.begin(115200);
   Serial.println();
 
@@ -97,7 +94,7 @@ void setup()
   Serial.print(":");
   Serial.println(SERVER_PORT);
 
-  // Setup Blaeck. The library reports on the terminal connections.
+  // Library diagnostics go to TCP terminals, not host connections.
   server.begin();
   device.begin(server)
       .withClients(MAX_CLIENTS)
@@ -105,9 +102,8 @@ void setup()
       .withDebugStream(&device.Terminal);
 
   device.DeviceName = HOST_NAME;
-  device.DeviceFWVersion = EXAMPLE_VERSION;
+  device.DeviceFWVersion = "1.0";
 
-  // Add signals to Blaeck
   device.addSignal(F("Small Number"), &randomSmallNumber);
   device.addSignal(F("Big Number"), &randomBigNumber);
 }

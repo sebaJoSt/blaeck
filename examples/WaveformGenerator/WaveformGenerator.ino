@@ -1,7 +1,7 @@
 /*
   WaveformGenerator.ino
 
-  A dashboard-friendly demo: Blaeck -> Loggbok (serial host and MQTT bridge) ->
+  A dashboard-friendly demo: Blaeck -> Loggbok (Serial/TCP host and MQTT bridge) ->
   MQTT broker -> Home Assistant (MQTT client and dashboard).
 
   One fully controllable waveform, driven entirely over MQTT. The device describes what it
@@ -55,20 +55,22 @@
   at the Frequency signal instead, so its value is logged - one control that way, so both are
   shown in the example here.
 
+  Leave USE_TCP at 0 for Serial, or set it to 1 for TCP. Connect Loggbok to the
+  serial port at 115200 baud, or to the printed network address on TCP port 23.
 
-
-  Author: Sebastian Strobl, https://github.com/sebaJoSt/BlaeckSerial
+  Author: Sebastian Strobl, https://github.com/sebaJoSt/blaeck
 */
 
 #include <Blaeck.h>
-#define HOST_NAME "WaveformGenerator"
+
 #ifndef USE_TCP
 #define USE_TCP 0  // 0: Serial, 1: TCP
 #endif
 
+#define HOST_NAME "WaveformGenerator"
+
 #if USE_TCP
-// Uncomment to enable OTA/Bonjour; see WaveformGenerator/README.md.
-// #define NETWORK_WITH_SERVICES
+// #define NETWORK_WITH_SERVICES  // Optional OTA and Bonjour; see WaveformGenerator/README.md.
 #include "NetworkSetup.h"
 NetworkSetup::Server server(23);
 #endif
@@ -76,7 +78,7 @@ NetworkSetup::Server server(23);
 Blaeck device;
 
 //---PUBLISHED AS SIGNALS, AND SO LOGGED
-// addSignal() keeps a pointer to these, so they have to be globals.
+// Signals retain pointers to these variables, so keep them alive for the device's lifetime.
 float Output = 0.0;
 float Frequency = 1.0; // [Hz]
 char Annotation[25] = ""; // "swapped probe", "run 3 after warm-up"
@@ -109,12 +111,11 @@ BlaeckNumericSignalRef OutputSignal;
 
 void setup()
 {
+  Serial.begin(115200);
 
   // Sizing every table the sketch fills, so nothing is left to a default: three signals, eight
   // commands, eight state channels - three declared here and five by the commands'
   // withOwnState - and one event channel. Every one of these calls is optional.
-  Serial.begin(115200);
-
 #if USE_TCP
   networkBegin(23);
   server.begin();

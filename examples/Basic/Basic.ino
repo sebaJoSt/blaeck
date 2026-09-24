@@ -10,7 +10,7 @@
   address on TCP port 23. The host selects the logging interval.
 
   Author: Sebastian Strobl,
-  More information on: https://github.com/sebaJoSt/BlaeckSerial
+  More information on: https://github.com/sebaJoSt/blaeck
 */
 
 #include <Blaeck.h>

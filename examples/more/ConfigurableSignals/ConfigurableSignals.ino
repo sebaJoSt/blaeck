@@ -6,41 +6,41 @@
   with Blaeck, and that selection survives a restart.
   Loggbok forwards the data and controls through MQTT to Home Assistant.
 
-  Requirements:
-  - none beyond the library itself: EEPROM comes with the board's core
+  Connect Loggbok to the serial port at 115200 baud.
+  Requires EEPROM support from the board's core; see the EEPROM helpers below.
 
   Features:
   - EEPROM stores which signals are activated.
   - Typed commands activate or deactivate signal ranges in the Blaeck catalog.
   - Preset buttons carry their arguments in the press itself.
+
+  Author: Sebastian Strobl,
+  More information on: https://github.com/sebaJoSt/blaeck
 */
 
 #include <Blaeck.h>
 #include <EEPROM.h>
 
-//---FIRMWARE
-// FW_VERSION[6] = "X.xxx" +  '\0' (total 6 chars)
-// Updating FW_VERSION initializes EEPROM
+// Also marks the EEPROM layout: changing this resets the saved selection and range.
+// Keep room for "X.xxx" and its null terminator.
 const char FW_VERSION[6] = "1.000";
 
-//---INSTANCES
 Blaeck device;
 
-//---SIGNALS
+// Signals retain pointers into this array, so it must live for the device's lifetime.
 #define MAXIMUM_SIGNALS 25
 struct BlaeckSignal
 {
   bool isActivated;
   float value;
 } sine[MAXIMUM_SIGNALS + 1];
-// unused: sine[0]
+// Index 0 is unused; signal numbers start at 1.
 
 // A press payload is text, so the count has to be spelled out to go in one. These two
 // macros do that spelling, which keeps the payloads correct when MAXIMUM_SIGNALS changes.
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
 
-//---SIGNAL RANGE
 // Bounds for the activate/deactivate buttons. Stored as command-owned state so
 // Home Assistant shows the range the next button press will apply to.
 byte signalFirst = 1;
@@ -69,7 +69,6 @@ inline void EepromBegin() { EEPROM.begin(EEPROM_BYTES); }
 inline void EepromCommit() { EEPROM.commit(); }
 #endif
 
-// Forward declarations for command handlers
 void onSetSignalFirst(const char *command, const char *const *params, byte paramCount);
 void onSetSignalLast(const char *command, const char *const *params, byte paramCount);
 void onSignalActivate(const char *command, const char *const *params, byte paramCount);
@@ -84,10 +83,10 @@ bool measurementFirstTime = true;
 
 void setup()
 {
-  // EEPROM
   EEPROMConfiguration();
 
   Serial.begin(115200);
+
   // Sized explicitly for the six commands and two state channels this example declares.
   device.begin(Serial)
       .withSignals(MAXIMUM_SIGNALS)
@@ -140,7 +139,7 @@ void loop()
 {
   UpdateSineNumbers();
 
-  // Processes Loggbok commands and transmits updated signals.
+  // Processes commands and sends the selected signals at the host's interval.
   device.tick();
 }
 

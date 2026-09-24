@@ -17,28 +17,32 @@
   No sensor hardware is needed. The values below simulate a room that cools while a door
   is open and warms when it closes, alongside five phase-shifted sine waves.
 
-  With a serial monitor instead of a host, send <BLAECK.ACTIVATE,1000> to request one binary
+  Leave USE_TCP at 0 for Serial, or set it to 1 for TCP. Connect Loggbok to the
+  serial port at 115200 baud, or to the printed network address on TCP port 23.
+
+  In Serial mode, a serial monitor can send <BLAECK.ACTIVATE,1000> to request one binary
   data frame per second, and <BLAECK.DEACTIVATE> to stop. The frames are not readable text.
 
-  Author: Sebastian Strobl, https://github.com/sebaJoSt/BlaeckSerial
+  Author: Sebastian Strobl, https://github.com/sebaJoSt/blaeck
 */
 
 #include <Blaeck.h>
-#define HOST_NAME "Signals"
+
 #ifndef USE_TCP
 #define USE_TCP 0  // 0: Serial, 1: TCP
 #endif
 
+#define HOST_NAME "Signals"
+
 #if USE_TCP
-// Uncomment to enable OTA/Bonjour; see WaveformGenerator/README.md.
-// #define NETWORK_WITH_SERVICES
+// #define NETWORK_WITH_SERVICES  // Optional OTA and Bonjour; see WaveformGenerator/README.md.
 #include "NetworkSetup.h"
 NetworkSetup::Server server(23);
 #endif
 
 Blaeck device;
 
-// The library keeps pointers, so the variables must outlive setup().
+// Signals retain pointers to these variables, so keep them alive for the device's lifetime.
 float Temperature = 21.5f;
 bool DoorOpen = false;
 char Mode[16] = "warming";

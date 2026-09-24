@@ -18,18 +18,22 @@
   An event entity's state is the timestamp of the last occurrence; which one it was arrives as
   an "event_type" attribute. So the more-info dialog is where to watch these, not the state.
 
-  Author: Sebastian Strobl, https://github.com/sebaJoSt/BlaeckSerial
+  Leave USE_TCP at 0 for Serial, or set it to 1 for TCP. Connect Loggbok to the
+  serial port at 115200 baud, or to the printed network address on TCP port 23.
+
+  Author: Sebastian Strobl, https://github.com/sebaJoSt/blaeck
 */
 
 #include <Blaeck.h>
-#define HOST_NAME "EventChannels"
+
 #ifndef USE_TCP
 #define USE_TCP 0  // 0: Serial, 1: TCP
 #endif
 
+#define HOST_NAME "EventChannels"
+
 #if USE_TCP
-// Uncomment to enable OTA/Bonjour; see WaveformGenerator/README.md.
-// #define NETWORK_WITH_SERVICES
+// #define NETWORK_WITH_SERVICES  // Optional OTA and Bonjour; see WaveformGenerator/README.md.
 #include "NetworkSetup.h"
 NetworkSetup::Server server(23);
 #endif
@@ -40,14 +44,13 @@ Blaeck device;
 // channel whose list is not fully known at compile time.
 #define HAS_OVERHEAT_SENSOR true
 
-// addSignal() keeps a pointer to these, so they have to be globals. A logging session needs
-// something to log; these also let the event count be checked against what arrived.
+// Signals retain pointers to these variables, so keep them alive for the device's lifetime.
+// These provide values to log and let the event count be compared with what arrived.
 unsigned long Uptime = 0;
 unsigned long EventCount = 0;
 
 void setup()
 {
-
   Serial.begin(115200);
 
 #if USE_TCP

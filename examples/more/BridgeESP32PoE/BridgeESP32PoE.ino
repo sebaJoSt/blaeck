@@ -24,22 +24,23 @@
          |                      |-------- Serial connection, crossed (TX-RX, RX-TX)
          | RX                   | TX
   ---------------------------
-  |  BLAECKSERIAL DEVICE    |
-  |  e.g. Signals          |
-  |  from Blaeck      |
+  |  BLAECK DEVICE          |
+  |  e.g. Signals           |
+  |  with USE_TCP set to 0  |
   ---------------------------
 
   Usage:
-    Set the same baudrate on the bridge (BRIDGE_BAUD) and in the device's Serial.begin().
+    Set the same baud rate on the bridge (BRIDGE_BAUD) and the device's connected UART.
+    The device must pass that UART to device.begin().
     Upload both sketches, and open the bridge's serial monitor at 115200 baud: it prints
     the address.
 
     Connect Loggbok, or another Blaeck host, to that address on port 23. The bridge takes
     one connection at a time; a second one is closed straight away.
 
-  created by Sebastian Strobl
-  More information on: https://github.com/sebaJoSt/BlaeckTCP
- */
+  Author: Sebastian Strobl,
+  More information on: https://github.com/sebaJoSt/blaeck
+*/
 
 // The PHY pins come from the board definition: select the board as OLIMEX ESP32-PoE.
 #include <ETH.h>
@@ -48,8 +49,8 @@
 
 #define SERVER_PORT 23
 
-// The bridge link runs on its own UART, not on Serial. Serial is the USB port and carries
-// this sketch's messages; sharing it would send them to the device too.
+// The bridge link runs on its own UART, not on Serial. The USB serial connection carries
+// this sketch's messages; sharing that UART would send them to the device too.
 // CHECK THESE AGAINST YOUR BOARD - they must be pins the Ethernet PHY doesn't use. The
 // defaults are on the UEXT connector of the ESP32-PoE-ISO.
 #define BRIDGE_RX_PIN 36
