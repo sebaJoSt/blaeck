@@ -1,6 +1,6 @@
 # Configuration
 
-This prototype uses one core configuration for Serial and TCP. Include `Blaeck.h` first
+This library uses one shared configuration for Serial and TCP. Include `Blaeck.h` first
 when the old standalone libraries are also installed. The examples below use the Serial
 transport; TCP uses `begin(server)` after `server.begin()`, and the same core settings.
 
@@ -151,8 +151,8 @@ This reaches every file. Nothing else to do.
 
 ### Arduino IDE and arduino-cli
 
-Blaeck includes a `BlaeckConfig.h` if it can find one. Legacy `BlaeckSerialConfig.h` and
-`BlaeckTCPConfig.h` files visible to the prototype cause an explicit migration error:
+blaeck includes a `BlaeckConfig.h` if it can find one. Legacy `BlaeckSerialConfig.h` and
+`BlaeckTCPConfig.h` files visible to the library cause an explicit migration error:
 move their common settings into one `BlaeckConfig.h`. In an Arduino build it
 cannot: your sketch folder is not on the compiler's include path, so a config file next to your
 `.ino` is ignored without a word. That is the Arduino build system, not this library

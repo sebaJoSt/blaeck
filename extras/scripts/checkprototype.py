@@ -1,4 +1,4 @@
-"""Check unified prototype structure and packaging without compiling firmware."""
+"""Check unified library structure and packaging without compiling firmware."""
 import json
 from pathlib import Path
 import re
@@ -27,14 +27,20 @@ def main():
     require(not list(src.glob("BlaeckCore*")), "obsolete core files")
     require("begin(Stream &stream)" in public and "server.accept()" in public,
             "missing connection overloads")
-    require('return _tcpSelected ? "BlaeckTCP" : "BlaeckSerial";' in public,
-            "wire identities must remain unchanged")
+    require('const char *_libraryName() const { return "blaeck"; }' in public,
+            "both connections must report lowercase blaeck")
     require("namespace blaeck_serial" not in public and "namespace blaeck_tcp" not in public,
             "obsolete public namespace aliases")
     require(not (src / "BlaeckSerial.h").exists() and not (src / "BlaeckTCP.h").exists(),
             "obsolete public transport headers")
+    require('#include "detail/BlaeckCRC32.h"' in public
+            and "detail::BlaeckCRC32 _crc;" in public,
+            "device must use the internal CRC32 helper")
     for p in src.rglob("*"):
         if p.suffix in (".h", ".cpp"):
+            require(not re.search(r'#include\s*[<"](?:CRC\w*|Crc\w*)\.h',
+                                  p.read_text(encoding="utf-8")),
+                    "external CRC dependency in " + str(p))
             require(not re.search(r'#include\s*[<"](?:TelnetPrint|WiFi|Ethernet|NetTypes)\.h',
                                   p.read_text(encoding="utf-8")),
                     "concrete networking dependency in " + str(p))
@@ -49,11 +55,22 @@ def main():
     manifest = json.loads((ROOT / "library.json").read_text())
     properties = dict(line.split("=", 1) for line in
                       (ROOT / "library.properties").read_text().splitlines() if "=" in line)
-    require(manifest["version"] == properties["version"] == "0.0.0",
-            "prototype manifests must agree")
-    require(properties["depends"] == "CRC"
-            and [d["name"] for d in manifest["dependencies"]] == ["CRC"],
-            "mandatory dependencies must stay network-free")
+    require(manifest["name"] == properties["name"] == "blaeck",
+            "package names must match the lowercase brand")
+    version_header = (src / "BlaeckVersion.h").read_text(encoding="utf-8")
+    version_defs = dict(re.findall(
+        r"^#define (BLAECK_VERSION(?:_MAJOR|_MINOR|_PATCH)?) (.+)$", version_header, re.M))
+    require(manifest["version"] == properties["version"]
+            == version_defs.get("BLAECK_VERSION", "").strip('"') == "7.0.0",
+            "package and reported library versions must agree")
+    require(tuple(version_defs.get("BLAECK_VERSION_" + part)
+                  for part in ("MAJOR", "MINOR", "PATCH")) == ("7", "0", "0"),
+            "numeric version macros must match 7.0.0")
+    require(properties["url"] == "https://github.com/sebaJoSt/blaeck"
+            and manifest["repository"]["url"] == "https://github.com/sebaJoSt/blaeck.git",
+            "package links must point to the unified repository")
+    require(not properties.get("depends") and not manifest.get("dependencies"),
+            "package must have no mandatory third-party library dependencies")
     require(properties["includes"] == "Blaeck.h", "IDE entry point must be network-free")
     for path in manifest["export"]["include"]:
         require((ROOT / path).exists(), "missing export path: " + path)
@@ -102,7 +119,7 @@ def main():
 
     subprocess.run([sys.executable, str(ROOT / "extras" / "scripts" / "syncnetwork.py"),
                     "--check"], check=True)
-    print("PASS: prototype structure, optional networking, defaults, manifests and examples")
+    print("PASS: library structure, identity, optional networking, defaults, manifests and examples")
 
 
 if __name__ == "__main__":

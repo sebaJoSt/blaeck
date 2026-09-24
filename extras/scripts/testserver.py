@@ -10,17 +10,14 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cxx", default="g++")
-    parser.add_argument("--crc", type=Path, required=True, help="Installed CRC library directory")
     args = parser.parse_args()
     host = ROOT / "extras" / "tests" / "host"
-    crc = args.crc / "src"
     with tempfile.TemporaryDirectory(prefix="blaeck-server-") as temp:
         exe = Path(temp) / "server-test.exe"
         command = [args.cxx, "-std=c++11", "-Wall", "-Wextra", "-O1",
-                   "-I" + str(host), "-I" + str(ROOT / "src"), "-I" + str(crc),
+                   "-I" + str(host), "-I" + str(ROOT / "src"),
                    str(host / "ServerAdapterTest.cpp"), str(ROOT / "src" / "Blaeck.cpp"),
-                   str(ROOT / "src" / "BlaeckTransport.cpp"), str(crc / "CRC32.cpp"),
-                   str(crc / "CrcFastReverse.cpp"),
+                   str(ROOT / "src" / "BlaeckTransport.cpp"),
                    "-o", str(exe)]
         subprocess.run(command, check=True)
         subprocess.run([str(exe)], check=True, timeout=20)
@@ -38,7 +35,7 @@ def main():
         subprocess.run([str(disabled)], check=True, timeout=20)
         negative = subprocess.run(
             [args.cxx, "-std=c++11", "-fsyntax-only", "-I" + str(host),
-             "-I" + str(ROOT / "src"), "-I" + str(crc),
+             "-I" + str(ROOT / "src"),
              str(host / "UnsupportedServer.cpp")],
             capture_output=True, text=True)
         if negative.returncode == 0 or "accept" not in negative.stderr:

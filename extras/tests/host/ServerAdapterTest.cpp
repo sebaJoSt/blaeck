@@ -161,6 +161,14 @@ static void onClose(byte slot) { closed.push_back(slot); }
 static Blaeck *callbackDevice;
 static void detachInCallback(byte) { callbackDevice->end(); }
 
+static void assertLibraryIdentity(const std::string &frames)
+{
+  const std::string identity = std::string(BLAECK_VERSION) + '\0' + "blaeck" + '\0';
+  assert(frames.find(identity) != std::string::npos);
+  assert(frames.find("BlaeckSerial") == std::string::npos);
+  assert(frames.find("BlaeckTCP") == std::string::npos);
+}
+
 static void sessionBehavior(bool buffered)
 {
   opened.clear();
@@ -195,8 +203,7 @@ static void sessionBehavior(bool buffered)
   device.read();
   device.read(); // Consume the one-time restart notification.
   assert(!host1.output.empty() && host2.output.empty() && terminal.output.empty());
-  assert(host1.output.find("BlaeckTCP") != std::string::npos);
-  assert(host1.output.find("BlaeckSerial") == std::string::npos);
+  assertLibraryIdentity(host1.output);
   host1.output.clear();
   host2.input = "<BLAECK.GET_DEVICES>";
   device.read();
@@ -336,8 +343,7 @@ static void unifiedConnections()
   stream.data.input = "<BLAECK.GET_DEVICES><BLAECK.GET_DEVICES>";
   device.read();
   assert(stream.data.input == "<BLAECK.GET_DEVICES>");
-  assert(stream.data.output.find("BlaeckSerial") != std::string::npos);
-  assert(stream.data.output.find("BlaeckTCP") == std::string::npos);
+  assertLibraryIdentity(stream.data.output);
   device.read();
   stream.data.output.clear();
   device.Terminal.print("text");
@@ -388,12 +394,48 @@ static void unifiedConnections()
   assert(usb.flushes == 2);
 }
 
+static void crc32Behavior()
+{
+  blaeck::detail::BlaeckCRC32 crc;
+  const uint8_t digits[] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
+  assert(crc.calc() == 0);
+  crc.add(nullptr, 0);
+  assert(crc.calc() == 0);
+  crc.add(digits, sizeof(digits));
+  assert(crc.calc() == 0xCBF43926UL);
+  assert(crc.calc() == 0xCBF43926UL); // Reading the checksum does not finalize the state.
+
+  for (size_t split = 0; split <= sizeof(digits); ++split)
+  {
+    crc.restart();
+    assert(crc.calc() == 0);
+    crc.add(digits, split);
+    crc.calc();
+    crc.add(digits + split, sizeof(digits) - split);
+    assert(crc.calc() == 0xCBF43926UL);
+  }
+
+  crc.restart();
+  for (uint8_t value : digits)
+    crc.add(value);
+  assert(crc.calc() == 0xCBF43926UL);
+
+  uint8_t binary[256];
+  for (size_t i = 0; i < sizeof(binary); ++i)
+    binary[i] = static_cast<uint8_t>(i);
+  blaeck::detail::BlaeckCRC32 other;
+  other.add(binary, sizeof(binary));
+  assert(other.calc() == 0x29058C73UL);
+  assert(crc.calc() == 0xCBF43926UL);
+}
+
 int main()
 {
+  crc32Behavior();
   sessionBehavior(false);
   sessionBehavior(true);
   lifecycleAndErrors();
   detachFromCallbacks();
   unifiedConnections();
-  std::cout << "PASS: unified connections, wire identities, routing, lifecycle and allocation failures\n";
+  std::cout << "PASS: CRC32, unified connections, wire identities, routing, lifecycle and allocation failures\n";
 }

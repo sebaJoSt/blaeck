@@ -1,7 +1,11 @@
 {
-  "name": "Blaeck",
-  "version": "0.0.0",
-  "description": "Local prototype of a unified Serial and TCP telemetry library.",
+  "name": "blaeck",
+  "version": "7.0.0",
+  "description": "Self-describing telemetry over Serial, Ethernet and WiFi using one unified API.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sebaJoSt/blaeck.git"
+  },
   "authors": {
     "name": "Sebastian Strobl",
     "maintainer": true
@@ -10,13 +14,6 @@
   "frameworks": "arduino",
   "platforms": "*",
   "headers": ["Blaeck.h"],
-  "dependencies": [
-    {
-      "owner": "robtillaart",
-      "name": "CRC",
-      "version": "^1.0.4"
-    }
-  ],
   "export": {
     "include": ["src", "examples", "docs", "README.md", "LICENSE.md", "extras"]
   }

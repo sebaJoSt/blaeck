@@ -1,8 +1,8 @@
-# Blaeck - unified-library prototype
+# blaeck
 
 One Arduino package, one device class, one protocol core. Attach a **Blaeck** device to a
-Stream or to an already-started TCP server. This prototype is not a released library;
-version **0.0.0** is a placeholder, not a release-number decision.
+Stream or to an already-started TCP server. **Version 7.0.0 is in development and has
+not been released.**
 
 Based on BlaeckSerial `25b5434e3433d6c46309a75beb244b389d8dec80` and
 BlaeckTCP `68ca1a19c0f7139bb7e496333541476b2bccd20f`.
@@ -53,13 +53,16 @@ void loop()
 ```
 
 Streams and servers are passed by reference, not pointer or port number. There are no
-public `BlaeckSerial`/`BlaeckTCP` classes or transport-specific headers in this prototype.
+public `BlaeckSerial`/`BlaeckTCP` classes or transport-specific headers in this library.
 Use `Blaeck.h` even when the original standalone libraries remain installed.
 The device and handle types share the `blaeck` namespace; `Blaeck.h` also makes them
 available without qualification, so sketches still write `Blaeck device;`.
 
-**CRC** is the only mandatory library dependency. Stream-only sketches need no networking
-library. TCP users supply their chosen networking library explicitly.
+**No mandatory third-party library dependencies.** Stream-only sketches use the Arduino
+core alone. TCP users supply their chosen networking library explicitly.
+CRC32 is bundled in `src/detail/BlaeckCRC32.h`, adapted from
+[Rob Tillaart's CRC library](https://github.com/RobTillaart/CRC) with its MIT license
+retained in the file. Its fixed protocol parameters preserve the existing checksum format.
 
 **TelnetStream is optional:** include `<TelnetPrint.h>`, bring the network up, then use:
 
@@ -131,7 +134,7 @@ python extras\scripts\syncnetwork.py --check
   and lifecycle; `BlaeckTransport.cpp` implements Stream and TCP session handling.
 - Both `begin()` overloads return the same `BlaeckBeginRef` handle. Table sizing,
   `.withClients()` and `.withDebugStream()` can be chained in any order.
-- Only the small typed server adapter in `src/detail/BlaeckServerAdapter.h` is header-defined.
+- The small typed server adapter in `src/detail/BlaeckServerAdapter.h` is header-defined.
   It requires proper `accept()` behavior and never guesses with `available()`.
 - One device uses one connection at a time. `begin(otherConnection)` detaches the old one;
   separate `Blaeck` objects can use separate connections with independent catalogs.
@@ -146,9 +149,13 @@ python extras\scripts\syncnetwork.py --check
 - Stream buffering defaults to off on AVR and on elsewhere. TCP buffering defaults to on.
   The default is selected when attaching. An explicit `setBufferedWrites()` selection is
   retained across later `begin()` calls.
-- **Wire names are deliberately unchanged:** a stream reports `BlaeckSerial`, a server
-  reports `BlaeckTCP`. The reported version is the common prototype version. Renaming the
-  wire identity to Blaeck is deferred until the host migration is checked.
+- **Both connection types report `blaeck` version `7.0.0`.** The lowercase library name
+  matches the package brand. The C++ class remains `Blaeck`, with header `Blaeck.h`.
+  Uppercase protocol framing and command names (`<BLAECK:`, `BLAECK.GET_DEVICES`, etc.)
+  are unchanged.
+- Hosts must recognize the exact `blaeck` identity and its v7 capabilities. Loggbok's
+  updated source supports this identity over Serial and TCP; older Loggbok releases
+  may not. Legacy `BlaeckSerial` and `BlaeckTCP` identities are supported there through v6.
 
 See [network](docs/network.md) for server requirements, storage, ownership and errors.
 
@@ -187,13 +194,14 @@ Updated fixtures are ready for separately authorized validation:
 - `extras/tests/TelnetServer`: the optional TelnetPrint route.
 - `extras/tests/host`: simulated clients/streams using the real protocol and transports.
   Assertions cover the concrete class and unified begin handle, routing, reuse, failures,
-  teardown, connection changes, defaults and explicit overrides, legacy wire names,
-  USB padding, and rejection of `available()`-only servers.
+  teardown, connection changes, defaults and explicit overrides, unified wire identity,
+  CRC32 reference vectors and incremental updates, USB padding, and rejection of
+  `available()`-only servers.
 
-The host suite is run with a C++ compiler and an installed CRC library:
+The host suite is run with a C++ compiler; no external CRC library is needed:
 
 ```powershell
-python extras\scripts\testserver.py --crc C:\path\to\CRC
+python extras\scripts\testserver.py
 ```
 
 No firmware has been uploaded. Hardware interoperability, OTA operation and release

@@ -13,8 +13,7 @@
 #include "detail/BlaeckDefaults.h"
 #include "BlaeckVersion.h"
 #include "detail/BlaeckServerAdapter.h"
-// The umbrella header, because the individual CRC headers clash with ArduinoCore-mbed.
-#include <CRC.h>
+#include "detail/BlaeckCRC32.h"
 #include <new>
 #include <string.h>
 #include <limits.h>
@@ -4009,8 +4008,7 @@ protected:
   // A transport with several connections marks the sender as a host here.
   void _builtinCommandReceived();
   // Sent in the device frames.
-  // Wire identities stay unchanged until the host migration is addressed.
-  const char *_libraryName() const { return _tcpSelected ? "BlaeckTCP" : "BlaeckSerial"; }
+  const char *_libraryName() const { return "blaeck"; }
   const char *_libraryVersion() const { return BLAECK_VERSION; }
 
   // Who a frame is for. Over one port it makes no difference; a transport with several
@@ -4303,7 +4301,7 @@ protected:
   // Takes one byte into r; true when it ended a command, which r.chars then holds.
   bool _receiveByte(Receiver &r, char c);
 
-  CRC32 _crc;
+  detail::BlaeckCRC32 _crc;
   uint16_t _schemaHash = 0;
   uint16_t _schemaHashAccum = 0;
 

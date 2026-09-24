@@ -4124,11 +4124,6 @@ bool Blaeck::_frameOpen(byte msgKey, unsigned long msgId, bool withCrc, Audience
   if (withCrc)
   {
     // The CRC covers the key through the status payload, not the start marker.
-    _crc.setPolynome(0x04C11DB7);
-    _crc.setInitial(0xFFFFFFFF);
-    _crc.setXorOut(0xFFFFFFFF);
-    _crc.setReverseIn(true);
-    _crc.setReverseOut(true);
     _crc.restart();
     _frameCrcOn = true;
   }
