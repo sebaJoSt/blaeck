@@ -2,10 +2,8 @@
   Shared compile-time configuration for both transports.
   Class-layout settings must be identical in every translation unit.
 */
-#ifndef BLAECK_CORE_LIBRARY_H
-#define BLAECK_CORE_LIBRARY_H
-
-#define BLAECK_CORE_NAMESPACE blaeck
+#ifndef BLAECK_DEFAULTS_H
+#define BLAECK_DEFAULTS_H
 
 #if defined __has_include
   #if __has_include(<BlaeckSerialConfig.h>) || __has_include(<BlaeckTCPConfig.h>)

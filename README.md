@@ -1,12 +1,12 @@
 # Blaeck - unified-library prototype
 
 One Arduino package, one device class, one protocol core. Attach a **Blaeck** device to a
-Stream or to an already-started TCP server. This local prototype is unpublished;
+Stream or to an already-started TCP server. This prototype is not a released library;
 version **0.0.0** is a placeholder, not a release-number decision.
 
 Based on BlaeckSerial `25b5434e3433d6c46309a75beb244b389d8dec80` and
 BlaeckTCP `68ca1a19c0f7139bb7e496333541476b2bccd20f`.
-The original repositories are unchanged. This repository has no remote.
+The original repositories are unchanged.
 
 ## One public API
 
@@ -55,6 +55,8 @@ void loop()
 Streams and servers are passed by reference, not pointer or port number. There are no
 public `BlaeckSerial`/`BlaeckTCP` classes or transport-specific headers in this prototype.
 Use `Blaeck.h` even when the original standalone libraries remain installed.
+The device and handle types share the `blaeck` namespace; `Blaeck.h` also makes them
+available without qualification, so sketches still write `Blaeck device;`.
 
 **CRC** is the only mandatory library dependency. Stream-only sketches need no networking
 library. TCP users supply their chosen networking library explicitly.
@@ -124,8 +126,11 @@ python extras\scripts\syncnetwork.py --check
 
 ## Behavior and compatibility
 
-- `Blaeck` contains one shared core/catalog, not separate Serial and TCP device instances.
-  `Blaeck.cpp` implements stream and TCP session handling using Arduino's generic interfaces.
+- `Blaeck` is one concrete class owning the catalog and active connection, with no core
+  base class or virtual transport hooks. `Blaeck.cpp` implements protocol/catalog logic
+  and lifecycle; `BlaeckTransport.cpp` implements Stream and TCP session handling.
+- Both `begin()` overloads return the same `BlaeckBeginRef` handle. Table sizing,
+  `.withClients()` and `.withDebugStream()` can be chained in any order.
 - Only the small typed server adapter in `src/detail/BlaeckServerAdapter.h` is header-defined.
   It requires proper `accept()` behavior and never guesses with `available()`.
 - One device uses one connection at a time. `begin(otherConnection)` detaches the old one;
@@ -140,7 +145,7 @@ python extras\scripts\syncnetwork.py --check
   Stream reports `NotServer` rather than silently pretending there are multiple clients.
 - Stream buffering defaults to off on AVR and on elsewhere. TCP buffering defaults to on.
   The default is selected when attaching. An explicit `setBufferedWrites()` selection is
-  retained across later `begin()` calls, even when set through a core reference.
+  retained across later `begin()` calls.
 - **Wire names are deliberately unchanged:** a stream reports `BlaeckSerial`, a server
   reports `BlaeckTCP`. The reported version is the common prototype version. Renaming the
   wire identity to Blaeck is deferred until the host migration is checked.
@@ -149,8 +154,9 @@ See [network](docs/network.md) for server requirements, storage, ownership and e
 
 ## Configuration
 
-Use one **BlaeckConfig.h**, visible to sketch and library translation units. Shared feature
-flags and command-buffer settings apply to both connection types. Legacy
+Use one **BlaeckConfig.h**, loaded by the internal `detail/BlaeckDefaults.h` and visible to
+sketch and library translation units. Shared feature flags and command-buffer settings
+apply to both connection types. Legacy
 `BlaeckSerialConfig.h`/`BlaeckTCPConfig.h` files cause an explicit migration error.
 
 Independent defaults remain available:
@@ -179,9 +185,10 @@ Updated fixtures are ready for separately authorized validation:
 - `extras/tests/SerialOnly`: Stream attachment with no concrete networking library.
 - `extras/tests/Combined`: two Blaeck devices, both connection types, multiple translation units.
 - `extras/tests/TelnetServer`: the optional TelnetPrint route.
-- `extras/tests/host`: simulated clients/streams using the real core. Assertions cover
-  routing, reuse, failures, teardown, connection changes, defaults and explicit overrides,
-  legacy wire names, USB padding, and rejection of `available()`-only servers.
+- `extras/tests/host`: simulated clients/streams using the real protocol and transports.
+  Assertions cover the concrete class and unified begin handle, routing, reuse, failures,
+  teardown, connection changes, defaults and explicit overrides, legacy wire names,
+  USB padding, and rejection of `available()`-only servers.
 
 The host suite is run with a C++ compiler and an installed CRC library:
 

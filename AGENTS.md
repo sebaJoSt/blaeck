@@ -1,23 +1,25 @@
 # Blaeck prototype
 
-Local, unpublished prototype combining BlaeckSerial and BlaeckTCP. No remote is configured.
+Unified prototype combining BlaeckSerial and BlaeckTCP; not a released library.
 Version 0.0.0 is a prototype placeholder, not a release-number decision.
 
-- One shared `src/BlaeckCore.h/.cpp`; do not import a second core.
-- The only public device class/header is `Blaeck`/`Blaeck.h`. `Blaeck.cpp` implements both
-  connection types using Arduino's generic interfaces, never a concrete network library.
-  Keep one core/catalog per device, not two wrapped devices. Only the small typed server adapter
+- One concrete `Blaeck` class in `src/Blaeck.h`, with no core base class or virtual transport hooks.
+  `Blaeck.cpp` implements protocol/catalog logic and lifecycle; `BlaeckTransport.cpp` implements
+  connection I/O using Arduino's generic interfaces, never a concrete network library.
+  Keep one catalog per device, not two wrapped devices. Only the small typed server adapter
   in `src/detail/BlaeckServerAdapter.h` is header-defined.
+- One `BlaeckBeginRef` handle configures table sizes, client count and debug output.
 - TCP takes an already-started server via `begin(server)`. TelnetPrint is an optional
   user-supplied server, never an implicit dependency. Require `accept()`; do not substitute
   `available()`. Keep concrete client ownership in the adapter and session state in Blaeck.
 - Streams use begin(stream) by reference. Select buffering defaults on attachment but
-  preserve explicit overrides, including calls through the base class.
+  preserve explicit overrides across later begin() calls.
 - Wire identities remain BlaeckSerial/BlaeckTCP by connection type. Do not rename them yet.
 - Reuse the allocated client slots. Teardown closes accepted clients, not the supplied
   server. Report allocation/setup errors through transportError()/printTransportError().
 - Examples start with `Blaeck.h` to select this package while the old libraries coexist.
-- Shared layout settings live in `BlaeckConfig.h`. Buffering defaults are per transport.
+- `src/detail/BlaeckDefaults.h` loads the optional user `BlaeckConfig.h`.
+  Shared layout settings must reach every translation unit. Buffering defaults are per transport.
 - There is one topic example set, not Serial/TCP trees. Each main sketch shows
   device.begin(Serial) and device.begin(server) in explicit USE_TCP branches.
   Do not hide the choice or begin call in a connection setup wrapper.

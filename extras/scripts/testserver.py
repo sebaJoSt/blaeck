@@ -1,4 +1,4 @@
-"""Compile and run the real core/TCP implementation with host-only socket doubles."""
+"""Compile and run the protocol/transport implementation with host-only socket doubles."""
 import argparse
 from pathlib import Path
 import subprocess
@@ -18,8 +18,8 @@ def main():
         exe = Path(temp) / "server-test.exe"
         command = [args.cxx, "-std=c++11", "-Wall", "-Wextra", "-O1",
                    "-I" + str(host), "-I" + str(ROOT / "src"), "-I" + str(crc),
-                   str(host / "ServerAdapterTest.cpp"), str(ROOT / "src" / "BlaeckCore.cpp"),
-                   str(ROOT / "src" / "Blaeck.cpp"), str(crc / "CRC32.cpp"),
+                   str(host / "ServerAdapterTest.cpp"), str(ROOT / "src" / "Blaeck.cpp"),
+                   str(ROOT / "src" / "BlaeckTransport.cpp"), str(crc / "CRC32.cpp"),
                    str(crc / "CrcFastReverse.cpp"),
                    "-o", str(exe)]
         subprocess.run(command, check=True)

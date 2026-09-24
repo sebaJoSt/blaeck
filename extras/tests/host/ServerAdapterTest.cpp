@@ -2,7 +2,18 @@
 #include <cassert>
 #include <deque>
 #include <iostream>
+#include <type_traits>
+#include <utility>
 #include <vector>
+
+static_assert(!std::is_polymorphic<Blaeck>::value, "Blaeck needs no virtual transport hooks");
+static_assert(!std::is_copy_constructible<Blaeck>::value, "Blaeck owns its allocations");
+static_assert(!std::is_copy_assignable<Blaeck>::value, "Blaeck owns its allocations");
+static_assert(std::is_same<
+    decltype(std::declval<BlaeckBeginRef &>()
+                 .withSignals(1).withStateChannels(1).withEventChannels(1)
+                 .withEventTypes(1).withCommands(1).withDebugStream(nullptr).withClients(1)),
+    BlaeckBeginRef &>::value, "Every begin option must preserve the same handle");
 
 static int failAfter = -1;
 static size_t allocations = 0;
@@ -136,6 +147,13 @@ public:
     _sendBuffered();
   }
 };
+
+static_assert(std::is_same<
+    decltype(std::declval<Blaeck &>().begin(std::declval<FakeStream &>())),
+    BlaeckBeginRef>::value, "Stream begin returns the unified handle");
+static_assert(std::is_same<
+    decltype(std::declval<Blaeck &>().begin(std::declval<FakeServer<> &>())),
+    BlaeckBeginRef>::value, "Server begin returns the unified handle");
 
 static std::vector<byte> opened, closed;
 static void onOpen(byte slot) { opened.push_back(slot); }
@@ -340,13 +358,12 @@ static void unifiedConnections()
   device.read();
   assert(stream.data.output.empty()); // A previous attachment's partial command was discarded.
 
-  blaeck::BlaeckCore &core = device;
-  core.setBufferedWrites(false);
+  device.setBufferedWrites(false);
   device.begin(server);
   assert(!device.isBufferedWrites());
   device.begin(stream);
   assert(!device.isBufferedWrites());
-  core.setBufferedWrites(true);
+  device.setBufferedWrites(true);
   device.begin(server);
   device.begin(stream);
   assert(device.isBufferedWrites());

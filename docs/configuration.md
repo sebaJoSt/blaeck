@@ -70,7 +70,7 @@ device.printRejections(&Serial);
 It prints one line per table that dropped something, and nothing at all when everything fitted:
 
 ```
-BlaeckCore dropped what it had no room for:
+Blaeck dropped what it had no room for:
   3 signal(s) dropped, table holds 8 - begin(Serial).withSignals(11)
 ```
 
@@ -133,10 +133,10 @@ Four more change a default:
 
 > [!IMPORTANT]
 > An override has to reach **both** your sketch and the library's compiled source files.
-> Some settings size members of the shared `BlaeckCore`. A setting seen by only one gives the class two
+> Some settings size members of `Blaeck`. A setting seen by only one gives the class two
 > different layouts, and that corrupts memory without a word about it.
 > `BLAECK_USB_PACKET_BYTES` sizes nothing, but the code that reads it sits in
-> `Blaeck.cpp`, so a sketch-only override does not change its behavior.
+> `BlaeckTransport.cpp`, so a sketch-only override does not change its behavior.
 >
 > So do not `#define` them at the top of your `.ino`. That reaches your sketch and never the
 > library.

@@ -7,8 +7,6 @@ bool tcpHeaderFirstCheck()
   Blaeck serialDevice;
   Blaeck tcpDevice;
   tcpDevice.begin(server);
-  blaeck::BlaeckCore *serialCore = &serialDevice;
-  blaeck::BlaeckCore *tcpCore = &tcpDevice;
-  return serialCore->isBufferedWrites() == BLAECK_SERIAL_BUFFERED_WRITES_DEFAULT
-      && tcpCore->isBufferedWrites() == BLAECK_TCP_BUFFERED_WRITES_DEFAULT;
+  return serialDevice.isBufferedWrites() == BLAECK_SERIAL_BUFFERED_WRITES_DEFAULT
+      && tcpDevice.isBufferedWrites() == BLAECK_TCP_BUFFERED_WRITES_DEFAULT;
 }

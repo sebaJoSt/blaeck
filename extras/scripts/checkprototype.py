@@ -16,16 +16,20 @@ def require(condition, message):
 def main():
     src = ROOT / "src"
     require(sorted(p.name for p in src.rglob("*.cpp"))
-            == ["Blaeck.cpp", "BlaeckCore.cpp"], "unexpected compiled source")
-    core = (src / "BlaeckCore.h").read_text(encoding="utf-8")
-    impl = (src / "Blaeck.cpp").read_text(encoding="utf-8")
+            == ["Blaeck.cpp", "BlaeckTransport.cpp"], "unexpected compiled source")
+    impl = (src / "BlaeckTransport.cpp").read_text(encoding="utf-8")
     public = (src / "Blaeck.h").read_text(encoding="utf-8")
-    require("class Blaeck : public BlaeckCore" in public, "missing unified public class")
+    require("class Blaeck\n{" in public and "virtual " not in public,
+            "device must be one concrete class without virtual transport hooks")
+    require("class BlaeckBeginRef\n{" in public and "BlaeckConnectionRef" not in public
+            and "BlaeckBeginRef &withClients(byte count);" in public,
+            "begin must use one handle for tables and connections")
+    require(not list(src.glob("BlaeckCore*")), "obsolete core files")
     require("begin(Stream &stream)" in public and "server.accept()" in public,
             "missing connection overloads")
     require('return _tcpSelected ? "BlaeckTCP" : "BlaeckSerial";' in public,
             "wire identities must remain unchanged")
-    require("namespace blaeck_serial" not in core and "namespace blaeck_tcp" not in core,
+    require("namespace blaeck_serial" not in public and "namespace blaeck_tcp" not in public,
             "obsolete public namespace aliases")
     require(not (src / "BlaeckSerial.h").exists() and not (src / "BlaeckTCP.h").exists(),
             "obsolete public transport headers")
