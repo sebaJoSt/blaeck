@@ -1,0 +1,23 @@
+{
+  "name": "Blaeck",
+  "version": "0.0.0",
+  "description": "Local prototype of a unified Serial and TCP telemetry library.",
+  "authors": {
+    "name": "Sebastian Strobl",
+    "maintainer": true
+  },
+  "license": "MIT",
+  "frameworks": "arduino",
+  "platforms": "*",
+  "headers": ["Blaeck.h"],
+  "dependencies": [
+    {
+      "owner": "robtillaart",
+      "name": "CRC",
+      "version": "^1.0.4"
+    }
+  ],
+  "export": {
+    "include": ["src", "examples", "docs", "README.md", "LICENSE.md", "extras"]
+  }
+}

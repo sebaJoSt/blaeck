@@ -1,0 +1,166 @@
+/*
+  EventChannels.ino
+
+  Every kind of metadata an event channel can carry, one channel each, to compare how a
+  dashboard renders them.
+  An event is an occurrence, not a state: it carries no value and nothing to switch off again,
+  which is what separates it from a bool signal.
+
+  This sketch declares four event channels and ten types, which is why the begin() chain below
+  asks for them - on a small AVR the defaults would hold two channels and eight types.
+
+  What to look for once it is logging:
+    Doorbell    device class doorbell, which requires a "ring" type - see the note below
+    Button      device class button, using Home Assistant's own names for press and hold
+    Motion      device class motion, a pair of types rather than one
+    System      no device class, diagnostic, and one type added conditionally
+
+  An event entity's state is the timestamp of the last occurrence; which one it was arrives as
+  an "event_type" attribute. So the more-info dialog is where to watch these, not the state.
+
+  Author: Sebastian Strobl, https://github.com/sebaJoSt/BlaeckSerial
+*/
+
+#include <Blaeck.h>
+#define HOST_NAME "EventChannels"
+#ifndef USE_TCP
+#define USE_TCP 0  // 0: Serial, 1: TCP
+#endif
+
+#if USE_TCP
+// Uncomment to enable OTA/Bonjour; see WaveformGenerator/README.md.
+// #define NETWORK_WITH_SERVICES
+#include "NetworkSetup.h"
+NetworkSetup::Server server(23);
+#endif
+
+Blaeck device;
+
+// Set true to declare a type only some builds have, to show addEventType() appending to a
+// channel whose list is not fully known at compile time.
+#define HAS_OVERHEAT_SENSOR true
+
+// addSignal() keeps a pointer to these, so they have to be globals. A logging session needs
+// something to log; these also let the event count be checked against what arrived.
+unsigned long Uptime = 0;
+unsigned long EventCount = 0;
+
+void setup()
+{
+
+  Serial.begin(115200);
+
+#if USE_TCP
+  networkBegin(23);
+  server.begin();
+  device.begin(server)
+      .withSignals(2)
+      .withEventChannels(4)
+      .withEventTypes(10)
+      .withDebugStream(&device.Terminal);
+#else
+  device.begin(Serial)
+      .withSignals(2)
+      .withEventChannels(4)
+      .withEventTypes(10);
+#endif
+
+  device.DeviceName = HOST_NAME;
+  device.DeviceFWVersion = "1.0";
+
+  device.addSignal(F("Uptime"), &Uptime)
+      .withUnit(F("s"))
+      .withDeviceClass(F("duration"))
+      .withStateClass(BLAECK_STATE_CLASS_MEASUREMENT);
+  device.addSignal(F("EventCount"), &EventCount)
+      .withStateClass(BLAECK_STATE_CLASS_TOTAL_INCREASING);
+
+  // A doorbell must be able to report "ring". Home Assistant warns about a doorbell without it
+  // today and stops accepting one in 2027.4.
+  device.addEventChannel(F("Doorbell"), F("ring"))
+      .withIcon(F("mdi:doorbell"))
+      .withDeviceClass(F("doorbell"));
+
+  // Home Assistant publishes standard names for a button, and says none of them are required:
+  // declare only the interactions the hardware can actually produce. These four are a press
+  // and a hold, each with a start and an end.
+  device.addEventChannel(F("Button"),
+                         F("press_start,press_end,long_press_start,long_press_end"))
+      .withIcon(F("mdi:gesture-tap-button"))
+      .withDeviceClass(F("button"));
+
+  // A device class does not fix the type names - only doorbell requires one. A motion channel
+  // reports whatever it declares.
+  device.addEventChannel(F("Motion"), F("motion_detected,motion_cleared"))
+      .withDeviceClass(F("motion"));
+
+  // No device class: a plain event channel, filed under Diagnostic and switched off until
+  // someone enables it.
+  device.addEventChannel(F("System"), F("started,config_changed"))
+      .withIcon(F("mdi:cog"))
+      .diagnostic()
+      .disabledByDefault();
+
+  // addEventType() appends to a channel already declared, for a list that is not fully known
+  // at compile time. It is the only way to build one conditionally: the types passed to
+  // addEventChannel() are a flash literal, so they cannot be assembled at runtime.
+  if (HAS_OVERHEAT_SENSOR)
+    device.addEventType(F("System"), F("overheated"));
+
+  // One summary for every table, printed only if something was dropped. Safe here: nothing
+  // has been written to Serial as a Blaeck frame yet.
+  device.printRejections(&Serial);
+
+  device.writeEvent(F("System"), F("started"));
+  EventCount++;
+}
+
+void loop()
+{
+  Uptime = millis() / 1000;
+  device.tick();
+#if USE_TCP
+  networkLoop();
+#endif
+  FireEvents();
+}
+
+// One occurrence every five seconds, walking every declared type so each is exercised.
+void FireEvents()
+{
+  static unsigned long lastFired = 0;
+  static byte step = 0;
+
+  if (millis() - lastFired < 5000)
+    return;
+  lastFired = millis();
+
+  bool sentEvent = true;
+
+  switch (step)
+  {
+  case 0: device.writeEvent(F("Doorbell"), F("ring")); break;
+  case 1: device.writeEvent(F("Button"), F("press_start")); break;
+  case 2: device.writeEvent(F("Button"), F("press_end")); break;
+  case 3: device.writeEvent(F("Button"), F("long_press_start")); break;
+  case 4: device.writeEvent(F("Button"), F("long_press_end")); break;
+  case 5: device.writeEvent(F("Motion"), F("motion_detected")); break;
+  case 6: device.writeEvent(F("Motion"), F("motion_cleared")); break;
+  case 7: device.writeEvent(F("System"), F("config_changed")); break;
+  case 8:
+    if (HAS_OVERHEAT_SENSOR)
+      device.writeEvent(F("System"), F("overheated"));
+    else
+      sentEvent = false;
+    break;
+  }
+
+  // A type the channel never declared is dropped by the device: writeEvent() resolves the name
+  // against the 0x80 catalog and sends nothing when it does not match.
+  // device.writeEvent(F("Motion"), F("motion_maybe"));
+
+  if (sentEvent)
+    EventCount++;
+
+  step = (step + 1) % 9;
+}
