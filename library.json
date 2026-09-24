@@ -1,13 +1,16 @@
 {
   "name": "blaeck",
   "version": "7.0.0",
-  "description": "Self-describing telemetry over Serial, Ethernet and WiFi using one unified API.",
+  "description": "Arduino data logging, monitoring and control via Serial or TCP. Send sensor data for live monitoring and logging, expose controls, and report device state and events. A device describes its own interface, so a host can build a dashboard from it.",
+  "keywords": "serial, tcp, ethernet, wifi, binary, sensor, telemetry, logging, protocol, home-assistant",
+  "homepage": "https://github.com/sebaJoSt/blaeck",
   "repository": {
     "type": "git",
     "url": "https://github.com/sebaJoSt/blaeck.git"
   },
   "authors": {
     "name": "Sebastian Strobl",
+    "url": "https://github.com/sebaJoSt",
     "maintainer": true
   },
   "license": "MIT",
