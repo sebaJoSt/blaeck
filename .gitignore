@@ -1,4 +1,6 @@
 .pio/
+.development/
+.vscode/
 build/
 __pycache__/
 *.pyc

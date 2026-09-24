@@ -179,6 +179,9 @@ to servers/clients supporting that setting. See [configuration](docs/configurati
 
 ## Validation status
 
+For contribution guidelines and editor setup, see [CONTRIBUTING.md](CONTRIBUTING.md).
+For reporting problems, see [SUPPORT.md](SUPPORT.md).
+
 **This unified-public-class revision has source checks only, as requested. It has not
 been compiled or runtime-tested.** Build and size results from the earlier two-class
 prototype do not validate this revision.

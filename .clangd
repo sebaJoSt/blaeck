@@ -1,0 +1,5 @@
+# clangd only; the Microsoft C/C++ extension uses its own compileCommands setting.
+# Generate compile_commands.json in .development as described in CONTRIBUTING.md.
+# Regenerate it after changing boards, flags or dependencies.
+CompileFlags:
+  CompilationDatabase: .development

@@ -15,6 +15,6 @@
   "platforms": "*",
   "headers": ["Blaeck.h"],
   "export": {
-    "include": ["src", "examples", "docs", "README.md", "LICENSE.md", "extras"]
+    "include": ["src", "examples", "docs", "README.md", "CONTRIBUTING.md", "SUPPORT.md", "LICENSE.md", "extras"]
   }
 }

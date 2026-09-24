@@ -3,6 +3,7 @@
 Unified library combining BlaeckSerial and BlaeckTCP.
 Version 7.0.0 is in development; setting its metadata does not publish a release.
 
+- Follow `extras/API-STYLE.md` for public documentation and implementation comments.
 - One concrete `Blaeck` class in `src/Blaeck.h`, with no core base class or virtual transport hooks.
   `Blaeck.cpp` implements protocol/catalog logic and lifecycle; `BlaeckTransport.cpp` implements
   connection I/O using Arduino's generic interfaces, never a concrete network library.
@@ -28,7 +29,7 @@ Version 7.0.0 is in development; setting its metadata does not publish a release
   device.begin(Serial) and device.begin(server) in explicit USE_TCP branches.
   Do not hide the choice or begin call in a connection setup wrapper.
 - NetworkSetup.h exposes the board's concrete server alias as NetworkSetup::Server.
-- Sources use CRLF. Preserve byte equality of setup tab copies.
+- Text files use LF. Preserve byte equality of setup tab copies.
 - Edit `examples/Basic/NetworkSetup.h`, then run
   `python extras/scripts/syncnetwork.py`.
 - Keep only the default MAC address in committed examples. Never commit WiFi credentials.
