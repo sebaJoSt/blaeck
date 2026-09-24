@@ -28,6 +28,13 @@ def main():
         defaults_command[-1] = str(distinct)
         subprocess.run(defaults_command, check=True)
         subprocess.run([str(distinct)], check=True, timeout=20)
+        metadata_off = Path(temp) / "reporting-no-metadata-test.exe"
+        metadata_command = command[:]
+        metadata_command[1:1] = ["-DBLAECK_ENABLE_SIGNAL_META=0",
+                                 "-DBLAECK_TEST_REPORTING_ONLY=1"]
+        metadata_command[-1] = str(metadata_off)
+        subprocess.run(metadata_command, check=True)
+        subprocess.run([str(metadata_off)], check=True, timeout=20)
         disabled = Path(temp) / "server-no-delay-test.exe"
         command[1:1] = ["-DBLAECK_TCP_NO_DELAY_DEFAULT=false"]
         command[-1] = str(disabled)

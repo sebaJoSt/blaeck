@@ -5,6 +5,8 @@
 
 #include <Arduino.h>
 #include "Blaeck.h"
+#include <math.h>
+#include <float.h>
 
 namespace blaeck
 {
@@ -137,6 +139,7 @@ void Blaeck::_resetSignalCatalog()
   _schemaHash = 0;
   _signalRegistrationFailed = false;
   _rejectedSignalCount = 0;
+  _rejectedSignalPolicyCount = 0;
 #if BLAECK_ENABLE_SIGNAL_META
   _rejectedSignalMetaCount = 0;
 #endif
@@ -147,7 +150,7 @@ void Blaeck::_resetSignalCatalog()
 
 bool Blaeck::hasRejections() const
 {
-  if (_rejectedSignalCount > 0 || _rejectedCommandCount > 0)
+  if (_rejectedSignalCount > 0 || _rejectedCommandCount > 0 || _rejectedSignalPolicyCount > 0)
     return true;
 #if BLAECK_ENABLE_SIGNAL_META
   if (_rejectedSignalMetaCount > 0)
@@ -183,6 +186,12 @@ bool Blaeck::printRejections(Print *out)
     return false;
 
   out->println(F("Blaeck registration rejections:"));
+  if (_rejectedSignalPolicyCount > 0)
+  {
+    out->print(F("  "));
+    out->print(_rejectedSignalPolicyCount);
+    out->println(F(" signal reporting configuration/storage failure(s); enable withDebugStream() for details."));
+  }
   if (_rejectedSignalCount > 0)
     _printRejectionLine(out, F("signal"), _rejectedSignalCount,
                         _signalCapacity);
@@ -460,7 +469,8 @@ int Blaeck::_registerSignalCommon(const char *ram, const __FlashStringHelper *fl
   Signals[_signalIndex].Address = address;
   // Bit-fields can't have initializers, so set them here. The slot may be reused after
   // clearAllSignals().
-  Signals[_signalIndex].Updated = 0;
+  Signals[_signalIndex].IntervalMode = BLAECK_ALWAYS;
+  Signals[_signalIndex].Selected = 0;
   Signals[_signalIndex].HasSuffix = 0;
   Signals[_signalIndex].NameSuffix = 0;
 #if BLAECK_ENABLE_SIGNAL_META
@@ -628,6 +638,7 @@ void Blaeck::clearAllSignals()
   _schemaHash = 0;
   _signalRegistrationFailed = false;
   _rejectedSignalCount = 0;
+  _rejectedSignalPolicyCount = 0;
 #if BLAECK_ENABLE_SIGNAL_META
   _rejectedSignalMetaCount = 0;
 #endif
@@ -697,10 +708,206 @@ void Blaeck::_freeSignalOwned()
       free((void *)Signals[i].SignalName);
     Signals[i].SignalName = nullptr;
     Signals[i].NameInFlash = 0;
+    delete Signals[i].Reporting;
+    Signals[i].Reporting = nullptr;
 #if BLAECK_ENABLE_SIGNAL_META
     delete Signals[i].Meta;
     Signals[i].Meta = nullptr;
 #endif
+  }
+}
+
+void Blaeck::_reportSignalPolicyError(const __FlashStringHelper *message)
+{
+  if (_rejectedSignalPolicyCount != UINT16_MAX)
+    ++_rejectedSignalPolicyCount;
+  if (_debugStream != nullptr)
+    _debugStream->println(message);
+}
+
+SignalReporting *Blaeck::_ensureSignalReporting(int16_t index)
+{
+  if (index < 0 || index >= _signalIndex)
+    return nullptr;
+  Signal &s = Signals[index];
+  if (s.Reporting == nullptr)
+  {
+    s.Reporting = new (std::nothrow) SignalReporting();
+    if (s.Reporting == nullptr)
+      _reportSignalPolicyError(F("No RAM for signal reporting; previous policy retained."));
+  }
+  return s.Reporting;
+}
+
+void Blaeck::_setSignalInterval(int16_t index, BlaeckIntervalMode mode, double delta)
+{
+  if (index < 0 || index >= _signalIndex)
+    return;
+  Signal &s = Signals[index];
+  if ((mode != BLAECK_OFF && mode != BLAECK_ALWAYS && mode != BLAECK_ON_CHANGE) ||
+      (mode == BLAECK_ON_CHANGE && s.DataType != Blaeck_bool && s.DataType != Blaeck_string &&
+       (delta < 0 || isnan(delta) || isinf(delta))))
+  {
+    _reportSignalPolicyError(F("Invalid interval reporting policy/threshold; previous policy retained."));
+    return;
+  }
+  if (mode == BLAECK_ON_CHANGE)
+  {
+    SignalReporting *r = _ensureSignalReporting(index);
+    if (r == nullptr)
+      return;
+    r->intervalDelta = delta;
+  }
+  s.IntervalMode = mode;
+  if (mode != BLAECK_ON_CHANGE && s.Reporting != nullptr && !s.Reporting->immediate)
+  {
+    delete s.Reporting;
+    s.Reporting = nullptr;
+  }
+}
+
+void Blaeck::_setSignalOnChange(int16_t index, double delta, uint32_t minIntervalMs)
+{
+  if (index < 0 || index >= _signalIndex)
+    return;
+  const Signal &s = Signals[index];
+  if (s.DataType != Blaeck_bool && s.DataType != Blaeck_string &&
+      (delta < 0 || isnan(delta) || isinf(delta)))
+  {
+    _reportSignalPolicyError(F("Invalid change threshold; previous policy retained."));
+    return;
+  }
+  if (SignalReporting *r = _ensureSignalReporting(index))
+  {
+    r->changeDelta = delta;
+    r->minIntervalMs = minIntervalMs;
+    r->immediate = true;
+  }
+}
+
+void Blaeck::_resetReportingBaselines()
+{
+  for (int i = 0; i < _signalIndex; ++i)
+    if (Signals[i].Reporting != nullptr)
+      Signals[i].Reporting->valid = false;
+}
+
+static byte _signalTextLength(const void *address)
+{
+  const char *text = static_cast<const char *>(address);
+  unsigned int n = 0;
+  if (text != nullptr)
+    while (n < 255 && text[n] != '\0')
+      ++n;
+  return static_cast<byte>(n);
+}
+
+static size_t _signalValueSize(dataType type)
+{
+  switch (type)
+  {
+  case Blaeck_bool: case Blaeck_byte: return 1;
+  case Blaeck_short: case Blaeck_ushort: case Blaeck_int: case Blaeck_uint: return 2;
+  case Blaeck_long: case Blaeck_ulong: case Blaeck_float: return 4;
+  case Blaeck_double: return 8;
+  default: return 0;
+  }
+}
+
+bool Blaeck::_prepareSignalSnapshot(Signal &s)
+{
+  SignalReporting *r = s.Reporting;
+  if (r == nullptr || s.DataType != Blaeck_string)
+    return true;
+  const uint16_t needed = static_cast<uint16_t>(_signalTextLength(s.Address)) + 1;
+  if (needed > r->textCapacity)
+  {
+    char *text = new (std::nothrow) char[needed];
+    if (text == nullptr)
+    {
+      if (!r->memoryError)
+        _reportSignalPolicyError(F("No RAM for signal text snapshot; data frame not sent."));
+      r->memoryError = true;
+      return false;
+    }
+    if (r->text != nullptr)
+      memcpy(text, r->text, static_cast<size_t>(r->textLength) + 1);
+    delete[] r->text;
+    r->text = text;
+    r->textCapacity = needed;
+  }
+  r->memoryError = false;
+  return true;
+}
+
+void Blaeck::_captureSignalSnapshot(Signal &s)
+{
+  SignalReporting &r = *s.Reporting;
+  if (s.DataType == Blaeck_string)
+  {
+    r.textLength = _signalTextLength(s.Address);
+    if (r.textLength != 0)
+      memcpy(r.text, s.Address, r.textLength);
+    r.text[r.textLength] = '\0';
+  }
+  else
+    memcpy(r.value, s.Address, _signalValueSize(s.DataType));
+}
+
+template<class T>
+static bool _integerSignalChanged(const void *address, const byte *baseline, double delta)
+{
+  T current, previous;
+  memcpy(&previous, baseline, sizeof(T));
+  memcpy(&current, address, sizeof(T));
+  if (current == previous)
+    return false;
+  // Unsigned subtraction also handles signed endpoints without signed overflow.
+  const unsigned long difference = current > previous
+      ? static_cast<unsigned long>(current) - static_cast<unsigned long>(previous)
+      : static_cast<unsigned long>(previous) - static_cast<unsigned long>(current);
+  if (delta >= ldexp(1.0, sizeof(unsigned long) * CHAR_BIT))
+    return false;
+  return difference >= static_cast<unsigned long>(ceil(delta));
+}
+
+template<class T>
+static bool _floatingSignalChanged(const void *address, const byte *baseline, double delta, double minNormal)
+{
+  T current, previous;
+  memcpy(&current, address, sizeof(T));
+  memcpy(&previous, baseline, sizeof(T));
+  if (memcmp(&current, &previous, sizeof(T)) == 0)
+    return false;
+  // Like Arduino Cloud, stable NaN representations do not repeatedly publish.
+  if (isnan(current) || isnan(previous) || isinf(current) || isinf(previous) ||
+      (current != 0 && fabs(current) < minNormal) ||
+      (previous != 0 && fabs(previous) < minNormal))
+    return true;
+  return fabs(current - previous) >= delta;
+}
+
+bool Blaeck::_signalChanged(const Signal &s, double delta) const
+{
+  const SignalReporting &r = *s.Reporting;
+  if (!r.valid)
+    return true;
+  switch (s.DataType)
+  {
+  case Blaeck_bool: return memcmp(s.Address, r.value, sizeof(bool)) != 0;
+  case Blaeck_byte: return _integerSignalChanged<byte>(s.Address, r.value, delta);
+  case Blaeck_short: case Blaeck_int: return _integerSignalChanged<int16_t>(s.Address, r.value, delta);
+  case Blaeck_ushort: case Blaeck_uint: return _integerSignalChanged<uint16_t>(s.Address, r.value, delta);
+  case Blaeck_long: return _integerSignalChanged<int32_t>(s.Address, r.value, delta);
+  case Blaeck_ulong: return _integerSignalChanged<uint32_t>(s.Address, r.value, delta);
+  case Blaeck_float: return _floatingSignalChanged<float>(s.Address, r.value, delta, FLT_MIN);
+  case Blaeck_double: return _floatingSignalChanged<double>(s.Address, r.value, delta, DBL_MIN);
+  case Blaeck_string:
+  {
+    const byte length = _signalTextLength(s.Address);
+    return length != r.textLength || (length != 0 && memcmp(s.Address, r.text, length) != 0);
+  }
+  default: return false;
   }
 }
 
@@ -923,178 +1130,6 @@ bool Blaeck::_storeFloating(int signalIndex, double value)
 }
 
 #undef BLAECK_STORE_CASES
-
-void Blaeck::update(int signalIndex, bool value)
-{
-  if (_storeSigned(signalIndex, value))
-    Signals[signalIndex].Updated = true;
-}
-
-void Blaeck::update(int signalIndex, byte value)
-{
-  if (_storeUnsigned(signalIndex, value))
-    Signals[signalIndex].Updated = true;
-}
-
-void Blaeck::update(int signalIndex, short value)
-{
-  if (_storeSigned(signalIndex, value))
-    Signals[signalIndex].Updated = true;
-}
-
-void Blaeck::update(int signalIndex, unsigned short value)
-{
-  if (_storeUnsigned(signalIndex, value))
-    Signals[signalIndex].Updated = true;
-}
-
-void Blaeck::update(int signalIndex, int value)
-{
-  if (_storeSigned(signalIndex, value))
-    Signals[signalIndex].Updated = true;
-}
-
-void Blaeck::update(int signalIndex, unsigned int value)
-{
-  if (_storeUnsigned(signalIndex, value))
-    Signals[signalIndex].Updated = true;
-}
-
-void Blaeck::update(int signalIndex, long value)
-{
-  if (_storeSigned(signalIndex, value))
-    Signals[signalIndex].Updated = true;
-}
-
-void Blaeck::update(int signalIndex, unsigned long value)
-{
-  if (_storeUnsigned(signalIndex, value))
-    Signals[signalIndex].Updated = true;
-}
-
-void Blaeck::update(int signalIndex, float value)
-{
-  if (_storeFloating(signalIndex, value))
-    Signals[signalIndex].Updated = true;
-}
-
-void Blaeck::update(int signalIndex, double value)
-{
-  if (_storeFloating(signalIndex, value))
-    Signals[signalIndex].Updated = true;
-}
-
-void Blaeck::update(int signalIndex, const char *value)
-{
-  if (signalIndex >= 0 && signalIndex < _signalIndex)
-  {
-    if (Signals[signalIndex].DataType == Blaeck_string)
-    {
-      // Point at the caller's buffer; it isn't copied.
-      Signals[signalIndex].Address = const_cast<char *>(value);
-      Signals[signalIndex].Updated = true;
-    }
-  }
-}
-
-void Blaeck::update(const char *signalName, bool value)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    update(index, value);
-  }
-}
-
-void Blaeck::update(const char *signalName, byte value)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    update(index, value);
-  }
-}
-
-void Blaeck::update(const char *signalName, short value)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    update(index, value);
-  }
-}
-
-void Blaeck::update(const char *signalName, unsigned short value)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    update(index, value);
-  }
-}
-
-void Blaeck::update(const char *signalName, int value)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    update(index, value);
-  }
-}
-
-void Blaeck::update(const char *signalName, unsigned int value)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    update(index, value);
-  }
-}
-
-void Blaeck::update(const char *signalName, long value)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    update(index, value);
-  }
-}
-
-void Blaeck::update(const char *signalName, unsigned long value)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    update(index, value);
-  }
-}
-
-void Blaeck::update(const char *signalName, float value)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    update(index, value);
-  }
-}
-
-void Blaeck::update(const char *signalName, double value)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    update(index, value);
-  }
-}
-
-void Blaeck::update(const char *signalName, const char *value)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    update(index, value);
-  }
-}
 
 int Blaeck::findSignalIndex(const char *signalName)
 {
@@ -3629,7 +3664,6 @@ void Blaeck::_setTimedDataState(bool timedActivated, unsigned long timedInterval
 
   if (_timedActivated)
   {
-    _timedSetPoint_ms = timedInterval_ms;
     _timedInterval_ms = timedInterval_ms;
     _timedFirstTime = true;
   }
@@ -3954,67 +3988,62 @@ void Blaeck::writeAllData(unsigned long msg_id, unsigned long long timestamp)
   this->writeData(msg_id, 0, _signalIndex - 1, false, timestamp);
 }
 
-void Blaeck::writeUpdatedData()
-{
-  this->writeUpdatedData(getTimeStamp());
-}
-
-void Blaeck::writeUpdatedData(unsigned long long timestamp)
-{
-  this->writeData(0, 0, _signalIndex - 1, true, timestamp);
-}
-
-void Blaeck::writeData(unsigned long msg_id, int signalIndex_start, int signalIndex_end, bool onlyUpdated, unsigned long long timestamp)
+void Blaeck::writeData(unsigned long msg_id, int signalIndex_start, int signalIndex_end, bool selectedOnly, unsigned long long timestamp)
 {
   if (_signalIndex == 0)
     return;
 
   if (_beforeWriteCallback != NULL)
     _beforeWriteCallback();
-  this->writeDataFrame(msg_id, signalIndex_start, signalIndex_end, onlyUpdated, timestamp);
+  this->writeDataFrame(msg_id, signalIndex_start, signalIndex_end, selectedOnly, timestamp);
 }
 
-void Blaeck::timedWriteAllData()
+void Blaeck::tick()
 {
-  this->timedWriteAllData(getTimeStamp());
+  read();
+  writeIfDue();
 }
 
-// Timed frames answer no request, so their message id is 0.
-void Blaeck::timedWriteAllData(unsigned long long timestamp)
+void Blaeck::writeIfDue()
 {
-  this->timedWriteData(0, 0, _signalIndex - 1, false, timestamp);
+  // Keep rollover tracking alive even when no signal needs reporting.
+  writeIfDue(getTimeStamp());
 }
 
-void Blaeck::timedWriteUpdatedData()
+void Blaeck::writeIfDue(unsigned long long timestamp)
 {
-  this->timedWriteUpdatedData(getTimeStamp());
-}
-
-void Blaeck::timedWriteUpdatedData(unsigned long long timestamp)
-{
-  this->timedWriteData(0, 0, _signalIndex - 1, true, timestamp);
-}
-
-void Blaeck::timedWriteData(unsigned long msg_id, int signalIndex_start, int signalIndex_end, bool onlyUpdated, unsigned long long timestamp)
-{
-
-  if (_timedFirstTime == true)
-    _timedFirstTimeDone_ms = millis();
-  unsigned long _timedElapsedTime_ms = (millis() - _timedFirstTimeDone_ms);
-
-  if (((_timedElapsedTime_ms >= _timedSetPoint_ms) || _timedFirstTime == true) && _timedActivated == true)
+  const uint32_t now = static_cast<uint32_t>(millis());
+  const uint32_t elapsed = now - _lastIntervalMs;
+  const bool intervalDue = _timedActivated &&
+      (_timedFirstTime || _timedInterval_ms == 0 || elapsed >= _timedInterval_ms);
+  if (intervalDue)
   {
-    if (_timedFirstTime == false)
-    {
-      if (_timedInterval_ms > 0)
-      {
-        while (_timedSetPoint_ms <= _timedElapsedTime_ms)
-          _timedSetPoint_ms += _timedInterval_ms;
-      }
-    }
+    if (_timedFirstTime || _timedInterval_ms == 0)
+      _lastIntervalMs = now;
+    else
+      _lastIntervalMs += elapsed - (elapsed % _timedInterval_ms);
     _timedFirstTime = false;
-    this->writeData(msg_id, signalIndex_start, signalIndex_end, onlyUpdated, timestamp);
+    if (_signalIndex != 0 && _beforeWriteCallback != nullptr)
+      _beforeWriteCallback();
   }
+  if (!_mayWriteFrame())
+    return;
+
+  const uint32_t changeNow = static_cast<uint32_t>(millis());
+  bool intervalReport = false;
+  for (int i = 0; i < _signalIndex; ++i)
+  {
+    Signal &s = Signals[i];
+    SignalReporting *r = s.Reporting;
+    const bool interval = intervalDue && (s.IntervalMode == BLAECK_ALWAYS ||
+        (s.IntervalMode == BLAECK_ON_CHANGE && _signalChanged(s, r->intervalDelta)));
+    const bool immediate = r != nullptr && r->immediate &&
+        (!r->valid || static_cast<uint32_t>(changeNow - r->lastWriteMs) >= r->minIntervalMs) &&
+        _signalChanged(s, r->changeDelta);
+    s.Selected = interval || immediate;
+    intervalReport |= interval;
+  }
+  writeDataFrame(0, 0, _signalIndex - 1, true, timestamp, intervalReport);
 }
 
 // ----- Buffered writes -----
@@ -4122,6 +4151,7 @@ bool Blaeck::_frameOpen(byte msgKey, unsigned long msgId, bool withCrc, Audience
     return false;
 
   _frameAudience = _replying ? AUDIENCE_REQUESTER : audience;
+  _frameWriteFailed = false;
 
   _frameDirect = !_bufReady();
   if (!_frameDirect)
@@ -4147,10 +4177,18 @@ bool Blaeck::_frameClose()
 {
   _frameCrcOn = false;
   _emitStr("/BLAECK>\r\n");
+  bool complete;
   if (!_frameDirect)
-    return _bufSend();
-  _flushDirect();
-  return true;
+    complete = _bufSend();
+  else
+  {
+    _flushDirect();
+    complete = !_frameWriteFailed;
+  }
+  if (_frameWriteFailed && !_shortWriteReported && _debugStream != nullptr)
+    _debugStream->println(F("Incomplete transport write; changed signals remain due."));
+  _shortWriteReported = _frameWriteFailed;
+  return complete;
 }
 
 void Blaeck::_emitDevice(const char *name, const char *hw, const char *fw)
@@ -4222,13 +4260,10 @@ void Blaeck::writeDevicesFrame(unsigned long msg_id)
   _frameClose();
 }
 
-void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int signalIndex_end, bool onlyUpdated, unsigned long long timestamp)
+void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int signalIndex_end, bool selectedOnly, unsigned long long timestamp, bool intervalReport)
 {
   if (!_mayWriteFrame())
     return;
-
-  if (onlyUpdated && !hasUpdatedSignals())
-    return; // No updated signals
 
   // Clamp the range.
   if (signalIndex_start < 0)
@@ -4238,11 +4273,27 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
   if (signalIndex_start > signalIndex_end)
     return; // No valid range
 
+  bool any = false;
+  for (int i = signalIndex_start; i <= signalIndex_end; ++i)
+  {
+    Signal &s = Signals[i];
+    if (!selectedOnly)
+      s.Selected = true;
+    if (s.Selected)
+    {
+      if (!_prepareSignalSnapshot(s))
+        return;
+      any = true;
+    }
+  }
+  if (!any)
+    return;
+
   if (!_frameOpen(0xD2, msg_id, true, AUDIENCE_SUBSCRIBERS))
     return;
 
   bool restartFlagSnapshot = _sendRestartFlag;
-  _emitByte(_frameFlags(restartFlagSnapshot));
+  _emitByte(_frameFlags(restartFlagSnapshot, intervalReport));
   _emitByte(':');
 
   _emitByte((byte)(_schemaHash & 0xFF));
@@ -4261,13 +4312,27 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
 
   for (int i = signalIndex_start; i <= signalIndex_end; i++)
   {
-    if (onlyUpdated && !Signals[i].Updated)
+    if (!Signals[i].Selected)
       continue;
 
     intCvt.val = i;
     _emitBytes(intCvt.bval, 2);
 
     Signal signal = Signals[i];
+    if (signal.Reporting != nullptr)
+    {
+      _captureSignalSnapshot(Signals[i]);
+      if (signal.DataType == Blaeck_string)
+      {
+        _emitByte(signal.Reporting->textLength);
+        _emitBytes(reinterpret_cast<const byte *>(signal.Reporting->text), signal.Reporting->textLength);
+      }
+      else
+      {
+        _emitBytes(signal.Reporting->value, _signalValueSize(signal.DataType));
+      }
+      continue;
+    }
     switch (signal.DataType)
     {
     case (Blaeck_bool):   boolCvt.val  = *((bool *)signal.Address);           _emitBytes(boolCvt.bval, 1);  break;
@@ -4292,8 +4357,6 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
     break;
     }
 
-    if (onlyUpdated)
-      Signals[i].Updated = false;
   }
 
   byte statusByte = 0;
@@ -4304,7 +4367,21 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
   uint32_t crc_value = _frameCrcEnd();
   _emitBytes((byte *)&crc_value, 4);
 
-  if (_frameClose())
+  const bool complete = _frameClose();
+  const uint32_t sentAt = static_cast<uint32_t>(millis());
+  for (int i = signalIndex_start; i <= signalIndex_end; ++i)
+  {
+    Signal &s = Signals[i];
+    if (s.Selected && s.Reporting != nullptr)
+    {
+      // Encoding overwrites the shared snapshot. Invalidate failed frames so
+      // their values cannot suppress the next report.
+      s.Reporting->valid = complete;
+      if (complete)
+        s.Reporting->lastWriteMs = sentAt;
+    }
+  }
+  if (complete)
     _sendRestartFlag = false;
 }
 
@@ -4482,70 +4559,6 @@ void Blaeck::writeCommandsFrame(unsigned long msg_id)
   _frameClose();
 }
 #endif
-
-void Blaeck::tickUpdated()
-{
-  this->tick(0, true);
-}
-
-void Blaeck::tick()
-{
-  this->tick(0, false);
-}
-
-void Blaeck::tick(unsigned long msg_id, bool onlyUpdated)
-{
-  this->read();
-  this->timedWriteData(msg_id, 0, _signalIndex - 1, onlyUpdated, getTimeStamp());
-}
-
-void Blaeck::markSignalUpdated(int signalIndex)
-{
-  if (signalIndex >= 0 && signalIndex < _signalIndex)
-  {
-    Signals[signalIndex].Updated = true;
-  }
-}
-
-void Blaeck::markSignalUpdated(const char *signalName)
-{
-  for (int i = 0; i < _signalIndex; i++)
-  {
-    if (_signalNameEquals(Signals[i], signalName))
-    {
-      Signals[i].Updated = true;
-      break;
-    }
-  }
-}
-
-void Blaeck::markAllSignalsUpdated()
-{
-  for (int i = 0; i < _signalIndex; i++)
-  {
-    Signals[i].Updated = true;
-  }
-}
-
-void Blaeck::clearAllUpdateFlags()
-{
-  for (int i = 0; i < _signalIndex; i++)
-  {
-    Signals[i].Updated = false;
-  }
-}
-
-bool Blaeck::hasUpdatedSignals()
-{
-  for (int i = 0; i < _signalIndex; i++)
-  {
-    if (Signals[i].Updated)
-    {
-      return true;
-    }
-  }
-  return false;
-}
 
 void Blaeck::setTimestampMode(BlaeckTimestampMode mode)
 {

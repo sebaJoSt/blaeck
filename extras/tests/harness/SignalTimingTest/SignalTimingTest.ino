@@ -15,19 +15,17 @@
       once at boot, since setTimestampCallback(nullptr) re-arms it at any time;
     - write()'s per-call timestamp override, which should land in the row exactly as
       given, independent of whatever mode is otherwise active;
-    - forceUpdate(), which the source has no dedup logic backing at all - every write()
-      and every periodic tick reaches the wire whether the value moved or not, so a
+    - forceUpdate(), which is host metadata, not a device reporting policy - every write()
+      and every default periodic tick reaches the wire whether the value moved or not, so a
       forced and an unforced signal holding the same frozen value should log identically.
 
     A rapid burst of write() calls (faster than the periodic interval) checks the fourth
     thing incidentally: whether out-of-cadence rows survive back-to-back, in order, with
     none dropped.
 
-    A fifth thing, added afterwards: update() + writeUpdatedData() is a separate path from
-    write() and from tick()'s own periodic sends (tick() always sends every signal, dirty
-    or not - onlyUpdated is never true there in this sketch). update() only flips a signal's
-    dirty flag; nothing reaches the wire until writeUpdatedData() is called, and that call
-    should carry only the signals marked dirty since the last flush - not a full row.
+    A fifth thing: Changed opts out of intervals and uses writeOnChange(). Fire_change
+    assigns its next value; tick() should report it once as a partial row. Fire_same
+    explicitly writes the same value, proving that write() bypasses change filtering.
 
   drive_signal_timing.py fires the commands and reads the rows back with psycopg2 - lgbk's
   own TimescaleDB connection, not the MQTT/HA path, since the question here is what got
@@ -64,8 +62,7 @@ long ExplicitTS = 0;            // changed only by Fire_explicit_ts, always with
 long Burst = 0;                 // changed only by Fire_burst, five times back-to-back.
 float FrozenForced = 42.0f;     // forceUpdate() on, value never changes.
 float FrozenPlain = 42.0f;      // forceUpdate() off, same frozen value, for comparison.
-long Marked = 0;                 // changed only by Fire_mark via update() - stays dirty,
-                                  // off the wire, until Fire_flush calls writeUpdatedData().
+long Changed = 0;              // immediate change reporting only, no interval participation.
 
 // ---- TimestampMode select state -----------------------------------------------------------
 // Index into "PC,MICROS,UNIX_calibrated,UNIX_no_callback", mirrored back as this select's
@@ -178,21 +175,20 @@ void onFireBurst(const char *command, const char *const *params, byte paramCount
   Serial.println(command);
 }
 
-void onFireMark(const char *command, const char *const *params, byte paramCount)
+void onFireChange(const char *command, const char *const *params, byte paramCount)
 {
   (void)params;
   (void)paramCount;
-  Marked++;
-  device.update("Marked", Marked); // dirty flag only - no wire write happens here.
+  Changed++;
   Serial.print(F("CMD "));
   Serial.println(command);
 }
 
-void onFireFlush(const char *command, const char *const *params, byte paramCount)
+void onFireSame(const char *command, const char *const *params, byte paramCount)
 {
   (void)params;
   (void)paramCount;
-  device.writeUpdatedData(); // sends only signals dirtied since the last flush.
+  device.write("Changed", Changed);
   Serial.print(F("CMD "));
   Serial.println(command);
 }
@@ -219,7 +215,7 @@ void setup()
   device.addSignal(F("Burst"), &Burst);
   device.addSignal(F("FrozenForced"), &FrozenForced).forceUpdate();
   device.addSignal(F("FrozenPlain"), &FrozenPlain);
-  device.addSignal(F("Marked"), &Marked);
+  device.addSignal(F("Changed"), &Changed).writeAtInterval(BLAECK_OFF).writeOnChange(0);
 
   device.onSelectCommand("TimestampMode", onTimestampMode)
       .withOptions(F("PC,MICROS,UNIX_calibrated,UNIX_no_callback"))
@@ -228,8 +224,8 @@ void setup()
   device.onButtonCommand("Fire_push", onFirePush);
   device.onButtonCommand("Fire_explicit_ts", onFireExplicitTs);
   device.onButtonCommand("Fire_burst", onFireBurst);
-  device.onButtonCommand("Fire_mark", onFireMark);
-  device.onButtonCommand("Fire_flush", onFireFlush);
+  device.onButtonCommand("Fire_change", onFireChange);
+  device.onButtonCommand("Fire_same", onFireSame);
 
   PrintWidths();
   Serial.println(F("---- SignalTimingTest: 8 signals, 7 commands declared ----"));

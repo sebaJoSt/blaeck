@@ -265,6 +265,29 @@ struct SignalMeta
 };
 #endif
 
+enum BlaeckIntervalMode : uint8_t
+{
+  BLAECK_OFF,
+  BLAECK_ALWAYS,
+  BLAECK_ON_CHANGE
+};
+
+struct SignalReporting
+{
+  byte value[sizeof(double) > sizeof(unsigned long) ? sizeof(double) : sizeof(unsigned long)] = {};
+  double intervalDelta = 0;
+  double changeDelta = 0;
+  uint32_t minIntervalMs = 100;
+  uint32_t lastWriteMs = 0;
+  bool immediate = false;
+  bool valid = false;
+  bool memoryError = false;
+  char *text = nullptr;
+  uint16_t textCapacity = 0;
+  byte textLength = 0;
+  ~SignalReporting() { delete[] text; }
+};
+
 struct Signal
 {
   // A heap copy, or a flash pointer when NameInFlash. Read it only through the _signalName*
@@ -274,12 +297,14 @@ struct Signal
   void *Address;
   // Bit-fields to keep the entry small. C++11 allows no initializer on them, so they are set
   // when the signal is registered.
-  uint8_t Updated : 1;
+  uint8_t IntervalMode : 2;
+  uint8_t Selected : 1;
   uint8_t NameInFlash : 1;
   // Set when NameSuffix is in use, so a suffix of 0 still counts.
   uint8_t HasSuffix : 1;
   // Appended to the name as decimal digits, e.g. Sine_ + 3 gives Sine_3.
   uint8_t NameSuffix;
+  SignalReporting *Reporting = nullptr;
 #if BLAECK_ENABLE_SIGNAL_META
   // Null until the sketch describes the signal. Owned by the entry.
   SignalMeta *Meta = nullptr;
@@ -1595,8 +1620,8 @@ public:
 //       .diagnostic();
 //
 // Numeric, text and bool signals each get their own handle, so a modifier that makes no sense
-// for the type (a unit on a bool, say) fails to compile. A handle for a signal that didn't fit,
-// or with BLAECK_ENABLE_SIGNAL_META=0, ignores every call.
+// for the type (a unit on a bool, say) fails to compile. A rejected handle ignores every call.
+// Reporting policies remain available when signal metadata is off.
 class BlaeckSignalRefBase
 {
 protected:
@@ -1616,6 +1641,8 @@ protected:
   void _setDisplayPrecision(uint8_t decimals);
 
   void _setNameSuffix(uint8_t suffix);
+  void _setInterval(BlaeckIntervalMode mode, double delta);
+  void _setOnChange(double delta, uint32_t minIntervalMs);
 
   Blaeck *_owner;
   int16_t _index;
@@ -1626,6 +1653,55 @@ template <class TYPE>
 class BlaeckSignalRefShared : public BlaeckSignalRefBase
 {
 public:
+  /*!
+    @brief   Selects how this signal participates in host-interval reports.
+
+    BLAECK_ALWAYS is the default. BLAECK_ON_CHANGE compares against the last sent
+    value when the interval is due. BLAECK_OFF excludes this signal from interval
+    reports. This replaces the interval policy, independently of writeOnChange().
+    Explicit writes bypass both policies and update their shared baseline.
+
+    @param   mode   BLAECK_ALWAYS, BLAECK_ON_CHANGE or BLAECK_OFF.
+    @param   delta  Nonnegative finite numeric threshold; zero means any difference.
+                    Ignored for boolean and text signals.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addSignal(F("Temperature"), &Temperature)
+          .writeAtInterval(BLAECK_ON_CHANGE, 0.1);
+    @endcode
+  */
+  TYPE &writeAtInterval(BlaeckIntervalMode mode, double delta = 0)
+  {
+    _setInterval(mode, delta);
+    return _self();
+  }
+
+  /*!
+    @brief   Enables prompt reporting of changes, independently of host activation.
+
+    Checked by tick() or writeIfDue(). Interval reporting remains separately
+    configured by writeAtInterval(), and defaults to BLAECK_ALWAYS. The first
+    value bypasses the rate limit. Later changes compare against the last value
+    sent by any data write. Intermediate values are not queued.
+
+    @param   delta          Nonnegative finite numeric threshold; ignored for
+                            boolean and text signals, where callers use zero.
+    @param   minIntervalMs  Minimum time since the last data write for this signal,
+                            in milliseconds. Defaults to 100; zero removes the limit.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addSignal(F("Pulse"), &Pulse)
+          .writeAtInterval(BLAECK_OFF).writeOnChange(0);
+    @endcode
+  */
+  TYPE &writeOnChange(double delta, uint32_t minIntervalMs = 100)
+  {
+    _setOnChange(delta, minIntervalMs);
+    return _self();
+  }
+
   /*!
     @brief   Adds a number to the end of the signal's name.
 
@@ -2747,8 +2823,7 @@ public:
     @note    Read it only. Assigning to it breaks the count.
 
     @code
-      for (int i = 0; i < device.SignalCount; i++)
-        device.markSignalUpdated(i);
+      Serial.println(device.SignalCount);
     @endcode
   */
   int SignalCount;
@@ -3169,95 +3244,6 @@ public:
   void write(int signalIndex, double value, unsigned long long timestamp);
   void write(int signalIndex, const char *value, unsigned long long timestamp);
 
-  // ----- Data Update -----
-
-  /*!
-    @brief   Sets a signal's value and marks it changed, without sending it.
-
-    writeUpdatedData() and tickUpdated() then send only the changed signals. Use
-    write() to send at once.
-
-    @param   signalName  The signal's name.
-    @param   value       The new value.
-
-    @code
-      device.update("Temperature", readSensor());
-      device.tickUpdated();
-    @endcode
-  */
-  void update(const char *signalName, bool value);
-  void update(const char *signalName, byte value);
-  void update(const char *signalName, short value);
-  void update(const char *signalName, unsigned short value);
-  void update(const char *signalName, int value);
-  void update(const char *signalName, unsigned int value);
-  void update(const char *signalName, long value);
-  void update(const char *signalName, unsigned long value);
-  void update(const char *signalName, float value);
-  void update(const char *signalName, double value);
-  // The text isn't copied: the signal points at the buffer, which has to stay valid until
-  // it is sent.
-  void update(const char *signalName, const char *value);
-
-  // The same, by index.
-  void update(int signalIndex, bool value);
-  void update(int signalIndex, byte value);
-  void update(int signalIndex, short value);
-  void update(int signalIndex, unsigned short value);
-  void update(int signalIndex, int value);
-  void update(int signalIndex, unsigned int value);
-  void update(int signalIndex, long value);
-  void update(int signalIndex, unsigned long value);
-  void update(int signalIndex, float value);
-  void update(int signalIndex, double value);
-  void update(int signalIndex, const char *value);
-
-  // ----- Mark Signals as Updated -----
-
-  /*!
-    @brief   Marks a signal as changed, after the sketch set its variable directly.
-
-    @param   signalIndex  The signal's index, from findSignalIndex().
-
-    @code
-      Temperature = readSensor();
-      device.markSignalUpdated("Temperature");
-    @endcode
-  */
-  void markSignalUpdated(int signalIndex);
-  void markSignalUpdated(const char *signalName);
-
-  /*!
-    @brief   Marks every signal as changed, so the next writeUpdatedData() sends all.
-
-    @code
-      device.markAllSignalsUpdated();
-      device.writeUpdatedData();
-    @endcode
-  */
-  void markAllSignalsUpdated();
-
-  /*!
-    @brief   Clears every changed mark without sending anything.
-
-    @code
-      device.clearAllUpdateFlags();
-    @endcode
-  */
-  void clearAllUpdateFlags();
-
-  /*!
-    @brief   Reports whether any signal is marked as changed.
-
-    @return  True if the next writeUpdatedData() would carry something.
-
-    @code
-      if (device.hasUpdatedSignals())
-        device.writeUpdatedData();
-    @endcode
-  */
-  bool hasUpdatedSignals();
-
   // ----- Data Write All -----
 
   /*!
@@ -3284,90 +3270,39 @@ public:
   void writeAllData(unsigned long long timestamp);
 
   /*!
-    @brief   Sends every signal's value when the interval is due.
+    @brief   Sends signals whose automatic reporting policies are due.
 
-    Call it on every loop() pass; it does nothing until it's time. tick() calls
-    it after read(). The interval is set by the host with BLAECK.ACTIVATE.
+    Interval signals require host activation. Immediate writeOnChange() signals
+    do not. A signal eligible through both paths is included only once. Nothing
+    is sent when no signal qualifies. Call frequently, separately from read() or
+    through tick(). The before-write callback runs only for a due interval.
 
     @code
-      void loop()
-      {
-        Temperature = readSensor();
-        device.timedWriteAllData();
-      }
+      device.read();
+      device.writeIfDue();
     @endcode
   */
-  void timedWriteAllData();
+  void writeIfDue();
 
   /*!
-    @brief   Sends every signal's value when due, with a timestamp from the caller.
+    @brief   Services automatic reporting with a caller-supplied frame timestamp.
 
-    @param   timestamp  In microseconds, in the epoch of the timestamp mode.
-
-    @code
-      device.timedWriteAllData(1723600000000000ULL);
-    @endcode
-  */
-  void timedWriteAllData(unsigned long long timestamp);
-
-  // ----- Data Write Updated -----
-
-  /*!
-    @brief   Sends only the signals marked as changed, and clears the marks.
-
-    Signals are marked by update() and markSignalUpdated(). Useful when values
-    change rarely.
+    @param   timestamp  Microseconds in the selected timestamp mode's epoch.
+                        Scheduling and rate limits still use millis().
 
     @code
-      device.update("Temperature", readSensor());
-      device.writeUpdatedData();
+      device.writeIfDue(1723600000000000ULL);
     @endcode
   */
-  void writeUpdatedData();
-
-  /*!
-    @brief   Sends the changed signals now, with a timestamp from the caller.
-
-    @param   timestamp  In microseconds, in the epoch of the timestamp mode.
-
-    @code
-      device.writeUpdatedData(1723600000000000ULL);
-    @endcode
-  */
-  void writeUpdatedData(unsigned long long timestamp);
-
-  /*!
-    @brief   Sends the changed signals when the interval is due.
-
-    Call it on every loop() pass. tickUpdated() calls it after read().
-
-    @code
-      void loop()
-      {
-        device.timedWriteUpdatedData();
-      }
-    @endcode
-  */
-  void timedWriteUpdatedData();
-
-  /*!
-    @brief   Sends the changed signals when due, with a timestamp from the caller.
-
-    @param   timestamp  In microseconds, in the epoch of the timestamp mode.
-
-    @code
-      device.timedWriteUpdatedData(1723600000000000ULL);
-    @endcode
-  */
-  void timedWriteUpdatedData(unsigned long long timestamp);
+  void writeIfDue(unsigned long long timestamp);
 
   // ----- Tick -----
 
   /*!
-    @brief   Handles incoming commands, then sends every signal if the interval is due.
+    @brief   Handles incoming commands, then services automatic signal reporting.
 
     Most sketches need only this in loop(). It is read() followed by
-    timedWriteAllData().
+    writeIfDue().
 
     @code
       void loop()
@@ -3378,22 +3313,6 @@ public:
     @endcode
   */
   void tick();
-
-  /*!
-    @brief   Handles incoming commands, then sends the changed signals if the interval
-             is due.
-
-    Like tick(), but only signals marked as changed are sent.
-
-    @code
-      void loop()
-      {
-        device.update("Temperature", readSensor());
-        device.tickUpdated();
-      }
-    @endcode
-  */
-  void tickUpdated();
 
   // ----- Timed Data -----
 
@@ -3632,10 +3551,10 @@ public:
   }
 
   /*!
-    @brief   Reports whether anything could not be added, in any table.
+    @brief   Reports rejected declarations and signal-reporting failures.
 
-    @return  True if a signal, command, state channel, event channel or event type
-             was dropped.
+    @return  True if a declaration was dropped, a reporting policy was rejected,
+             or a change-tracking snapshot could not be allocated.
 
     @code
       if (device.hasRejections())
@@ -3644,11 +3563,12 @@ public:
   */
   bool hasRejections() const;
   /*!
-    @brief   Prints registration rejection counts and each affected table's capacity.
+    @brief   Prints rejection counts and affected table capacities.
 
     Prints nothing when there were no rejections. A rejection can mean a full table,
     an invalid declaration or insufficient memory; increasing capacity may not help.
-    Enable withDebugStream() before registration for details.
+    Also includes signal-reporting configuration and snapshot allocation failures.
+    Enable withDebugStream() for details when a failure occurs.
 
     @param   out  Where to print. The data port is fine when called from setup().
     @return  True if anything was printed.
@@ -3792,12 +3712,13 @@ public:
   long getSelectOptionIndexOf(const char *command, const char *optionName) const;
 
   /*!
-    @brief   Sets a function to call just before signal data is sent.
+    @brief   Sets a function to refresh values before interval and full snapshots.
 
-    Use it to read sensors right before their values go out. It runs from loop(),
-    not an interrupt.
+    Runs before filtering a due host interval, even if no signals qualify, and before
+    writeAllData(), including host requests. It does not run for single-signal write()
+    or the every-tick writeOnChange() check. It runs from loop(), not an interrupt.
 
-    @param   callback  Called before each data write.
+    @param   callback  The refresh function, or nullptr to remove it.
 
     @code
       device.setBeforeWriteCallback(readAllSensors);
@@ -4101,8 +4022,14 @@ protected:
     }
   }
 
-  void timedWriteData(unsigned long messageID, int signalIndex_start, int signalIndex_end, bool onlyUpdated, unsigned long long timestamp);
-  void tick(unsigned long messageID, bool onlyUpdated);
+  void _setSignalInterval(int16_t index, BlaeckIntervalMode mode, double delta);
+  void _setSignalOnChange(int16_t index, double delta, uint32_t minIntervalMs);
+  SignalReporting *_ensureSignalReporting(int16_t index);
+  void _reportSignalPolicyError(const __FlashStringHelper *message);
+  void _resetReportingBaselines();
+  bool _prepareSignalSnapshot(Signal &signal);
+  void _captureSignalSnapshot(Signal &signal);
+  bool _signalChanged(const Signal &signal, double delta) const;
 
   void writeAllData(unsigned long messageID, unsigned long long timestamp);
 
@@ -4112,8 +4039,8 @@ protected:
   bool _storeUnsigned(int signalIndex, unsigned long value);
   bool _storeFloating(int signalIndex, double value);
 
-  void writeData(unsigned long messageID, int signalIndex_start, int signalIndex_end, bool onlyUpdated, unsigned long long timestamp);
-  void writeDataFrame(unsigned long MessageID, int signalIndex_start, int signalIndex_end, bool onlyUpdated, unsigned long long timestamp);
+  void writeData(unsigned long messageID, int signalIndex_start, int signalIndex_end, bool selectedOnly, unsigned long long timestamp);
+  void writeDataFrame(unsigned long MessageID, int signalIndex_start, int signalIndex_end, bool selectedOnly, unsigned long long timestamp, bool intervalReport = false);
 
   // Forms that echo the message id of the request they answer. Only read() has one.
   void writeRestarted(unsigned long messageID);
@@ -4206,6 +4133,7 @@ protected:
   unsigned int _signalCapacity = 0;
   bool _signalRegistrationFailed = false;
   uint16_t _rejectedSignalCount = 0;
+  uint16_t _rejectedSignalPolicyCount = 0;
 #if BLAECK_ENABLE_SIGNAL_META
   // Signal descriptions that couldn't be stored for lack of heap. Counted apart, because no
   // table size fixes it.
@@ -4221,12 +4149,11 @@ protected:
   // Set while answering BLAECK.WRITE_DATA, so the data frame can say it was requested.
   bool _frameRequested = false;
 
-  // The data frame's flags byte. Bit 0 says this is the first frame after a restart, bit 1 that
-  // the frame answers a request rather than the interval a host set. Bits 2-7 are reserved and
-  // sent clear.
-  byte _frameFlags(bool restarted) const
+  // Bit 0: restart; bit 1: requested; bit 2: interval report. Bits 3-7 stay clear.
+  byte _frameFlags(bool restarted, bool intervalReport) const
   {
-    return (byte)((restarted ? 0x01 : 0x00) | (_frameRequested ? 0x02 : 0x00));
+    return (byte)((restarted ? 0x01 : 0x00) |
+                  (_frameRequested ? 0x02 : (intervalReport ? 0x04 : 0x00)));
   }
 
   // For extending micros() past its rollover in BLAECK_MICROS mode.
@@ -4235,8 +4162,7 @@ protected:
 
   bool _timedActivated = false;
   bool _timedFirstTime = true;
-  unsigned long _timedFirstTimeDone_ms = 0;
-  unsigned long _timedSetPoint_ms = 0;
+  uint32_t _lastIntervalMs = 0;
   unsigned long _timedInterval_ms = 1000;
 
   // ── Table sizes ───────────────────────────────────────────────────
@@ -4422,6 +4348,8 @@ protected:
   // into the buffer, or straight to the stream if buffering is off or the buffer couldn't be
   // allocated.
   bool _frameDirect = false;
+  bool _frameWriteFailed = false;
+  bool _shortWriteReported = false;
   // On while a data frame's CRC is being computed.
   bool _frameCrcOn = false;
 
@@ -4429,7 +4357,7 @@ protected:
   // While _replying, every frame goes to the requester whatever audience is passed.
   bool _frameOpen(byte msgKey, unsigned long msgId, bool withCrc = false,
                   Audience audience = AUDIENCE_ALL);
-  // Ends the frame. False if a buffered frame overflowed and was dropped.
+  // False if buffering failed or the transport did not accept every byte.
   bool _frameClose();
   uint32_t _frameCrcEnd()
   {
@@ -4499,7 +4427,7 @@ protected:
       return false;
     }
     _sendBuffered();
-    return true;
+    return !_frameWriteFailed;
   }
   void _emitDevice(const char *name, const char *hw, const char *fw);
 
@@ -4961,6 +4889,18 @@ inline void BlaeckCommandRefBase::_setOwnState(const __FlashStringHelper *channe
   (void)channelName;
   (void)getStateText;
 #endif
+}
+
+inline void BlaeckSignalRefBase::_setInterval(BlaeckIntervalMode mode, double delta)
+{
+  if (_owner != nullptr)
+    _owner->_setSignalInterval(_index, mode, delta);
+}
+
+inline void BlaeckSignalRefBase::_setOnChange(double delta, uint32_t minIntervalMs)
+{
+  if (_owner != nullptr)
+    _owner->_setSignalOnChange(_index, delta, minIntervalMs);
 }
 
 inline void BlaeckSignalRefBase::_setFlash(const __FlashStringHelper *value, uint16_t bit)

@@ -16,8 +16,8 @@ Eight things get checked, each against real rows rather than an assumption about
     explicit_ts write()'s per-call timestamp override lands exactly as given, independent
                 of whatever TimestampMode happens to be active
     burst       five rapid write() calls back-to-back all survive, in order, none dropped
-    mark_flush  update() alone reaches no row at all - the value only appears out-of-cycle
-                once writeUpdatedData() is called, and that row is partial too
+    on_change   assigning Changed produces one automatic partial row, not repeated
+                unchanged rows; explicit write() still sends the same value
     micros      BLAECK_MICROS rows drift smoothly against wall-clock time (device and
                 host oscillators disagree by a small constant rate) rather than jittering
                 independently the way PC-mode arrival stamps do - the one signature that
@@ -126,7 +126,7 @@ class HomeAssistant:
 
 # ---- TimescaleDB read layer ----------------------------------------------------------------
 COLUMNS = ["ID", "TimeStampUTC", "Uptime", "Periodic", "Pushed", "ExplicitTS", "Burst",
-           "FrozenForced", "FrozenPlain", "Marked"]
+           "FrozenForced", "FrozenPlain", "Changed"]
 
 
 class Db:
@@ -183,7 +183,7 @@ def only_non_null(row, *expected_signals):
 def is_partial_write_row(row):
     """Uptime is set by loop() on every periodic tick and touched by no command handler -
     it is present in every full periodic row and absent from every out-of-cycle single-signal
-    write() or writeUpdatedData() call. That makes it a reliable way to tell the two apart
+    write() or writeOnChange() report. That makes it a reliable way to tell the two apart
     among a mix of new rows, rather than assuming a write's own row is the first new one -
     it usually is not, once MQTT round-trip latency is accounted for."""
     return row["Uptime"] is None
@@ -224,10 +224,10 @@ mode_select = ha.resolve("select", "timestampmode")
 push_button = ha.resolve("button", "fire_push")
 ts_button = ha.resolve("button", "fire_explicit_ts")
 burst_button = ha.resolve("button", "fire_burst")
-mark_button = ha.resolve("button", "fire_mark")
-flush_button = ha.resolve("button", "fire_flush")
+change_button = ha.resolve("button", "fire_change")
+same_button = ha.resolve("button", "fire_same")
 
-if not all([mode_select, push_button, ts_button, burst_button, mark_button, flush_button]):
+if not all([mode_select, push_button, ts_button, burst_button, change_button, same_button]):
     print("cannot run: not every entity was found - is lgbk bridging this device right now?")
     raise SystemExit(1)
 
@@ -276,23 +276,21 @@ ok = (len(bursts) == 5 and bursts == sorted(bursts)
       and all(only_non_null(r, "Burst") for r in burst_rows))
 check("burst: five rapid writes survive, in order, none dropped", ok, f"Burst values: {bursts}")
 
-# ---- mark_flush: update() alone writes nothing; writeUpdatedData() writes a partial row ----
-# The wait before checking must comfortably exceed MQTT round-trip latency (HA -> broker ->
-# lgbk -> serial -> device), not just the 1s periodic tick - firing flush too soon risks it
-# reaching the device before mark's update() actually executed there, which would make
-# writeUpdatedData() send nothing at all (nothing is dirty yet), a different failure than
-# the one this check means to catch.
+# ---- on_change: one automatic row, then an explicit equal-value write ---------------------
 last_id = db.max_id()
-ha.press(mark_button)
+ha.press(change_button)
+changed, _ = wait_for_row(db, last_id, lambda r: is_partial_write_row(r) and r["Changed"] is not None)
 time.sleep(3.0)
-rows_after_mark = db.rows_after(last_id)
-immediate_partial = [r for r in rows_after_mark if is_partial_write_row(r)]
+change_rows = [r for r in db.rows_after(last_id)
+               if is_partial_write_row(r) and r["Changed"] is not None]
 last_id = db.max_id()
-ha.press(flush_button)
-flushed, _ = wait_for_row(db, last_id, lambda r: is_partial_write_row(r) and r["Marked"] is not None)
-ok = len(immediate_partial) == 0 and flushed is not None and only_non_null(flushed, "Marked")
-check("mark_flush: update() writes nothing immediately, writeUpdatedData() writes a partial row",
-      ok, f"immediate partial rows after mark: {len(immediate_partial)}, flush row: {flushed}")
+ha.press(same_button)
+same, _ = wait_for_row(db, last_id, lambda r: is_partial_write_row(r) and r["Changed"] is not None)
+ok = (len(change_rows) == 1 and changed is not None and same is not None
+      and only_non_null(changed, "Changed") and only_non_null(same, "Changed")
+      and changed["Changed"] == same["Changed"])
+check("on_change: one automatic partial row; explicit equal-value write still sends",
+      ok, f"automatic rows: {len(change_rows)}, changed: {changed}, explicit: {same}")
 
 # ---- micros: rows drift smoothly against wall-clock time, unlike PC's independent jitter ---
 ha.select(mode_select, "MICROS")

@@ -34,6 +34,10 @@ Version 7.0.0 is in development; setting its metadata does not publish a release
   `python extras/scripts/syncnetwork.py`.
 - Keep only the default MAC address in committed examples. Never commit WiFi credentials.
 - No builds, flashing, commits, pushes or publishing without user authorization.
-- Current unified-public-class revision has source checks only; previous prototype
-  compile/runtime results are not evidence for this revision.
+- Reporting uses per-signal writeAtInterval(BLAECK_ALWAYS/ON_CHANGE/OFF) and independent
+  writeOnChange(delta, minIntervalMs). Both share one last-sent baseline. tick() is
+  read() plus writeIfDue(); do not restore update flags or timed-write API variants.
+- Native reporting/transport tests and representative Mega Serial/GIGA TCP builds have
+  passed. SignalReportingTest also passed direct/buffered Serial checks on a physical
+  Optiboot Mega. This is not evidence of Loggbok integration or hardware TCP validation.
 - Do not modify the existing BlaeckSerial or BlaeckTCP repositories for this library.

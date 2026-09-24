@@ -5,6 +5,11 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <limits>
+
+#ifndef BLAECK_TEST_REPORTING_ONLY
+#define BLAECK_TEST_REPORTING_ONLY 0
+#endif
 
 static_assert(!std::is_polymorphic<Blaeck>::value, "Blaeck needs no virtual transport hooks");
 static_assert(!std::is_copy_constructible<Blaeck>::value, "Blaeck owns its allocations");
@@ -41,6 +46,7 @@ struct SocketState
   unsigned int stops = 0;
   std::string input;
   std::string output;
+  size_t writeLimit = SIZE_MAX;
 };
 
 class FakeClient : public Client
@@ -73,8 +79,9 @@ public:
   size_t write(const uint8_t *data, size_t size) override
   {
     assert(connected());
-    state->output.append(reinterpret_cast<const char *>(data), size);
-    return size;
+    const size_t accepted = size < state->writeLimit ? size : state->writeLimit;
+    state->output.append(reinterpret_cast<const char *>(data), accepted);
+    return accepted;
   }
   void setNoDelay(bool enabled) { if (state) state->noDelay = enabled; }
   const char *remoteIP() { return "192.0.2.1"; }
@@ -495,14 +502,690 @@ static void crc32Behavior()
   assert(crc.calc() == 0xCBF43926UL);
 }
 
+struct DataFrame
+{
+  std::vector<int> ids;
+  std::vector<std::string> values;
+  uint64_t timestamp = 0;
+  byte mode = 0;
+  byte flags = 0;
+};
+
+static std::vector<DataFrame> takeData(std::string &output, const std::vector<int> &widths)
+{
+  std::vector<DataFrame> result;
+  const std::string marker = std::string("<BLAECK:") + char(0xD2) + ':';
+  size_t start = 0;
+  while ((start = output.find(marker, start)) != std::string::npos)
+  {
+    const size_t end = output.find("/BLAECK>\r\n", start);
+    assert(end != std::string::npos && end >= start + 31);
+    size_t p = start + marker.size() + 4;
+    assert(output[p++] == ':');
+    DataFrame frame;
+    frame.flags = static_cast<byte>(output[p++]);
+    assert(output[p++] == ':');
+    p += 2; // schema hash
+    assert(output[p++] == ':');
+    frame.mode = static_cast<byte>(output[p++]);
+    if (frame.mode != BLAECK_NO_TIMESTAMP)
+    {
+      memcpy(&frame.timestamp, output.data() + p, 8);
+      p += 8;
+    }
+    assert(output[p++] == ':');
+    while (p < end - 9)
+    {
+      uint16_t id;
+      memcpy(&id, output.data() + p, 2);
+      p += 2;
+      assert(id < widths.size());
+      const size_t size = widths[id] < 0 ? static_cast<byte>(output[p++]) : widths[id];
+      assert(p + size <= end - 9);
+      frame.ids.push_back(id);
+      frame.values.push_back(output.substr(p, size));
+      p += size;
+    }
+    assert(p == end - 9);
+    uint32_t actual;
+    memcpy(&actual, output.data() + end - 4, 4);
+    blaeck::detail::BlaeckCRC32 crc;
+    crc.add(reinterpret_cast<const byte *>(output.data() + start + 8), end - 4 - start - 8);
+    assert(crc.calc() == actual);
+    result.push_back(frame);
+    start = end + 10;
+  }
+  output.clear();
+  return result;
+}
+
+static void expectData(FakeStream &stream, const std::vector<int> &widths, const std::vector<int> &ids)
+{
+  const auto frames = takeData(stream.data.output, widths);
+  if (ids.empty())
+    assert(frames.empty());
+  else
+    assert(frames.size() == 1 && frames[0].ids == ids);
+}
+
+static void command(Blaeck &device, FakeStream &stream, const char *text)
+{
+  stream.data.input = text;
+  device.read();
+}
+
+static void reportingPolicies(bool buffered)
+{
+  hostMillis() = 0;
+  FakeStream stream;
+  Blaeck device;
+  device.begin(stream).withSignals(4);
+  device.setBufferedWrites(buffered);
+  float periodic = 0, filtered = 20, change = 20, combined = 20;
+  device.addSignal(F("Periodic"), &periodic);
+  device.addSignal(F("Filtered"), &filtered).writeAtInterval(BLAECK_ON_CHANGE, 0.5);
+  device.addSignal(F("Change"), &change).writeAtInterval(BLAECK_OFF).writeOnChange(1);
+  device.addSignal(F("Combined"), &combined).writeOnChange(1);
+  const std::vector<int> widths(4, 4);
+  device.tick();
+  expectData(stream, widths, {2, 3}); // no activation; first values bypass rate limit
+  device.tick();
+  expectData(stream, widths, {});
+  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  device.writeIfDue();
+  expectData(stream, widths, {0, 1, 3});
+  hostMillis() = 99;
+  change = combined = 21;
+  device.writeIfDue();
+  expectData(stream, widths, {});
+  hostMillis() = 100;
+  device.writeIfDue();
+  expectData(stream, widths, {2, 3});
+  filtered = 20.25f;
+  hostMillis() = 1000;
+  device.writeIfDue();
+  expectData(stream, widths, {0, 3});
+  filtered = 20.5f; // accumulated drift and exact threshold equality
+  change = combined = 22;
+  hostMillis() = 2000;
+  device.writeIfDue();
+  expectData(stream, widths, {0, 1, 2, 3}); // one frame, no duplicate combined signal
+  filtered = 22;
+  filtered = 20.5f; // excursion between snapshots is not remembered
+  command(device, stream, "<BLAECK.DEACTIVATE>");
+  change = 23;
+  hostMillis() = 2100;
+  device.writeIfDue();
+  expectData(stream, widths, {2});
+  command(device, stream, "<BLAECK.PAUSE_WRITES,FOREVER>");
+  stream.data.output.clear();
+  change = 24;
+  hostMillis() = 4000;
+  device.tick();
+  expectData(stream, widths, {});
+  command(device, stream, "<BLAECK.RESUME_WRITES>");
+  device.writeIfDue();
+  expectData(stream, widths, {2});
+  command(device, stream, "<BLAECK.WRITE_DATA>");
+  expectData(stream, widths, {0, 1, 2, 3});
+  change = 25;
+  hostMillis() = 4099;
+  device.writeIfDue();
+  expectData(stream, widths, {});
+  hostMillis() = 4100;
+  device.writeIfDue();
+  expectData(stream, widths, {2});
+}
+
+static void sharedBaselineAndClock()
+{
+  hostMillis() = 0;
+  FakeStream stream;
+  Blaeck device;
+  device.begin(stream);
+  float value = 10;
+  device.addSignal(F("V"), &value).writeAtInterval(BLAECK_ON_CHANGE, 0.5).writeOnChange(1);
+  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+  value = 10.5f;
+  hostMillis() = 999;
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  hostMillis() = 1000;
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+  hostMillis() = 1950;
+  device.write("V", 20.0f);
+  expectData(stream, {4}, {0});
+  value = 20.5f;
+  hostMillis() = 2000;
+  device.writeIfDue();
+  expectData(stream, {4}, {0}); // direct write did not shift host cadence
+  value = 21.5f;
+  hostMillis() = 2099;
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  hostMillis() = 2100;
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+  hostMillis() = 3000;
+  device.writeIfDue();
+  expectData(stream, {4}, {}); // immediate report is also the interval baseline
+
+  // Millisecond subtraction crosses rollover; ordinary interval cadence does too.
+  hostMillis() = UINT32_MAX - 50;
+  device.write("V", 30.0f);
+  expectData(stream, {4}, {0});
+  command(device, stream, "<BLAECK.ACTIVATE,100>");
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  value = 32;
+  hostMillis() = 48;
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  hostMillis() = 49;
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+}
+
+static void reportingTypesAndFailures(bool buffered)
+{
+  hostMillis() = 0;
+  FakeStream stream;
+  Capture debug;
+  Blaeck device;
+  device.begin(stream).withSignals(5).withDebugStream(&debug);
+  device.setBufferedWrites(buffered);
+  char text[300] = "";
+  bool flag = false;
+  float floating = 0;
+  long signedValue = INT32_MIN;
+  unsigned long unsignedValue = UINT32_MAX;
+  device.addSignal(F("Text"), text).writeAtInterval(BLAECK_OFF).writeOnChange(999, 0);
+  device.addSignal(F("Flag"), &flag).writeAtInterval(BLAECK_OFF).writeOnChange(999, 0);
+  auto number = device.addSignal(F("Float"), &floating);
+  number.writeAtInterval(BLAECK_OFF).writeOnChange(0, 0);
+  device.addSignal(F("Signed"), &signedValue).writeAtInterval(BLAECK_OFF).writeOnChange(1, 0);
+  device.addSignal(F("Unsigned"), &unsignedValue).writeAtInterval(BLAECK_OFF).writeOnChange(1, 0);
+  const std::vector<int> widths{-1, 1, 4, 4, 4};
+  device.writeIfDue();
+  expectData(stream, widths, {0, 1, 2, 3, 4});
+  device.writeIfDue();
+  expectData(stream, widths, {});
+  strcpy(text, "running");
+  flag = true;
+  signedValue = INT32_MAX;
+  --unsignedValue;
+  device.writeIfDue();
+  expectData(stream, widths, {0, 1, 3, 4});
+  floating = NAN;
+  device.writeIfDue();
+  expectData(stream, widths, {2});
+  device.writeIfDue();
+  expectData(stream, widths, {});
+  floating = INFINITY;
+  device.writeIfDue();
+  expectData(stream, widths, {2});
+  device.writeIfDue();
+  expectData(stream, widths, {});
+  floating = -INFINITY;
+  device.writeIfDue();
+  expectData(stream, widths, {2});
+  floating = 0;
+  device.writeIfDue();
+  expectData(stream, widths, {2});
+  number.writeOnChange(-1);
+  number.writeAtInterval(BLAECK_ON_CHANGE, NAN);
+  assert(device.hasRejections());
+  assert(debug.text.find("previous policy retained") != std::string::npos);
+  floating = 1;
+  device.writeIfDue();
+  expectData(stream, widths, {2});
+
+  memset(text, 'a', 299);
+  text[299] = '\0';
+  device.writeIfDue();
+  const auto frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && frames[0].values[0].size() == 255);
+  text[280] = 'b';
+  device.writeIfDue();
+  expectData(stream, widths, {}); // only transmitted text is compared
+  text[254] = 'b';
+  device.writeIfDue();
+  expectData(stream, widths, {0});
+
+  floating = 2;
+  stream.data.writeLimit = 0;
+  device.writeIfDue();
+  assert(debug.text.find("Incomplete transport write") != std::string::npos);
+  stream.data.writeLimit = SIZE_MAX;
+  device.writeIfDue();
+  expectData(stream, widths, {2}); // failed frame must not suppress retry
+  device.clearAllSignals();
+  assert(!device.hasRejections());
+  device.addSignal(F("Reused"), &floating).writeAtInterval(BLAECK_OFF).writeOnChange(0);
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+}
+
+static unsigned int beforeWriteCalls = 0;
+static float callbackValue = 0;
+static void sampleBeforeWrite() { ++beforeWriteCalls; callbackValue += 1; }
+static unsigned long long fakeUnix() { return 1893456000000000ULL; }
+static void writeDuringRefresh()
+{
+  hostMillis() = 1050;
+  callbackDevice->write("V", 10.0f);
+  callbackValue = 11;
+}
+
+static void reportingCallbacksAndTimestamps()
+{
+  hostMillis() = 0;
+  FakeStream stream;
+  Blaeck device;
+  device.begin(stream);
+  callbackValue = 0;
+  beforeWriteCalls = 0;
+  device.addSignal(F("Value"), &callbackValue)
+      .writeAtInterval(BLAECK_ON_CHANGE, 10).writeOnChange(1, 0);
+  device.setBeforeWriteCallback(sampleBeforeWrite);
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+  assert(beforeWriteCalls == 0);
+  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  device.writeIfDue();
+  expectData(stream, {4}, {0}); // callback produced a qualifying immediate change
+  assert(beforeWriteCalls == 1);
+  hostMillis() = 1;
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  assert(beforeWriteCalls == 1);
+  device.write("Value", 5.0f);
+  expectData(stream, {4}, {0});
+  assert(beforeWriteCalls == 1);
+  device.writeAllData();
+  expectData(stream, {4}, {0});
+  assert(beforeWriteCalls == 2);
+  device.setBeforeWriteCallback(nullptr);
+  device.setTimestampMode(BLAECK_MICROS);
+  hostMicros() = UINT32_MAX - 5;
+  device.writeIfDue(); // quiet polls must still extend the clock
+  expectData(stream, {4}, {});
+  hostMicros() = 10;
+  device.writeIfDue();
+  callbackValue += 1;
+  device.writeIfDue();
+  auto frames = takeData(stream.data.output, {4});
+  assert(frames.size() == 1 && frames[0].timestamp == (1ULL << 32) + 10);
+  device.setTimestampCallback(fakeUnix);
+  device.setTimestampMode(BLAECK_UNIX);
+  callbackValue += 1;
+  device.writeIfDue();
+  frames = takeData(stream.data.output, {4});
+  assert(frames.size() == 1 && frames[0].timestamp == fakeUnix());
+  callbackValue += 1;
+  device.writeIfDue(123456789ULL);
+  frames = takeData(stream.data.output, {4});
+  assert(frames.size() == 1 && frames[0].timestamp == 123456789ULL);
+  device.setTimestampMode(BLAECK_NO_TIMESTAMP);
+  callbackValue += 1;
+  device.writeIfDue();
+  frames = takeData(stream.data.output, {4});
+  assert(frames.size() == 1 && frames[0].mode == 0);
+  hostMillis() = hostMicros() = 0;
+}
+
+static void reportingAllocationAndReconnect()
+{
+  hostMillis() = 0;
+  FakeStream stream;
+  Capture debug;
+  Blaeck device;
+  device.begin(stream).withDebugStream(&debug);
+  float value = 0;
+  auto handle = device.addSignal(F("Value"), &value);
+  failAfter = 0;
+  handle.writeOnChange(0);
+  failAfter = -1;
+  assert(device.hasRejections() && debug.text.find("No RAM") != std::string::npos);
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  handle.writeAtInterval(BLAECK_OFF).writeOnChange(0);
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+  device.clearAllSignals();
+  char text[32] = "";
+  device.addSignal(F("Text"), text).writeAtInterval(BLAECK_OFF).writeOnChange(0, 0);
+  failAfter = 0;
+  device.writeIfDue();
+  failAfter = -1;
+  expectData(stream, {-1}, {});
+  assert(device.hasRejections());
+  device.writeIfDue();
+  expectData(stream, {-1}, {0});
+  strcpy(text, "longer");
+  failAfter = 0;
+  device.writeIfDue();
+  failAfter = -1;
+  expectData(stream, {-1}, {});
+  device.writeIfDue();
+  expectData(stream, {-1}, {0});
+  FakeServer<> server;
+  SocketState first, replacement;
+  Blaeck tcp;
+  tcp.begin(server).withClients(1);
+  tcp.addSignal(F("V"), &value).writeAtInterval(BLAECK_OFF).writeOnChange(0);
+  tcp.tick(); // no host: do not consume initial value
+  server.pending.push_back(&first);
+  first.input = "<BLAECK.GET_DEVICES>";
+  tcp.tick();
+  auto frames = takeData(first.output, {4});
+  assert(frames.size() == 1);
+  first.open = false;
+  tcp.read();
+  server.pending.push_back(&replacement);
+  replacement.input = "<BLAECK.GET_DEVICES>";
+  tcp.tick();
+  frames = takeData(replacement.output, {4});
+  assert(frames.size() == 1); // reconnect receives unchanged initial value
+}
+
+static void reportingReconfiguration()
+{
+  hostMillis() = 0;
+  FakeStream stream;
+  Blaeck device;
+  device.begin(stream);
+  float value = 0;
+  auto signal = device.addSignal(F("V"), &value);
+  signal.writeAtInterval(BLAECK_ON_CHANGE);
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  command(device, stream, "<BLAECK.ACTIVATE,0>");
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  signal.writeAtInterval(BLAECK_ALWAYS);
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+  device.writeIfDue(); // ACTIVATE,0 still means every pass, not disabled
+  expectData(stream, {4}, {0});
+  signal.writeAtInterval(BLAECK_OFF);
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  signal.writeOnChange(0, 0).writeAtInterval(BLAECK_ON_CHANGE);
+  device.writeIfDue();
+  expectData(stream, {4}, {0}); // re-enabling tracking starts a new baseline
+  signal.writeAtInterval(BLAECK_OFF);
+  value = 1;
+  device.writeIfDue();
+  expectData(stream, {4}, {0}); // interval OFF does not cancel immediate changes
+  value = 2;
+  device.writeAllData();
+  expectData(stream, {4}, {0});
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  device.clearAllSignals();
+  callbackValue = 0;
+  beforeWriteCalls = 0;
+  device.addSignal(F("Callback"), &callbackValue).writeAtInterval(BLAECK_ON_CHANGE, 10);
+  device.setBeforeWriteCallback(sampleBeforeWrite);
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  assert(beforeWriteCalls == 2); // refresh even when filtering suppresses the frame
+  command(device, stream, "<BLAECK.WRITE_DATA>");
+  auto frames = takeData(stream.data.output, {4});
+  assert(frames.size() == 1 && (frames[0].flags & 2) != 0 && beforeWriteCalls == 3);
+}
+
+template<class T>
+static void reportingIntegerType(int width)
+{
+  FakeStream stream;
+  Blaeck device;
+  device.begin(stream);
+  // Arduino long is 32 bits, including when the host running this suite uses 64-bit long.
+  const T minimum = width == 4 && std::numeric_limits<T>::is_signed
+      ? static_cast<T>(INT32_MIN) : std::numeric_limits<T>::min();
+  const T maximum = width == 4
+      ? static_cast<T>(std::numeric_limits<T>::is_signed ? INT32_MAX : UINT32_MAX)
+      : std::numeric_limits<T>::max();
+  T value = minimum;
+  auto signal = device.addSignal(F("V"), &value);
+  signal.writeAtInterval(BLAECK_OFF).writeOnChange(1.5, 0);
+  device.writeIfDue();
+  expectData(stream, {width}, {0});
+  ++value;
+  device.writeIfDue();
+  expectData(stream, {width}, {});
+  ++value;
+  device.writeIfDue();
+  expectData(stream, {width}, {0}); // fractional thresholds round up for integer distances
+  value = maximum;
+  device.writeIfDue();
+  const auto frames = takeData(stream.data.output, {width});
+  assert(frames.size() == 1);
+  assert(memcmp(frames[0].values[0].data(), &value, width) == 0);
+  signal.writeOnChange(ldexp(1.0, sizeof(unsigned long) * CHAR_BIT), 0);
+  value = minimum;
+  device.writeIfDue();
+  expectData(stream, {width}, {});
+}
+
+template<class T>
+static void reportingFloatingType()
+{
+  FakeStream stream;
+  Blaeck device;
+  device.begin(stream);
+  T value = 0;
+  auto signal = device.addSignal(F("V"), &value);
+  signal.writeAtInterval(BLAECK_OFF).writeOnChange(0, 0);
+  device.writeIfDue();
+  expectData(stream, {sizeof(T)}, {0});
+  value = -static_cast<T>(0.0);
+  device.writeIfDue();
+  expectData(stream, {sizeof(T)}, {0}); // representation change at zero threshold
+  signal.writeOnChange(100, 0);
+  value = 0;
+  device.writeIfDue();
+  expectData(stream, {sizeof(T)}, {});
+  value = std::numeric_limits<T>::denorm_min();
+  device.writeIfDue();
+  expectData(stream, {sizeof(T)}, {0});
+  device.writeIfDue();
+  expectData(stream, {sizeof(T)}, {});
+  value = 1;
+  device.writeIfDue();
+  expectData(stream, {sizeof(T)}, {0}); // transition out of subnormal also qualifies
+  value = 100;
+  device.writeIfDue();
+  expectData(stream, {sizeof(T)}, {});
+  value = 101;
+  device.writeIfDue();
+  expectData(stream, {sizeof(T)}, {0});
+}
+
+static void reportingPartialFrames()
+{
+  for (bool buffered : {false, true})
+  {
+    FakeServer<> server;
+    SocketState socket;
+    Capture debug;
+    Blaeck device;
+    device.begin(server).withDebugStream(&debug);
+    device.setBufferedWrites(buffered);
+    char value[256];
+    memset(value, 'x', 255);
+    value[255] = 0;
+    device.addSignal(F("V"), value).writeAtInterval(BLAECK_OFF).writeOnChange(0);
+    server.pending.push_back(&socket);
+    socket.input = "<BLAECK.GET_DEVICES>";
+    device.read();
+    socket.output.clear();
+    socket.writeLimit = 1;
+    device.writeIfDue();
+    assert(debug.text.find("Incomplete transport write") != std::string::npos);
+    socket.output.clear(); // discard the intentionally incomplete frame
+    socket.writeLimit = SIZE_MAX;
+    device.writeIfDue();
+    auto frames = takeData(socket.output, {-1});
+    assert(frames.size() == 1 && frames[0].values[0] == value);
+    device.writeIfDue();
+    assert(takeData(socket.output, {-1}).empty());
+  }
+
+  FakeStream stream;
+  Capture debug;
+  Blaeck device;
+  device.begin(stream).withDebugStream(&debug);
+  device.setBufferedWrites(true);
+  char value[256];
+  memset(value, 'x', 255);
+  value[255] = 0;
+  device.addSignal(F("V"), value).writeAtInterval(BLAECK_OFF).writeOnChange(0);
+  // Snapshot and initial frame buffer succeed; frame-buffer growth fails.
+  failAfter = 2;
+  device.writeIfDue();
+  failAfter = -1;
+  expectData(stream, {-1}, {});
+  assert(debug.text.find("frame dropped") != std::string::npos);
+  device.writeIfDue();
+  expectData(stream, {-1}, {0});
+}
+
+static void reportingCallbackWriteClock()
+{
+  FakeStream stream;
+  Blaeck device;
+  device.begin(stream);
+  callbackValue = 0;
+  callbackDevice = &device;
+  hostMillis() = 0;
+  device.addSignal(F("V"), &callbackValue).writeAtInterval(BLAECK_OFF).writeOnChange(0);
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+  device.setBeforeWriteCallback(writeDuringRefresh);
+  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  hostMillis() = 1000;
+  device.writeIfDue();
+  expectData(stream, {4}, {0}); // only the explicit write inside the refresh callback
+  hostMillis() = 1149;
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  hostMillis() = 1150;
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+  callbackDevice = nullptr;
+}
+
+static void reportingFrameClassification(bool buffered)
+{
+  hostMillis() = 0;
+  FakeStream stream;
+  Blaeck device;
+  device.begin(stream);
+  device.setBufferedWrites(buffered);
+  float value = 0;
+  auto signal = device.addSignal(F("V"), &value);
+  signal.writeAtInterval(BLAECK_ON_CHANGE, 0.5).writeOnChange(1, 0);
+  const auto expectFlags = [&](byte flags)
+  {
+    const auto frames = takeData(stream.data.output, {4});
+    assert(frames.size() == 1 && frames[0].flags == flags);
+  };
+  device.writeIfDue();
+  expectFlags(0x01); // spontaneous first report, with independent restart flag
+  device.write("V", 1.0f);
+  expectFlags(0);
+  device.writeAllData();
+  expectFlags(0);
+  command(device, stream, "<#42:BLAECK.WRITE_DATA>");
+  expectFlags(0x02);
+  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  value = 1.5f;
+  hostMillis() = 1000;
+  device.writeIfDue();
+  expectFlags(0x04);
+  value = 2.5f;
+  hostMillis() = 1100;
+  device.writeIfDue();
+  expectFlags(0); // being activated is not enough to make a frame an interval report
+  value = 3.5f;
+  hostMillis() = 2000;
+  device.writeIfDue();
+  expectFlags(0x04); // merged interval and immediate report
+  signal.writeAtInterval(BLAECK_ON_CHANGE, 2);
+  value = 4.5f;
+  hostMillis() = 3000;
+  device.writeIfDue();
+  expectFlags(0); // interval due, but only the immediate path qualifies
+  device.write("V", 10.0f);
+  expectFlags(0);
+  device.writeAllData();
+  expectFlags(0);
+  command(device, stream, "<BLAECK.WRITE_DATA>");
+  expectFlags(0x02);
+  value = 12.5f;
+  hostMillis() = 4000;
+  device.writeIfDue();
+  expectFlags(0x04);
+  command(device, stream, "<BLAECK.DEACTIVATE>");
+  value = 14;
+  device.writeIfDue();
+  expectFlags(0);
+
+  FakeStream firstStream;
+  Blaeck first;
+  first.begin(firstStream);
+  first.setBufferedWrites(buffered);
+  first.addSignal(F("V"), &value);
+  command(first, firstStream, "<BLAECK.ACTIVATE,1000>");
+  first.writeIfDue();
+  const auto initial = takeData(firstStream.data.output, {4});
+  assert(initial.size() == 1 && initial[0].flags == 0x05);
+}
+
 int main()
 {
-  diagnosticMessages();
-  crc32Behavior();
-  sessionBehavior(false);
-  sessionBehavior(true);
-  lifecycleAndErrors();
-  detachFromCallbacks();
-  unifiedConnections();
-  std::cout << "PASS: CRC32, unified connections, wire identities, routing, lifecycle and allocation failures\n";
+  if (!BLAECK_TEST_REPORTING_ONLY)
+  {
+    diagnosticMessages();
+    crc32Behavior();
+    sessionBehavior(false);
+    sessionBehavior(true);
+    lifecycleAndErrors();
+    detachFromCallbacks();
+    unifiedConnections();
+  }
+  reportingPolicies(false);
+  reportingPolicies(true);
+  sharedBaselineAndClock();
+  reportingTypesAndFailures(false);
+  reportingTypesAndFailures(true);
+  reportingCallbacksAndTimestamps();
+  reportingAllocationAndReconnect();
+  reportingReconfiguration();
+  reportingIntegerType<byte>(1);
+  reportingIntegerType<short>(2);
+  reportingIntegerType<unsigned short>(2);
+  reportingIntegerType<int>(4);
+  reportingIntegerType<unsigned int>(4);
+  reportingIntegerType<long>(4);
+  reportingIntegerType<unsigned long>(4);
+  reportingFloatingType<float>();
+  reportingFloatingType<double>();
+  reportingPartialFrames();
+  reportingCallbackWriteClock();
+  reportingFrameClassification(false);
+  reportingFrameClassification(true);
+  std::cout << "PASS: protocol/transport and signal policies, shared baselines, clocks, strings, failures and reconnect\n";
 }

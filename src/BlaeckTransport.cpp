@@ -149,14 +149,22 @@ void Blaeck::_writeDirect(const byte *data, size_t len)
 {
   if (_stream != nullptr)
   {
-    _stream->write(data, len);
+    if (_stream->write(data, len) != len)
+      _frameWriteFailed = true;
     return;
   }
+  bool delivered = false;
   for (byte i = 0; i < _maxClients; i++)
   {
     if (_receivesFrame(i))
-      _adapter->client(i).write(data, len);
+    {
+      delivered = true;
+      if (_adapter->client(i).write(data, len) != len)
+        _frameWriteFailed = true;
+    }
   }
+  if (!delivered)
+    _frameWriteFailed = true;
 }
 
 // Nothing to do: a TCP client has no send buffer to push out, and on older ESP32 cores
@@ -174,11 +182,18 @@ void Blaeck::_sendBuffered()
     _sendStreamBuffered();
     return;
   }
+  bool delivered = false;
   for (byte i = 0; i < _maxClients; i++)
   {
     if (_receivesFrame(i))
-      _adapter->client(i).write(_frameBuf, _framePos);
+    {
+      delivered = true;
+      if (_adapter->client(i).write(_frameBuf, _framePos) != static_cast<size_t>(_framePos))
+        _frameWriteFailed = true;
+    }
   }
+  if (!delivered)
+    _frameWriteFailed = true;
 }
 
 void Blaeck::_sendStreamBuffered()
@@ -190,7 +205,8 @@ void Blaeck::_sendStreamBuffered()
     _frameBuf[_framePos++] = '\n';
     padded = true;
   }
-  _stream->write(_frameBuf, _framePos);
+  if (_stream->write(_frameBuf, _framePos) != static_cast<size_t>(_framePos))
+    _frameWriteFailed = true;
   if (!padded && _framePos > 0 && (_framePos % BLAECK_USB_PACKET_BYTES) == 0)
     _stream->write('\n');
   _stream->flush();
@@ -308,6 +324,7 @@ void Blaeck::_builtinCommandReceived()
     return;
 
   c.host = true;
+  _resetReportingBaselines();
   if (_debugStream != nullptr)
   {
     _debugStream->print(F("Client #"));

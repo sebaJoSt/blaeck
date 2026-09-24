@@ -33,6 +33,9 @@ python extras\scripts\checkprototype.py
 This is not a build or runtime test. State which checks you actually ran in your pull
 request; do not imply that unrun checks passed.
 The host suite is run with `python extras\scripts\testserver.py` and requires a C++ compiler.
+It exercises protocol/transport behavior and per-signal reporting with deterministic clocks,
+including shared baselines, numeric/text comparisons, rate limits, allocation failures,
+short writes and reconnects. Reporting is also run with signal metadata disabled.
 
 For API documentation coverage, install `libclang` and run:
 

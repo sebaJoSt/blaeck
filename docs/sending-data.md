@@ -1,6 +1,7 @@
 # Sending data
 
-Your sketch does not decide how often it logs. The host does, and your sketch answers.
+The host sets the logging interval. Each signal decides whether to join it, filter unchanged
+values, or report changes independently. Explicit writes are available for individual samples.
 
 ## A sketch that logs
 
@@ -31,22 +32,21 @@ void loop()
 }
 ```
 
-`device.tick()` does two things on every pass: it reads whatever arrived on the serial port and
-runs the command handlers, and it sends every signal once the interval has elapsed.
+`device.tick()` reads incoming commands and services automatic reporting. By default, every
+signal is included when the host's interval is due.
 
-Until a host asks, it sends nothing:
+With these default policies, no data is sent until a host activates interval reporting:
 
 ```
 <BLAECK.ACTIVATE,1000>      one reading per second
-<BLAECK.DEACTIVATE>         stop
+<BLAECK.DEACTIVATE>         stop interval reporting
 ```
 
-Loggbok sends these for you. You can type them into the serial monitor to see the data for
-yourself.
+Loggbok sends these for you. You can also type them into the serial monitor; the replies
+carry binary data rather than readable values.
 
-Two smaller calls do one half each. `device.read()` only reads and dispatches, for a device
-that answers commands and logs nothing. `device.timedWriteAllData()` only sends, for one that
-logs and answers nothing.
+Two smaller calls do one half each. `device.read()` reads and dispatches;
+`device.writeIfDue()` services both automatic reporting paths. Together they are `tick()`.
 
 Your sketch cannot set the interval, but it can read what the host asked for:
 
@@ -60,8 +60,8 @@ cut.
 
 ## Sending when something happens
 
-The interval is for logging. Some values are worth sending the moment they change, and two
-calls do that whatever the interval says.
+Explicit writes bypass the signal's automatic policies and change thresholds. They work
+without ACTIVATE but still honor pause/resume writes.
 
 `writeAllData()` sends every signal now:
 
@@ -119,28 +119,84 @@ void loop()
 }
 ```
 
-## Sending only what changed
+## Per-signal reporting
 
-Where values change rarely, sending all of them every second is waste. `update()` stores a value
-and marks the signal as changed. `tickUpdated()` is then `tick()` for the marked ones only:
+Choose one interval policy when registering a signal:
 
 ```cpp
-void loop()
-{
-  device.update("Temperature", readSensor());
-  device.tickUpdated();
-}
+device.addSignal(F("Temperature"), &temperature)
+    .writeAtInterval(BLAECK_ON_CHANGE, 0.05f);
 ```
 
-`update()` sends nothing by itself. That is its whole difference from `write()`.
+| Policy | At each host interval |
+| --- | --- |
+| `writeAtInterval(BLAECK_ALWAYS)` | Send the current value; this is the default |
+| `writeAtInterval(BLAECK_ON_CHANGE, delta)` | Send if it differs enough from the last sent value |
+| `writeAtInterval(BLAECK_OFF)` | Do not include it |
 
-`writeUpdatedData()` sends the changed ones at once, without waiting for the interval.
+Calling `writeAtInterval()` again replaces the previous interval policy. Its threshold
+defaults to zero: any unequal value qualifies. Assign the variable normally and keep calling
+`tick()`; there are no update flags to manage.
+
+For changes that should not wait for the host interval:
+
+```cpp
+device.addSignal(F("Temperature"), &temperature)
+    .writeAtInterval(BLAECK_OFF)
+    .writeOnChange(0.1f, 100);
+```
+
+`writeOnChange(delta, minIntervalMs)` checks the current value on every `tick()` or
+`writeIfDue()`. The threshold is required; the minimum interval defaults to 100 ms.
+It is a rate limit since the last report, not a debounce timer. It works without ACTIVATE,
+and DEACTIVATE does not stop it. Pause/resume writes still governs all data reporting.
+
+The two paths are independent. For small changes at intervals and larger changes promptly:
+
+```cpp
+device.addSignal(F("Temperature"), &temperature)
+    .writeAtInterval(BLAECK_ON_CHANGE, 0.05f)
+    .writeOnChange(0.1f);
+```
+
+There is **one last-sent baseline**, not one per policy. An automatic report, explicit
+`write()`, `writeAllData()`, or host-requested full snapshot updates that baseline and the
+immediate rate-limit clock for every included signal. Explicit and immediate writes do not
+move the host's interval schedule. If both paths qualify together, the signal appears only
+once in one frame.
+
+Interval reports carry an interval flag, including frames merged with immediate changes.
+Explicit writes and immediate-only reports leave it clear, so a host can show data activity
+without restarting its interval countdown.
+
+Numeric thresholds are inclusive and measured from the last sent value, so small changes can
+accumulate. Thresholds must be finite and nonnegative. Booleans and text ignore the threshold;
+use zero. Text comparisons retain an exact copy of the transmitted text, up to the protocol's
+255-byte limit, rather than a hash. Stable NaN representations do not continually resend;
+transitions involving NaN, infinity or subnormal floating-point values qualify as changes.
+
+Change tracking allocates a small record per opted-in signal. Text also retains a buffer
+that grows when needed. Invalid policies and allocation failures are reported through the
+debug stream and `hasRejections()` / `printRejections()`. A failed policy change leaves the
+previous policy intact; a text-buffer allocation failure sends no partial data frame.
+
+The first eligible report sends an initial value without applying its threshold or rate
+limit. Baselines are not persisted across restart, and a new TCP host session refreshes them.
+Initialize registered variables before servicing reporting. A locally accepted frame advances
+the baseline; a short transport write invalidates affected baselines so they can be retried.
+This is not an acknowledgment that the host received or stored the data.
+
+Both change modes sample current values, not a queue. A value that changes and returns between
+checks may never be reported. Use explicit `write()` calls when every measurement or edge
+matters. If no signals qualify at an interval, no data frame is sent.
+
+The [WriteModes example](../examples/WriteModes) demonstrates all these choices side by side.
 
 ## Reading the sensors at the right moment
 
 The first sketch on this page reads its sensor on every pass of `loop()`. That works, and it
-means every reading sent is up to one pass old. Where that matters, name a function instead and
-it runs immediately before signal data goes out:
+means every reading sent is up to one pass old. For interval snapshots, a callback can refresh
+the variables before filtering:
 
 ```cpp
 void readAllSensors()
@@ -151,7 +207,10 @@ void readAllSensors()
 device.setBeforeWriteCallback(readAllSensors);
 ```
 
-It runs in normal `loop()` context, so `Serial` and `delay()` are safe in it.
+The callback runs when a host interval is due, even if filtering leaves nothing to send.
+It also runs for explicit or host-requested `writeAllData()`. It does not run for single-signal
+`write()` or the every-tick immediate change check; refresh those variables in your sketch.
+It runs in normal `loop()` context, not an interrupt.
 
 ## Timestamps
 
@@ -163,8 +222,9 @@ the link is quick and nothing buffers.
 
 For a time the device itself stands behind, pick a mode in `setup()`. `BLAECK_MICROS` needs
 nothing else - the library reads `micros()` and counts the overflows, so the number keeps
-climbing past the 71 minutes a 32-bit microsecond counter holds. It counts them as data is
-written, so a device that writes less often than that needs a real clock instead:
+climbing past the 71 minutes a 32-bit microsecond counter holds. Keep calling `tick()` or
+`writeIfDue()` regularly even when no data qualifies, so rollovers can be observed. A sketch
+that can sleep through a complete rollover needs a real clock instead:
 
 ```cpp
 device.setTimestampMode(BLAECK_MICROS);
@@ -187,11 +247,17 @@ whether you have one.
 
 Set the mode once, in `setup()`. Timestamps from either side of a change are not comparable.
 
+An automatic frame timestamps the reporting pass, not each sensor's acquisition time.
+For a known acquisition time, pass it explicitly to `write()` or `writeAllData()`.
+`writeIfDue(timestamp)` also accepts a supplied timestamp; scheduling and rate limits still
+use `millis()`.
+
 ## Buffered writes
 
 Data is either assembled in RAM and sent in one call, or written out piece by piece as it is
 produced. Buffering costs `60 + signals * 30` bytes of SRAM and suits a USB bridge that dislikes
-many small writes; writing directly costs no RAM at all.
+many small writes; writing directly avoids that frame buffer. Change-tracking snapshots
+are separate and are needed in either mode.
 
 The default is per board: off on AVR, where the SRAM is scarce and the bridge chips take small
 writes happily, and on everywhere else. Those defaults are there because of real faults on real

@@ -19,9 +19,44 @@ with the required MQTT/Home Assistant or TimescaleDB outputs configured.
 | CommandMetadataTest | `drive_command_metadata.py [seconds\|capture.json]`: discovery/registry; `roundtrip_command_state.py [device_filter]`: HA command/state round trips |
 | EventMetadataTest | `drive_event_metadata.py [seconds\|capture.json]`: discovery/registry and live HA event checks |
 | SignalTimingTest | `drive_signal_timing.py [table]`: issue HA commands and check recorded TimescaleDB rows |
+| SignalReportingTest | `drive_signal_reporting.py SERIAL_PORT`: Mega/AVR reporting policies, shared baselines, rate limits, numeric/text values and CRC32, with direct and buffered Serial writes |
 
 Run each Python driver from its sketch directory, or pass its full path.
 The scripts' module docstrings describe their individual expectations.
+
+## Mega signal-reporting checks
+
+`SignalReportingTest` needs only a Mega and USB; it does not drive pins or use external
+services. Uploading replaces the board's current sketch. Close other serial clients first.
+Substitute the actual Mega port for `COMxx`:
+
+```powershell
+arduino-cli compile --fqbn arduino:avr:mega extras\tests\harness\SignalReportingTest
+arduino-cli upload --fqbn arduino:avr:mega --port COMxx extras\tests\harness\SignalReportingTest
+python extras\tests\harness\SignalReportingTest\drive_signal_reporting.py COMxx
+```
+
+Use the matching board profile for both compile and upload. For a Mega with the custom
+Optiboot profile installed here, replace `arduino:avr:mega` with `my_boards:avr:mega`;
+`arduino-cli board list` identifies the connected board and port.
+
+The driver identifies the harness and AVR type widths before changing anything. It checks
+decoded data frames rather than trusting device-side PASS messages, and exits nonzero on
+failure. Cadence/rate-limit checks also check their device-clock timing preconditions; a
+slow or interrupted host run fails explicitly rather than producing misleading results.
+The sketch services automatic reporting only when asked, making assignments and reporting
+passes independently observable. This tests real AVR arithmetic, memory and Serial output,
+not continuous `loop()` throughput. Allocation failures, TCP reconnects and clock rollover
+remain covered by the native suite.
+
+The driver's parser can be checked without a board or Python dependencies:
+
+```powershell
+python extras\tests\harness\SignalReportingTest\drive_signal_reporting.py --self-test
+```
+
+The harness passed 165 checks on a physical ATmega2560 with Optiboot, across direct and
+buffered Serial output. This does not establish Loggbok integration or TCP behavior.
 
 ## Python dependencies and connections
 

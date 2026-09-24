@@ -16,8 +16,10 @@ class __FlashStringHelper;
 #define F(text) reinterpret_cast<const __FlashStringHelper *>(text)
 #define PROGMEM
 inline byte pgm_read_byte(const void *p) { return *static_cast<const byte *>(p); }
-inline unsigned long millis() { return 0; }
-inline unsigned long micros() { return 0; }
+inline uint32_t &hostMillis() { static uint32_t value = 0; return value; }
+inline uint32_t &hostMicros() { static uint32_t value = 0; return value; }
+inline unsigned long millis() { return hostMillis(); }
+inline unsigned long micros() { return hostMicros(); }
 inline void yield() {}
 
 class Print
