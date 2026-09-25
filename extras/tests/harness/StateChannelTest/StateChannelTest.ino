@@ -269,7 +269,7 @@ void RunLocalChecks()
 
   // Every channel above had to fit. A silent overflow would make half of this test nothing at
   // all, and each check would pass by never having run against a real channel.
-  Check(F("no channel was dropped for want of table space"), !Blaeck.hasRejectedStateChannels());
+  Check(F("no channel was dropped for want of table space"), !device.hasRejectedStateChannels());
 }
 
 void loop()

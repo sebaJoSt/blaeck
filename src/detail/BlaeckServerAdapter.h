@@ -55,11 +55,16 @@ auto printPeerAddress(T &socket, Print &out, int)
 template<class T>
 void printPeerAddress(T &, Print &, long) {}
 
+// Declared only, for decltype: std::declval, which AVR cores lack. A null pointer in its place
+// makes GCC's -Wnonnull report a null 'this', even though decltype never evaluates it.
+template<class T>
+T &declRef();
+
 template<class Server>
 class TypedServerAdapter : public ServerAdapter
 {
   // Deliberately requires accept(): available() has incompatible meanings across libraries.
-  using Socket = decltype(static_cast<Server *>(nullptr)->accept());
+  using Socket = decltype(declRef<Server>().accept());
 
 public:
   TypedServerAdapter(Server &server, bool noDelay, uint16_t stopTimeoutMs)

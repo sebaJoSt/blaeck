@@ -20,10 +20,13 @@ jobs:
           python-version: "3.x"
       - name: Install documentation parser
         run: pip install libclang
+      # The libclang wheel has no builtin headers (stddef.h and friends); borrow the runner's.
+      - name: Locate clang builtin headers
+        run: echo "CLANG_BUILTINS=$(clang -print-resource-dir)/include" >> "$GITHUB_ENV"
       - name: Check public API documentation
-        run: python extras/scripts/checkdocs.py src/Blaeck.h -- -Iextras/tests/host
+        run: python extras/scripts/checkdocs.py src/Blaeck.h -- -Iextras/tests/host -isystem "$CLANG_BUILTINS"
       - name: Extract doc examples
-        run: python extras/scripts/checkdocs.py src/Blaeck.h --extract -- -Iextras/tests/host
+        run: python extras/scripts/checkdocs.py src/Blaeck.h --extract -- -Iextras/tests/host -isystem "$CLANG_BUILTINS"
       - name: Compile doc examples
         uses: arduino/compile-sketches@v1
         with:

@@ -197,7 +197,7 @@ void RunLocalChecks()
   // its name, so a number above two would be a channel that failed to register - a table
   // sized too small - and there is no accessor that separates the two.
   Check(F("both dropped types are counted, and nothing else"), device.getRejectedEventChannelCount() == 2);
-  Check(F("the flag is set, by those two"), Blaeck.hasRejectedEventChannels());
+  Check(F("the flag is set, by those two"), device.hasRejectedEventChannels());
 
   Serial.print(F("---- "));
   Serial.print(checks - failures);

@@ -36,6 +36,8 @@
   The circuit:
     - No wiring required, the on-board LED is used.
       LED_BUILTIN is pin 13 on the UNO and MEGA, and the right pin elsewhere.
+    - Boards without an on-board LED, such as the ESP32-PoE and WT32-ETH01, use
+      LED_PIN below: wire an LED with a resistor to that pin, or change it.
 
   Typed, and so also controls in Home Assistant:
 
@@ -78,7 +80,12 @@ NetworkSetup::Server server(23);
 
 Blaeck device;
 
+#ifdef LED_BUILTIN
 const int ledPin = LED_BUILTIN;
+#else
+#define LED_PIN 4  // No on-board LED: any free GPIO with an external LED.
+const int ledPin = LED_PIN;
+#endif
 
 // Mirrors the LED. Registered as a signal so <LED> can point at it.
 bool ledState = false;

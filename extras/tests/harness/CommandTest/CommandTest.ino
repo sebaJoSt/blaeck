@@ -328,21 +328,21 @@ void RunLocalChecks()
   Serial.println();
   Serial.println(F("---- CommandTest ----"));
 
-  Check(F("every command registered"), !Blaeck.hasRejectedCommands());
-  if (Blaeck.hasRejectedCommands())
+  Check(F("every command registered"), !device.hasRejectedCommands());
+  if (device.hasRejectedCommands())
   {
     Serial.print(F("      dropped: "));
     Serial.println(device.getRejectedCommandCount());
   }
 
-  Check(F("every state channel registered"), !Blaeck.hasRejectedStateChannels());
-  if (Blaeck.hasRejectedStateChannels())
+  Check(F("every state channel registered"), !device.hasRejectedStateChannels());
+  if (device.hasRejectedStateChannels())
   {
     Serial.print(F("      dropped: "));
     Serial.println(device.getRejectedStateChannelCount());
   }
 
-  Check(F("every signal registered"), !Blaeck.hasRejectedSignals());
+  Check(F("every signal registered"), !device.hasRejectedSignals());
   Check(F("nothing accepted before a host sends anything"), Accepted == 0);
   Check(F("defaults intact: nInt"), nInt == 0);
   Check(F("defaults intact: sEnabled"), sEnabled == false);
