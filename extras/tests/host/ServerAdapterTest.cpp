@@ -1215,7 +1215,9 @@ static void storedConfigurationStrings()
   failAfter = -1;
   assert(BlaeckString(saved) == "Flash");
   assert(BlaeckString(shared) == F("Temporary"));
-  shared = shared;
+  // Self-assignment, through a reference so clang's -Wself-assign-overloaded allows it.
+  const auto &self = shared;
+  shared = self;
   saved = shared;
   shared = nullptr;
   assert(BlaeckString(saved) == "Temporary");
