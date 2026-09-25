@@ -5377,6 +5377,9 @@ inline BlaeckEventChannelRef BlaeckEventChannelRef::withIcon(const __FlashString
     }
 #else
   (void)icon;
+  // Clang's -Wunused-private-field would otherwise fail -Werror builds with events disabled.
+  (void)_owner;
+  (void)_index;
 #endif
   return *this;
 }
