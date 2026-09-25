@@ -114,9 +114,13 @@ Client #2 is the host
 Client #0 disconnected: replaced as host
 ```
 
-The newest host wins so that a host reconnecting after a dropped link is never locked out by
-its own dead connection, which the network stack may take minutes to notice. Two hosts that both
-reconnect on their own will keep taking over from each other; point only one host at a device.
+Takeover requires an accepted connection. A new connection needs a free slot; when all
+`withClients()` slots are occupied, it is closed before any command is read. With
+`.withClients(1)`, the existing connection must close and its slot be released first.
+
+When a slot is available, a reconnecting host can replace its own dead connection without
+waiting for the network stack to notice the dropped link. Two hosts that both reconnect on
+their own can keep taking over from each other; point only one host at a device.
 
 Closing sends the old host a FIN at once. Where the client supports `setConnectionTimeout()`,
 as the Ethernet library's does, the wait for a peer that no longer answers is bounded by
