@@ -7,33 +7,35 @@
   Only the reporting policy differs:
 
     Interval                     the default: every host interval, even if unchanged.
-    OnChangeAtInterval           at the host interval, only after a change of at least 0.5.
+    OnChangeAtInterval           at the host interval, only after a change of at least 0.05.
     OnChange                     checked every tick, after a change of at least 0.1,
                                  at most every 100 ms.
-    OnChangeAndAtEveryInterval   every host interval, plus changes of at least 0.1 promptly.
+    OnChangeAndOnChangeAtInterval changes of at least 0.05 at intervals, or 0.1 promptly.
     Explicit                     write() sends each deliberate measurement, without filtering.
 
   Try this:
     Set the host's logging interval to 2000 ms, or send <BLAECK.ACTIVATE,2000>.
     One cycle takes 12 seconds:
       Interval samples the underlying wave, but can miss the spikes.
-      OnChangeAtInterval samples the wave, skipping interval changes below 0.5.
+      OnChangeAtInterval samples the wave, skipping interval changes below 0.05.
       OnChange follows the wave and spikes whenever a change reaches 0.1.
-      OnChangeAndAtEveryInterval also sends a current value at every interval,
-      even if unchanged or just reported by the change-triggered path.
+      OnChangeAndOnChangeAtInterval also reports changes from 0.05 at interval times.
       Explicit shows the complete wave and rounded spike shapes.
-    Both immediate-change paths use the same 0.1 threshold for a fair comparison.
+    The separate and combined modes use matching thresholds for a fair comparison.
+    Interval and OnChangeAtInterval can look alike here: most interval samples
+    exceed the small threshold. With constant or slowly changing values, Interval
+    keeps reporting while OnChangeAtInterval skips reports.
     OnChange and the combined signal can look similar with these fine thresholds;
     their report times can differ because interval reports update the shared baseline.
     A 2-second interval cannot sample both short spikes one second apart; it may
     miss both. Compare reported points, not just the lines drawn between them.
     Some points overlap because all signals share the same source.
     Interval and OnChangeAtInterval use that interval. OnChange does not need ACTIVATE.
-    OnChangeAndAtEveryInterval uses both paths, with one shared last-sent value.
+    OnChangeAndOnChangeAtInterval uses both paths, with one shared last-sent value.
     Every ACTIVATE first reports all three interval-enabled signals without filtering.
-    Later interval reports apply change filtering only to OnChangeAtInterval.
+    Later interval reports apply their normal policies and thresholds.
     Send <BLAECK.DEACTIVATE>: only interval reporting stops. OnChange,
-    OnChangeAndAtEveryInterval's immediate path, and the explicit write() calls keep working.
+    OnChangeAndOnChangeAtInterval's immediate path, and the explicit write() calls keep working.
     Automatic reporting compares current values, not a queue of intermediate samples.
 
   These are binary data frames, not readable text in a serial monitor.
@@ -65,7 +67,7 @@ Blaeck device;
 float Interval = 0.0f;
 float OnChangeAtInterval = 0.0f;
 float OnChange = 0.0f;
-float OnChangeAndAtEveryInterval = 0.0f;
+float OnChangeAndOnChangeAtInterval = 0.0f;
 float Explicit = 0.0f;
 
 void setup()
@@ -86,11 +88,11 @@ void setup()
 
   device.addSignal(F("Interval"), &Interval);
   device.addSignal(F("OnChangeAtInterval"), &OnChangeAtInterval)
-      .writeAtInterval(BLAECK_ON_CHANGE, 0.5f);
+      .writeAtInterval(BLAECK_ON_CHANGE, 0.05f);
   device.addSignal(F("OnChange"), &OnChange)
       .writeAtInterval(BLAECK_OFF).writeOnChange(0.1f);
-  device.addSignal(F("OnChangeAndAtEveryInterval"), &OnChangeAndAtEveryInterval)
-      .writeAtInterval(BLAECK_ALWAYS).writeOnChange(0.1f);
+  device.addSignal(F("OnChangeAndOnChangeAtInterval"), &OnChangeAndOnChangeAtInterval)
+      .writeAtInterval(BLAECK_ON_CHANGE, 0.05f).writeOnChange(0.1f);
   device.addSignal(F("Explicit"), &Explicit).writeAtInterval(BLAECK_OFF);
 }
 
@@ -121,6 +123,6 @@ void UpdateSignals()
     value += 2.0f * (1.0f - cos(TWO_PI * spikePhase));
   }
 
-  Interval = OnChangeAtInterval = OnChange = OnChangeAndAtEveryInterval = value;
+  Interval = OnChangeAtInterval = OnChange = OnChangeAndOnChangeAtInterval = value;
   device.write("Explicit", value);
 }
