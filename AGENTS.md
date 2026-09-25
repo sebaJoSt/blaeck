@@ -57,4 +57,5 @@ Version 7.0.0 is in development; setting its metadata does not publish a release
 - Native reporting/transport tests and representative Mega Serial/GIGA TCP builds have
   passed. SignalReportingTest also passed direct/buffered Serial checks on a physical
   Optiboot Mega. This is not evidence of Loggbok integration or hardware TCP validation.
-- Do not modify the existing BlaeckSerial or BlaeckTCP repositories for this library.
+- BlaeckSerial and BlaeckTCP are frozen at 6.0.1 and archived on GitHub; their README points
+  to blaeck. Their post-6.0.1 development is on each repo's `7.0-dev` branch. Do not change them.
