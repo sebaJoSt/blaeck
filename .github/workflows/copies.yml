@@ -2,9 +2,9 @@ name: Source Checks
 
 on:
   push:
-    paths: ["src/**", "examples/**", "extras/scripts/checkprototype.py", "extras/scripts/syncnetwork.py", "library.*", ".github/workflows/copies.yml"]
+    paths: ["src/**", "examples/**", "extras/scripts/checkpackage.py", "extras/scripts/syncnetwork.py", "library.*", ".github/workflows/copies.yml"]
   pull_request:
-    paths: ["src/**", "examples/**", "extras/scripts/checkprototype.py", "extras/scripts/syncnetwork.py", "library.*", ".github/workflows/copies.yml"]
+    paths: ["src/**", "examples/**", "extras/scripts/checkpackage.py", "extras/scripts/syncnetwork.py", "library.*", ".github/workflows/copies.yml"]
   workflow_dispatch:
 
 permissions:
@@ -18,5 +18,5 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
-      - name: Check structure, manifests and NetworkSetup copies
-        run: python extras/scripts/checkprototype.py
+      - name: Check manifests, examples and NetworkSetup copies
+        run: python extras/scripts/checkpackage.py

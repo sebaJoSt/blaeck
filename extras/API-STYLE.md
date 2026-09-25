@@ -77,7 +77,7 @@ comments. Avoid duplicating protocol tables or values already defined elsewhere.
 From the repository root:
 
 ```powershell
-python extras\scripts\checkprototype.py
+python extras\scripts\checkpackage.py
 python extras\scripts\syncnetwork.py --check
 python extras\scripts\checkdocs.py src\Blaeck.h -- -Iextras\tests\host
 ```

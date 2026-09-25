@@ -24,10 +24,10 @@ of a change to this library.
 
 ## Checks
 
-The source-only structure and packaging check is:
+The source-only packaging and example check is:
 
 ```powershell
-python extras\scripts\checkprototype.py
+python extras\scripts\checkpackage.py
 ```
 
 This is not a build or runtime test. State which checks you actually ran in your pull
