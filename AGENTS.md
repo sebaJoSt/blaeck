@@ -12,6 +12,11 @@ Version 7.0.0 is in development; setting its metadata does not publish a release
   are header-defined.
 - No mandatory third-party library dependencies. Keep the internal CRC32 helper's
   fixed protocol parameters and upstream MIT notice intact.
+- Write/look-up names and text signal/state values accept RAM strings and F() literals.
+  Signal values retain a pointer plus a storage flag; pushed state text is not retained.
+  Keep flash reads explicit, preserve RAM lifetime rules, and compare text contents rather
+  than pointers. Text getters still return RAM strings. Native tests simulate separate
+  flash storage; this supplements but does not replace AVR hardware validation.
 - One `BlaeckBeginRef` handle configures table sizes, client count and debug output.
 - TCP takes an already-started server via `begin(server)`. TelnetPrint is an optional
   user-supplied server, never an implicit dependency. Require `accept()`; do not substitute

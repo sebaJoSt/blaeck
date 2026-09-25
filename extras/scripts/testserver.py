@@ -22,6 +22,17 @@ def main():
                    "-o", str(exe)]
         subprocess.run(command, check=True)
         subprocess.run([str(exe)], check=True, timeout=20)
+        for defines, name in (
+            (["-DBLAECK_TEST_SEPARATE_FLASH=1", "-Werror"], "separate-flash"),
+            (["-DBLAECK_TEST_SEPARATE_FLASH=1", "-Werror", "-DBLAECK_ENABLE_STATE_CHANNELS=0",
+              "-DBLAECK_ENABLE_COMMAND_META=0", "-DBLAECK_ENABLE_EVENTS=0",
+              "-DBLAECK_TEST_REPORTING_ONLY=1"], "flash-features-off"),
+        ):
+            flash_command = command[:]
+            flash_command[1:1] = defines
+            flash_command[-1] = str(Path(temp) / f"{name}.exe")
+            subprocess.run(flash_command, check=True)
+            subprocess.run([flash_command[-1]], check=True, timeout=20)
         distinct = Path(temp) / "distinct-defaults-test.exe"
         defaults_command = command[:]
         defaults_command[1:1] = ["-DBLAECK_SERIAL_BUFFERED_WRITES_DEFAULT=false",

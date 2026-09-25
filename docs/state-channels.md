@@ -99,8 +99,7 @@ Text is dropped on a text channel that already has a variable too. That channel 
 value, so a pushed line would show until the next catalog poll and then be replaced without a
 word. Send it with `writeState(F("Status"))` and no text, which reports what the channel holds.
 
-Channel names are copied, unlike signal names, so a name built in a buffer needs nothing kept
-alive afterwards.
+Names built in RAM buffers are copied, so those buffers can be reused after registration.
 
 ## Text the channel works out for itself
 

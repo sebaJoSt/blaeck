@@ -325,6 +325,7 @@ struct Signal
   uint8_t IntervalMode : 2;
   uint8_t Selected : 1;
   uint8_t NameInFlash : 1;
+  uint8_t TextInFlash : 1;
   // Set when NameSuffix is in use, so a suffix of 0 still counts.
   uint8_t HasSuffix : 1;
   // Appended to the name as decimal digits, e.g. Sine_ + 3 gives Sine_3.
@@ -581,6 +582,10 @@ private:
 // classes need them, and in a namespace so they can't clash with names in a sketch.
 namespace blaeck_detail
 {
+// A literal index 0 must not compete with null-name forwarding overloads.
+template<class T> struct NullName {};
+template<> struct NullName<decltype(nullptr)> { using type = void; };
+
 // Longest command name, terminator included. Every command entry holds an array this long.
 #if defined(__AVR__)
 static const byte MAX_COMMAND_NAME_COUNT = 24;
@@ -726,6 +731,7 @@ struct StateChannelEntry
   mutable bool stateWarned = false;
   // Set after the first warning about text cut to 255 bytes.
   bool truncationWarned = false;
+  bool textInFlash = false;
   bool inUse = false;
 };
 
@@ -2809,6 +2815,8 @@ public:
   BlaeckNumericSignalRef addSignal(const char *signalName, float *value);
   BlaeckNumericSignalRef addSignal(const char *signalName, double *value);
   BlaeckTextSignalRef addSignal(const char *signalName, const char *value);
+  // The text stays in flash and is retained, like a RAM text pointer.
+  BlaeckTextSignalRef addSignal(const char *signalName, const __FlashStringHelper *value);
 
   /*!
     @brief   Adds a signal whose name is an F() literal.
@@ -2834,6 +2842,17 @@ public:
   BlaeckNumericSignalRef addSignal(const __FlashStringHelper *signalName, float *value);
   BlaeckNumericSignalRef addSignal(const __FlashStringHelper *signalName, double *value);
   BlaeckTextSignalRef addSignal(const __FlashStringHelper *signalName, const char *value);
+  /*!
+    @brief   Registers a text signal with its name and initial value in flash.
+
+    The value is retained without copying it into RAM. Later write() calls may
+    replace it with either RAM or flash text.
+
+    @code
+      device.addSignal(F("Status"), F("Idle"));
+    @endcode
+  */
+  BlaeckTextSignalRef addSignal(const __FlashStringHelper *signalName, const __FlashStringHelper *value);
 
   /*!
     @brief   Removes every signal, so a new set can be added.
@@ -2992,6 +3011,8 @@ public:
   BlaeckBoolStateRef addStateChannel(const char *channelName, BlaeckBoolTag);
   BlaeckNumericStateRef addStateChannel(const char *channelName, BlaeckNumericTag type);
   BlaeckTextStateRef addStateChannel(const char *channelName, const char *value);
+  // A fixed flash value; writeState(channelName) reads it without copying it into RAM.
+  BlaeckTextStateRef addStateChannel(const char *channelName, const __FlashStringHelper *value);
   BlaeckBoolStateRef addStateChannel(const char *channelName, bool *value);
   BlaeckNumericStateRef addStateChannel(const char *channelName, byte *value);
   BlaeckNumericStateRef addStateChannel(const char *channelName, short *value);
@@ -3008,6 +3029,18 @@ public:
   BlaeckBoolStateRef addStateChannel(const __FlashStringHelper *channelName, BlaeckBoolTag);
   BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, BlaeckNumericTag type);
   BlaeckTextStateRef addStateChannel(const __FlashStringHelper *channelName, const char *value);
+  /*!
+    @brief   Registers a state channel bound to a fixed flash text value.
+
+    The name and text are retained without RAM copies. Use writeState(channelName)
+    to send the bound value, rather than pushing another text value.
+
+    @code
+      device.addStateChannel(F("Build"), F("Production"));
+      device.writeState(F("Build"));
+    @endcode
+  */
+  BlaeckTextStateRef addStateChannel(const __FlashStringHelper *channelName, const __FlashStringHelper *value);
   BlaeckBoolStateRef addStateChannel(const __FlashStringHelper *channelName, bool *value);
   BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, byte *value);
   BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, short *value);
@@ -3071,6 +3104,22 @@ public:
   // The same two, with an F() name.
   void writeState(const __FlashStringHelper *channelName, const char *text);
   void writeState(const __FlashStringHelper *channelName);
+  /*!
+    @brief   Sends flash text on an unbound text state channel.
+
+    The text is read during this call, not copied into a retained value. The same
+    ownership, type and 255-byte limit checks apply as for RAM text.
+
+    @code
+      device.addStateChannel(F("Status"), BlaeckText);
+      device.writeState(F("Status"), F("Running"));
+    @endcode
+  */
+  void writeState(const __FlashStringHelper *channelName, const __FlashStringHelper *text);
+  // The same flash value with a RAM channel name.
+  void writeState(const char *channelName, const __FlashStringHelper *text);
+  void writeState(const char *channelName, decltype(nullptr)) { writeState(channelName, static_cast<const char *>(nullptr)); }
+  void writeState(const __FlashStringHelper *channelName, decltype(nullptr)) { writeState(channelName, static_cast<const char *>(nullptr)); }
 
   /*!
     @brief   Sends a number on a state channel that was added with a type tag.
@@ -3125,6 +3174,15 @@ public:
     @endcode
   */
   void writeCommandState(const char *command);
+  /*!
+    @brief   Sends a command's owned state using a flash command name.
+
+    @code
+      device.writeCommandState(F("SET_SPEED"));
+    @endcode
+  */
+  void writeCommandState(const __FlashStringHelper *command);
+  void writeCommandState(decltype(nullptr)) { writeCommandState(static_cast<const char *>(nullptr)); }
 
   // ----- Events -----
   // With BLAECK_ENABLE_EVENTS=0 these compile but do nothing.
@@ -3310,6 +3368,17 @@ public:
     @endcode
   */
   int findSignalIndex(const char *signalName);
+  /*!
+    @brief   Looks up a signal by its flash name, including any numeric suffix.
+
+    @return  Its index, or -1 if there is no match.
+
+    @code
+      int statusIndex = device.findSignalIndex(F("Status"));
+    @endcode
+  */
+  int findSignalIndex(const __FlashStringHelper *signalName);
+  int findSignalIndex(decltype(nullptr)) { return findSignalIndex(static_cast<const char *>(nullptr)); }
 
   // The same, by index.
   void write(int signalIndex, bool value);
@@ -3370,6 +3439,92 @@ public:
     @endcode
   */
   void write(int signalIndex, const char *value, unsigned long long timestamp);
+
+  /*!
+    @brief   Retains flash text as a signal's value and sends it immediately.
+
+    Later reports read the same flash text. No RAM copy is made just to retain it;
+    change tracking still uses its existing last-sent snapshot. RAM and flash writes
+    can replace each other without changing the signal's reporting policies.
+
+    @code
+      device.addSignal(F("Status"), F("Idle"));
+      device.write("Status", F("Running"));
+    @endcode
+  */
+  void write(const char *signalName, const __FlashStringHelper *value);
+  // The same, with the timestamp in microseconds in the configured time base.
+  void write(const char *signalName, const __FlashStringHelper *value, unsigned long long timestamp);
+  // The same flash text, addressed by signal index.
+  void write(int signalIndex, const __FlashStringHelper *value);
+  void write(int signalIndex, const __FlashStringHelper *value, unsigned long long timestamp);
+
+  void write(const char *name, decltype(nullptr)) { write(name, static_cast<const char *>(nullptr)); }
+  void write(const char *name, decltype(nullptr), unsigned long long timestamp) { write(name, static_cast<const char *>(nullptr), timestamp); }
+  void write(int index, decltype(nullptr)) { write(index, static_cast<const char *>(nullptr)); }
+  void write(int index, decltype(nullptr), unsigned long long timestamp) { write(index, static_cast<const char *>(nullptr), timestamp); }
+
+  /*!
+    @brief   Writes a signal using a flash name, without a temporary name buffer.
+
+    Accepts the same numeric, RAM-text and flash-text values as the index overloads.
+    Text ownership and reporting behavior are unchanged.
+
+    @code
+      device.write(F("Temperature"), 23.5);
+      device.write(F("Status"), F("Running"));
+    @endcode
+  */
+  void write(const __FlashStringHelper *name, bool value) { write(findSignalIndex(name), value); }
+  void write(const __FlashStringHelper *name, byte value) { write(findSignalIndex(name), value); }
+  void write(const __FlashStringHelper *name, short value) { write(findSignalIndex(name), value); }
+  void write(const __FlashStringHelper *name, unsigned short value) { write(findSignalIndex(name), value); }
+  void write(const __FlashStringHelper *name, int value) { write(findSignalIndex(name), value); }
+  void write(const __FlashStringHelper *name, unsigned int value) { write(findSignalIndex(name), value); }
+  void write(const __FlashStringHelper *name, long value) { write(findSignalIndex(name), value); }
+  void write(const __FlashStringHelper *name, unsigned long value) { write(findSignalIndex(name), value); }
+  void write(const __FlashStringHelper *name, float value) { write(findSignalIndex(name), value); }
+  void write(const __FlashStringHelper *name, double value) { write(findSignalIndex(name), value); }
+  void write(const __FlashStringHelper *name, const char *value) { write(findSignalIndex(name), value); }
+  void write(const __FlashStringHelper *name, const __FlashStringHelper *value) { write(findSignalIndex(name), value); }
+  void write(const __FlashStringHelper *name, decltype(nullptr)) { write(findSignalIndex(name), static_cast<const char *>(nullptr)); }
+
+  /*!
+    @brief   Writes a signal using a flash name and an explicit timestamp.
+
+    @param   timestamp  Sample time in microseconds in the configured time base.
+
+    @code
+      device.write(F("Status"), F("Running"), 123456ULL);
+    @endcode
+  */
+  void write(const __FlashStringHelper *name, bool value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
+  void write(const __FlashStringHelper *name, byte value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
+  void write(const __FlashStringHelper *name, short value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
+  void write(const __FlashStringHelper *name, unsigned short value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
+  void write(const __FlashStringHelper *name, int value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
+  void write(const __FlashStringHelper *name, unsigned int value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
+  void write(const __FlashStringHelper *name, long value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
+  void write(const __FlashStringHelper *name, unsigned long value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
+  void write(const __FlashStringHelper *name, float value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
+  void write(const __FlashStringHelper *name, double value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
+  void write(const __FlashStringHelper *name, const char *value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
+  void write(const __FlashStringHelper *name, const __FlashStringHelper *value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
+  void write(const __FlashStringHelper *name, decltype(nullptr), unsigned long long timestamp) { write(findSignalIndex(name), static_cast<const char *>(nullptr), timestamp); }
+
+  // Preserve null-name calls without ambiguity between the RAM and flash overloads.
+  template<class Name, class T, class = typename blaeck_detail::NullName<Name>::type>
+  auto write(Name, T value)
+      -> decltype(this->write(static_cast<const char *>(nullptr), value), void())
+  {
+    write(static_cast<const char *>(nullptr), value);
+  }
+  template<class Name, class T, class = typename blaeck_detail::NullName<Name>::type>
+  auto write(Name, T value, unsigned long long timestamp)
+      -> decltype(this->write(static_cast<const char *>(nullptr), value, timestamp), void())
+  {
+    write(static_cast<const char *>(nullptr), value, timestamp);
+  }
 
   // ----- Data Write All -----
 
@@ -4129,7 +4284,7 @@ protected:
   SignalMeta *_ensureSignalMeta(int16_t index);
 #endif
   // Signal names are read only through these helpers, which handle flash and RAM names.
-  bool _signalNameEquals(const Signal &s, const char *name) const;
+  bool _signalNameEquals(const Signal &s, const char *name, bool nameInFlash = false) const;
   // Where _emitSignalName() sends the bytes: into the frame or into the schema hash.
   enum NameSink : uint8_t
   {
@@ -4199,11 +4354,14 @@ protected:
 #endif
   // Add a signal and return its index, or -1 if it was rejected. All addSignal() overloads
   // end up here.
-  int _registerSignal(const char *signalName, dataType type, void *address);
-  int _registerSignal(const __FlashStringHelper *signalName, dataType type, void *address);
+  int _registerSignal(const char *signalName, dataType type, void *address, bool textInFlash = false);
+  int _registerSignal(const __FlashStringHelper *signalName, dataType type, void *address, bool textInFlash = false);
   // Exactly one of ram and flash is non-null.
   int _registerSignalCommon(const char *ram, const __FlashStringHelper *flash,
-                            dataType type, void *address);
+                            dataType type, void *address, bool textInFlash);
+  void _writeSignalText(int signalIndex, const void *value, bool inFlash, unsigned long long timestamp);
+  void _emitTextBytes(const void *text, bool inFlash, size_t length);
+  void _writeCommandState(const char *command, bool inFlash);
   // Registers a command and returns its table index, or -1 if it was rejected (counted, and
   // reported on the debug stream).
   int _registerCommand(const char *command, BlaeckCommandHandler handler, uint8_t kind);
@@ -4213,7 +4371,10 @@ protected:
   // name reuses its slot with the metadata cleared. Exactly one of channelName and flashName
   // is set; a flash name is kept as a pointer, a RAM name is copied.
   int _registerStateChannel(const char *channelName, const __FlashStringHelper *flashName, dataType valueType = Blaeck_string,
-                              const void *value = nullptr);
+                              const void *value = nullptr, bool textInFlash = false);
+  void _writeStateText(const char *name, bool nameInFlash, const char *text, bool textInFlash);
+  void _writeStateCurrent(const char *name, bool nameInFlash);
+  void _writeStateNumber(const char *channelName, long s, unsigned long u, double d, bool nameInFlash = false);
   // As _registerStateChannel(). A redeclared event channel keeps its types.
   int _registerEventChannel(const char *channelName, const __FlashStringHelper *flashName, const __FlashStringHelper *eventTypes);
   // Adds one event type per comma-separated field, in order.
@@ -4608,7 +4769,7 @@ protected:
   bool _ensureStateChannelTable();
   // A text channel's current value, or nullptr if it has none. buf is used only when an
   // option index has to be turned into its name.
-  const char *_channelText(const StateChannelEntry &e, char *buf, byte bufSize) const;
+  const char *_channelText(const StateChannelEntry &e, char *buf, byte bufSize, bool *inFlash = nullptr) const;
 
   // Prints prefix and the channel's name to the debug stream, if there is one.
   void _debugChannel(const __FlashStringHelper *prefix, const StateChannelEntry &e) const;
@@ -4627,13 +4788,12 @@ protected:
   static bool _flashStringEqualsName(const __FlashStringHelper *flashName, const char *name);
   // Sends a state value. writeState() checks the channel first; writeCommandState() calls this
   // directly for a command's own channel.
-  void _writeStateFrame(int channelIndex, const char *text, const byte *pushed = nullptr, byte pushedLen = 0);
+  void _writeStateFrame(int channelIndex, const char *text, const byte *pushed = nullptr, byte pushedLen = 0, bool textInFlash = false);
   // A pushed number converted to the channel's type, as bytes.
   byte _valueBytes(dataType declared, long s, unsigned long u, double d, byte *out);
   // Finds the channel for a writeState() push, or returns -1 (with a warning) if the push is
   // refused.
-  int _stateChannelForPush(const char *channelName, bool wantText);
-  void _writeStateNumber(const char *channelName, long s, unsigned long u, double d);
+  int _stateChannelForPush(const char *channelName, bool wantText, bool nameInFlash = false);
 #endif
 #if BLAECK_ENABLE_EVENTS
   typedef blaeck_detail::EventChannelEntry EventChannelEntry;

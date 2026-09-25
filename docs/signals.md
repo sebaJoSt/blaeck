@@ -36,7 +36,7 @@ These types are accepted:
 |---|---|
 | Numbers | `byte`, `short`, `unsigned short`, `int`, `unsigned int`, `long`, `unsigned long`, `float`, `double` |
 | Boolean | `bool` |
-| Text | `char` array |
+| Text | `char` array, ordinary string literal, or `F()` literal |
 
 For text, pass the buffer itself, not its address:
 
@@ -48,10 +48,6 @@ device.addSignal(F("Status"), status);
 
 ## Naming a signal
 
-Wrap the name in `F()`. The name then stays in flash and the signal stores a 2-byte pointer
-instead of a copy of the text. On an Uno or a Nano with many signals this is the difference
-between fitting and not fitting.
-
 For a series of signals that share a name and end in a number, use `withNameSuffix()`:
 
 ```cpp
@@ -61,8 +57,7 @@ for (int i = 0; i < 8; i++)
 }
 ```
 
-This registers `Sine_1` to `Sine_8`. The prefix stays in flash and the digits are produced when
-the name is sent, so the names cost no RAM at all. The suffix is a number from 0 to 255.
+This registers `Sine_1` to `Sine_8`. The suffix is a number from 0 to 255.
 
 If you have to build a name at runtime, pass the buffer. It is copied, so you can reuse the
 buffer immediately:

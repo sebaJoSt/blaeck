@@ -846,6 +846,307 @@ static void commandBufferBoundaries(bool tcp, bool buffered)
   expectAck(oversized.substr(0, capacity - 1 - prefix.size()), 42, BLAECK_ACK_TRUNCATED);
 }
 
+static void flashSignalText(bool buffered)
+{
+  for (int naming = 0; naming < 3; ++naming)
+  for (bool timestamped : {false, true})
+  for (bool tracking : {false, true})
+  {
+    FakeStream stream;
+    Capture debug;
+    Blaeck device;
+    device.begin(stream).withSignals(1).withDebugStream(&debug);
+    device.setBufferedWrites(buffered);
+    device.setTimestampMode(BLAECK_MICROS);
+    hostMillis() = 0;
+    hostMicros() = 99;
+    char ram[32] = "Idle";
+    auto signal = naming == 0 ? device.addSignal("Status", F("Idle"))
+                             : device.addSignal(F("Status"), F("Idle"));
+    signal.writeAtInterval(BLAECK_OFF);
+    if (tracking)
+      signal.writeOnChange(BLAECK_ANY_CHANGE, 0);
+    assert(device.findSignalIndex("Status") == 0);
+    assert(device.findSignalIndex(F("Status")) == 0);
+    assert(device.findSignalIndex(F("Missing")) == -1);
+    assert(device.findSignalIndex(nullptr) == -1);
+    const auto expectText = [&](const std::string &expected, uint64_t timestamp)
+    {
+      const auto frames = takeData(stream.data.output, {-1});
+      assert(frames.size() == 1 && frames[0].values == std::vector<std::string>({expected}));
+      assert(frames[0].timestamp == timestamp);
+    };
+    device.writeAllData();
+    expectText("Idle", 99);
+    const __FlashStringHelper *flash = F("Running");
+    const uint64_t explicitTime = timestamped ? 123456 : 99;
+    if (naming == 0)
+    {
+      if (timestamped) device.write("Status", flash, explicitTime);
+      else device.write("Status", flash);
+    }
+    else if (naming == 1)
+    {
+      if (timestamped) device.write(F("Status"), flash, explicitTime);
+      else device.write(F("Status"), flash);
+    }
+    else
+    {
+      if (timestamped) device.write(0, flash, explicitTime);
+      else device.write(0, flash);
+    }
+    expectText("Running", explicitTime);
+    device.writeIfDue();
+    expectData(stream, {-1}, {});
+
+    strcpy(ram, "Running");
+    if (naming == 0)
+    {
+      if (timestamped) device.write("Status", ram, explicitTime);
+      else device.write("Status", ram);
+    }
+    else if (naming == 1)
+    {
+      if (timestamped) device.write(F("Status"), ram, explicitTime);
+      else device.write(F("Status"), ram);
+    }
+    else
+    {
+      if (timestamped) device.write(0, ram, explicitTime);
+      else device.write(0, ram);
+    }
+    expectText("Running", explicitTime);
+    device.writeIfDue();
+    expectData(stream, {-1}, {});
+    strcpy(ram, "Changed");
+    if (tracking)
+    {
+      device.writeIfDue();
+      expectText("Changed", 99);
+    }
+    device.write(F("Status"), F("Running"));
+    expectText("Running", 99);
+    strcpy(ram, "Not retained now");
+    device.writeIfDue();
+    expectData(stream, {-1}, {});
+    command(device, stream, "<BLAECK.WRITE_DATA>");
+    expectText("Running", 99);
+
+    device.write(F("Status"), nullptr);
+    expectText("", 99);
+    device.write("Status", nullptr, 456);
+    expectText("", 456);
+    device.write(0, nullptr);
+    expectText("", 99);
+    device.write(0, nullptr, 457);
+    expectText("", 457);
+    device.write(F("Status"), F(""));
+    expectText("", 99);
+    device.write(nullptr, F("Ignored"));
+    device.write(F("Missing"), 42);
+    expectData(stream, {-1}, {});
+
+    signal.writeAtInterval(BLAECK_ON_CHANGE, BLAECK_ANY_CHANGE);
+    command(device, stream, "<BLAECK.ACTIVATE,1000>");
+    device.writeIfDue();
+    expectText("", 99);
+    command(device, stream, "<BLAECK.PAUSE_WRITES,FOREVER>");
+    device.write(F("Status"), F("Paused"));
+    expectData(stream, {-1}, {});
+    command(device, stream, "<BLAECK.RESUME_WRITES>");
+    hostMillis() = 1000;
+    device.writeIfDue();
+    expectText("Paused", 99);
+    command(device, stream, "<BLAECK.PAUSE_WRITES,FOREVER>");
+    strcpy(ram, "Paused");
+    device.write(F("Status"), ram);
+    command(device, stream, "<BLAECK.RESUME_WRITES>");
+    hostMillis() = 2000;
+    device.writeIfDue();
+    expectData(stream, {-1}, {}); // Equal RAM text matches the previous flash snapshot.
+    command(device, stream, "<BLAECK.PAUSE_WRITES,FOREVER>");
+    device.write(F("Status"), F("Paused"));
+    command(device, stream, "<BLAECK.RESUME_WRITES>");
+    hostMillis() = 3000;
+    device.writeIfDue();
+    expectData(stream, {-1}, {}); // Equal flash text does not compare pointer addresses.
+    assert(!device.hasRejections());
+
+    device.clearAllSignals();
+    strcpy(ram, "Reused RAM");
+    device.addSignal(F("Status"), ram);
+    device.writeAllData();
+    expectText("Reused RAM", 99); // Reused slots clear the flash flag.
+  }
+}
+
+static void flashNamesAndFailures()
+{
+  FakeStream stream;
+  Capture debug;
+  Blaeck device;
+  device.begin(stream).withSignals(2).withDebugStream(&debug);
+  float value = 0;
+  device.addSignal(F("VeryLongSignalNameBeyondAnyTemporaryNameBuffer_"), &value).withNameSuffix(255);
+  assert(device.findSignalIndex(F("VeryLongSignalNameBeyondAnyTemporaryNameBuffer_255")) == 0);
+  assert(device.findSignalIndex(F("VeryLongSignalNameBeyondAnyTemporaryNameBuffer_25")) == -1);
+  device.write(F("VeryLongSignalNameBeyondAnyTemporaryNameBuffer_255"), 3.5f);
+  assert(value == 3.5f);
+  device.write(F("VeryLongSignalNameBeyondAnyTemporaryNameBuffer_255"), false, 99);
+  assert(value == 0);
+  device.write(nullptr, 42);
+  device.write(nullptr, 42, 99);
+  takeData(stream.data.output, {4});
+  auto text = device.addSignal("Text", F("a"));
+  text.writeAtInterval(BLAECK_OFF).writeOnChange(BLAECK_ANY_CHANGE, 0);
+  device.writeIfDue();
+  expectData(stream, {4, -1}, {1});
+  failAfter = 0;
+  device.write(F("Text"), F("Longer flash text"));
+  failAfter = -1;
+  expectData(stream, {4, -1}, {});
+  assert(debug.text.find("No RAM for signal text snapshot") != std::string::npos);
+  device.writeIfDue();
+  auto frames = takeData(stream.data.output, {4, -1});
+  assert(frames.size() == 1 && frames[0].values[0] == "Longer flash text");
+  const __FlashStringHelper *longText = F(
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "tail");
+  device.write(1, longText);
+  frames = takeData(stream.data.output, {4, -1});
+  assert(frames.size() == 1 && frames[0].values[0] == std::string(255, 'a'));
+  text.writeOnChange(BLAECK_OFF); // Also exercise direct flash reads without a snapshot.
+  device.write(1, longText);
+  frames = takeData(stream.data.output, {4, -1});
+  assert(frames.size() == 1 && frames[0].values[0] == std::string(255, 'a'));
+#if BLAECK_ENABLE_STATE_CHANNELS
+  device.addStateChannel(F("Long"), BlaeckText);
+  debug.text.clear();
+  device.writeState(F("Long"), longText);
+  auto state = commandFramePayload(stream.data.output, 0x95, 0);
+  assert(state.size() == 261 && static_cast<byte>(state[5]) == 255);
+  assert(state.substr(6) == std::string(255, 'a'));
+  assert(debug.text.find("State text truncated") != std::string::npos);
+  stream.data.output.clear();
+  debug.text.clear();
+  device.writeState("Long", longText);
+  state = commandFramePayload(stream.data.output, 0x95, 0);
+  assert(state.substr(6) == std::string(255, 'a'));
+  assert(debug.text.empty()); // Truncation is still warned only once.
+#endif
+}
+
+template<class T>
+static void flashNumericWrites()
+{
+  FakeStream stream;
+  Blaeck device;
+  device.begin(stream);
+  T value = 0;
+  device.addSignal(F("Value"), &value);
+  device.write(F("Value"), static_cast<T>(1));
+  assert(value == 1);
+  device.write(F("Value"), static_cast<T>(0), 123);
+  assert(value == 0);
+  device.addStateChannel(F("State"), &value);
+  device.writeState(F("State"), static_cast<T>(1));
+#if BLAECK_ENABLE_STATE_CHANNELS
+  assert(value == 1);
+#else
+  assert(value == 0);
+#endif
+}
+
+static const char *flashTestGetter() { return "Getter"; }
+
+static void flashStateText(bool buffered)
+{
+  FakeStream stream;
+  Capture debug;
+  Blaeck device;
+  device.begin(stream).withStateChannels(8).withDebugStream(&debug);
+  device.setBufferedWrites(buffered);
+  device.addStateChannel("Bound", F("Initial"));
+  device.addStateChannel(F("FlashBound"), F("Initial"));
+  device.addStateChannel(F("Pushed"), BlaeckText);
+  device.addStateChannel(F("Getter"), BlaeckText).withStateText(flashTestGetter);
+  device.addStateChannel(F("LongStateChannelNameThatExceedsTheNormalRamNameLimit"), F("Long"));
+  float number = 0;
+  device.addStateChannel(F("Numeric"), &number);
+  const auto expectText = [&](const std::string &value)
+  {
+#if BLAECK_ENABLE_STATE_CHANNELS
+    const auto payload = commandFramePayload(stream.data.output, 0x95, 0);
+    assert(payload.size() == 6 + value.size());
+    assert(static_cast<byte>(payload[5]) == value.size());
+    assert(payload.substr(6) == value);
+#else
+    assert(stream.data.output.empty());
+    (void)value;
+#endif
+    stream.data.output.clear();
+  };
+  device.writeState(F("Bound"));
+  expectText("Initial");
+  device.writeState("FlashBound");
+  expectText("Initial");
+  device.writeState(F("LongStateChannelNameThatExceedsTheNormalRamNameLimit"));
+  expectText("Long");
+  device.writeState(F("Getter"));
+  expectText("Getter");
+  device.writeState("Pushed", F("Flash"));
+  expectText("Flash");
+  device.writeState(F("Pushed"), F("Flash"));
+  expectText("Flash");
+  char ram[] = "RAM";
+  device.writeState(F("Pushed"), ram);
+  expectText("RAM");
+  device.writeState(F("Pushed")); // A push does not bind or retain a value.
+  assert(stream.data.output.empty());
+  device.writeState("Pushed", nullptr);
+  device.writeState(F("Pushed"), nullptr);
+  assert(stream.data.output.empty());
+  device.writeState(F("Pushed"), F(""));
+  expectText("");
+  device.writeState(F("Bound"), F("Cannot replace bound text"));
+  device.writeState(F("Getter"), F("Cannot replace a getter"));
+  assert(stream.data.output.empty());
+  device.addStateChannel(F("Bound"), ram);
+  device.writeState("Bound");
+  expectText("RAM");
+  device.addStateChannel("Bound", F("Again"));
+  device.writeState(F("Bound"));
+  expectText("Again");
+  device.writeState(F("Numeric"), 12.5);
+#if BLAECK_ENABLE_STATE_CHANNELS
+  assert(number == 12.5f);
+  stream.data.output.clear();
+  device.writeStateChannels();
+  const auto catalog = commandFramePayload(stream.data.output, 0x90, 0);
+  assert(catalog.find("Again") != std::string::npos && catalog.find("Initial") != std::string::npos);
+  stream.data.output.clear();
+#endif
+  device.onTextCommand("SET_TEXT", onPing).withOwnState(F("Bound"), ram);
+  device.writeCommandState(F("SET_TEXT"));
+#if BLAECK_ENABLE_STATE_CHANNELS && BLAECK_ENABLE_COMMAND_META
+  expectText("RAM"); // Taking over a flash-bound slot resets its storage flag.
+  device.writeCommandState("SET_TEXT");
+  expectText("RAM");
+#else
+  assert(stream.data.output.empty());
+#endif
+  device.writeCommandState(nullptr);
+  device.writeCommandState(F("Missing"));
+  device.clearAllCommandHandlers();
+  device.clearAllStateChannels();
+  device.addStateChannel(F("Reused"), F("New"));
+  device.writeState(F("Reused"));
+  expectText("New");
+}
+
 static void beginOnlyOnce()
 {
   for (bool tcp : {false, true})
@@ -1818,6 +2119,21 @@ static void reportingFrameClassification(bool buffered)
 
 int main()
 {
+  flashSignalText(false);
+  flashSignalText(true);
+  flashNamesAndFailures();
+  flashStateText(false);
+  flashStateText(true);
+  flashNumericWrites<bool>();
+  flashNumericWrites<byte>();
+  flashNumericWrites<short>();
+  flashNumericWrites<unsigned short>();
+  flashNumericWrites<int>();
+  flashNumericWrites<unsigned int>();
+  flashNumericWrites<long>();
+  flashNumericWrites<unsigned long>();
+  flashNumericWrites<float>();
+  flashNumericWrites<double>();
   if (!BLAECK_TEST_REPORTING_ONLY)
   {
     for (bool tcp : {false, true})
