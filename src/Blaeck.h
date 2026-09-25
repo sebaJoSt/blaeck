@@ -476,6 +476,10 @@ public:
     BLAECK_COMMAND_MAX_CHARS_DEFAULT bytes, 128 on a Mega. A connection beyond the
     limit is closed at once. Set it before the first read(); later it is refused.
 
+    @note    Keep at least 2, so a host reconnecting after a dropped link finds a
+             free slot and takes over from its dead connection. With 1, it waits
+             until the network stack gives the dead connection up.
+
     @param   count  1 to 255. The default is 4.
     @return  The same handle, for chaining.
 
