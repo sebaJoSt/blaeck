@@ -121,7 +121,8 @@ Three calls do the work:
 
 - `begin(Serial)` hands blaeck the serial port you opened. On a board with more than one
   port you can pass `Serial1` instead. For TCP, `begin(server)` takes the listening server
-  you started. `.withSignals(2)` reserves room for two signals.
+  you started. Call `begin()` only once per instance, normally in `setup()`; even
+  `end()` does not allow another call. `.withSignals(2)` reserves room for two signals.
 - `addSignal(...)` registers a variable. blaeck keeps a pointer to it and reads it
   whenever it sends data, so you only have to keep the variable up to date.
 - `tick()` reads incoming commands and sends the values when they are due. Call it in every
@@ -164,7 +165,7 @@ Start with **Basic**, then **Signals** and **Commands**. Follow with **StateChan
 | [Basic](examples/Basic) | The smallest sketch that logs two values |
 | [Signals](examples/Signals) | Numeric, boolean and text signals, metadata, and numbered arrays |
 | [Commands](examples/Commands) | Plain commands and typed dashboard controls |
-| [StateChannels](examples/StateChannels) | Values shown but never logged, from variables, getters or explicit writes |
+| [StateChannels](examples/StateChannels) | Device status and diagnostics, displayed without being logged |
 | [EventChannels](examples/EventChannels) | Declaring and reporting occurrences |
 | [WaveformGenerator](examples/WaveformGenerator) | A complete, controllable waveform dashboard |
 | [WriteModes](examples/WriteModes) | Interval, on-change, and explicit signal writes |

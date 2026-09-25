@@ -17,7 +17,10 @@ Version 7.0.0 is in development; setting its metadata does not publish a release
   user-supplied server, never an implicit dependency. Require `accept()`; do not substitute
   `available()`. Keep concrete client ownership in the adapter and session state in Blaeck.
 - Streams use begin(stream) by reference. Select buffering defaults on attachment but
-  preserve explicit overrides across later begin() calls.
+  preserve explicit overrides set before begin().
+- begin() is allowed once per instance, including failed initialization. Later calls,
+  even after end(), report an error and return an inert setup handle without changing
+  the transport or catalogs. TCP reconnects and host takeovers do not call begin().
 - Both connections report lowercase `blaeck` version 7.0.0. Keep the class/header
   `Blaeck`/`Blaeck.h` and uppercase BLAECK protocol framing and command names unchanged.
 - TCP has one host at a time. A connection's first `BLAECK.*` command makes it the host; the

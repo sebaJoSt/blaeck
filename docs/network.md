@@ -35,10 +35,15 @@ fixed once the first `read()` or `tick()` has run.
 The server must outlive its attachment to the device. Only one consumer may accept clients from
 it. Separate Blaeck objects can use separate servers, with independent client slots,
 catalogs and timing. `device.end()` closes accepted clients and releases transport storage
-without stopping or deleting the listening server. Destruction does the same. Calling
-`begin(otherServer)` first detaches the old server this way; explicit teardown does not
-invoke the disconnect callbacks. A new `begin()` retains the previous client limit unless
-the new chain changes it. Register signals again after `begin()`, as before.
+without stopping or deleting the listening server. Destruction does the same; explicit
+teardown does not invoke the disconnect callbacks.
+
+Call `begin()` only once per Blaeck instance, normally in `setup()`. A second call,
+whether for the same transport or a different one, is rejected without changing the
+transport, signals, or settings. Its returned handle ignores all chained settings.
+`end()` does not permit another `begin()`, and failed initialization cannot be retried
+on the same instance. TCP reconnects and host takeovers need no new `begin()`; keep
+calling `tick()` on the existing instance.
 
 ### Optional TelnetStream
 
@@ -81,10 +86,12 @@ reuse these slots; Blaeck does not allocate a new client wrapper on each accept.
 libraries may still allocate their own socket storage.
 
 `transportError()` returns `None`, `NotStarted`, `OutOfMemory`, `InvalidClientCount`,
-`ClientLimitLocked`, or `NotServer`. A zero client count is rejected, retaining the previous
-limit; calling `.withClients()` after `begin(stream)` reports `NotServer`.
+`ClientLimitLocked`, `NotServer`, or `BeginAlreadyCalled`. A zero client count is
+rejected, retaining the previous limit; calling `.withClients()` after `begin(stream)`
+reports `NotServer`.
 Allocation failure is latched: no clients are accepted and no tight allocation retry loop
-runs.
+runs. A repeated `begin()` reports `BeginAlreadyCalled`, unless an existing
+`OutOfMemory` error is latched.
 
 Errors are reported once to a configured debug stream when possible. A terminal cannot
 report an allocation failure that prevented it from being accepted, so use a separate

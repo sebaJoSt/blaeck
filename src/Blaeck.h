@@ -3822,7 +3822,23 @@ public:
   */
   bool isBufferedWrites() const { return _bufferedWrites; }
 
-  // Open the stream first. The caller retains ownership and keeps it alive until end().
+  /*!
+    @brief   Attaches the library to an already-open Stream.
+
+    Call begin() only once per instance, normally in setup(). Further calls, even
+    after end(), report BeginAlreadyCalled and leave the transport and catalogs
+    unchanged. Their returned handles ignore all chained settings. A latched
+    OutOfMemory error takes precedence.
+    The caller owns the stream and keeps it alive until end().
+
+    @param   stream  The Stream opened by the sketch.
+    @return  A setup handle; an ignored handle if begin() was already called.
+
+    @code
+      Serial.begin(115200);
+      device.begin(Serial).withSignals(2);
+    @endcode
+  */
   BlaeckBeginRef begin(Stream &stream);
 
   /*!
@@ -3833,6 +3849,10 @@ public:
     a BLAECK. command, such as <BLAECK.GET_DEVICES>, and receives frames from then on.
     Every other connection is a terminal: it receives the text sent to Terminal, and
     its commands run but aren't answered.
+    Call begin() only once per instance, even if initialization fails or end() is
+    called. Further calls report BeginAlreadyCalled without changing the transport
+    or catalogs, and their handles ignore chained settings. A latched OutOfMemory
+    error takes precedence. Reconnecting TCP clients does not require another begin().
 
     @param   server  A server with accept() returning a Client-derived value.
     @return  A handle for setting the number of connections, table sizes and a debug
@@ -3849,7 +3869,8 @@ public:
   template<class Server>
   auto begin(Server &server) -> decltype(server.accept(), BlaeckBeginRef(this))
   {
-    end();
+    if (!_beginOnce())
+      return BlaeckBeginRef(nullptr);
     _resetSignalCatalog();
     _tcpSelected = true;
     _setBufferedWritesDefault(BLAECK_TCP_BUFFERED_WRITES_DEFAULT);
@@ -3866,6 +3887,7 @@ public:
     @brief   Detaches the stream or closes accepted TCP clients.
 
     Never stops the caller's stream or server. Also called by the destructor.
+    Safe to call repeatedly, but does not allow another begin() on this instance.
 
     @code
       device.end();
@@ -3880,7 +3902,8 @@ public:
     OutOfMemory,
     InvalidClientCount,
     ClientLimitLocked,
-    NotServer
+    NotServer,
+    BeginAlreadyCalled
   };
 
   /*!
@@ -4629,6 +4652,7 @@ private:
   blaeck::detail::ServerAdapter *_adapter = nullptr;
   TransportError _transportError = TransportError::NotStarted;
   bool _transportErrorReported = false;
+  bool _beginCalled = false;
   byte _maxClients = 4;
   // The connection whose command is being handled.
   byte _requester = 0;
@@ -4648,6 +4672,7 @@ private:
   bool _hostConnected() const;
   void _setMaxClients(byte count);
   void _setTransportError(TransportError error);
+  bool _beginOnce();
   void _reportTransportError();
 
   friend class BlaeckTerminal;

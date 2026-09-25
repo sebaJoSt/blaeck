@@ -299,29 +299,25 @@ static void sessionBehavior(bool buffered)
 static void lifecycleAndErrors()
 {
   PlainServer first;
-  FakeServer<> second, third;
-  SocketState a, b, c;
+  FakeServer<> second;
+  SocketState a, b;
   Capture debug;
   {
     Blaeck one, two;
     first.pending.push_back(&a);
     second.pending.push_back(&b);
-    one.begin(first).withClients(1);
+    auto handle = one.begin(first).withClients(1).withDebugStream(&debug);
     two.begin(second).withClients(1);
     one.read();
     two.read();
     one.Terminal.print("one");
     two.Terminal.print("two");
     assert(a.output == "one" && b.output == "two");
-    auto handle = one.begin(third).withClients(1).withDebugStream(&debug);
-    assert(!a.open && b.open);
-    third.pending.push_back(&c);
-    one.read();
     handle.withClients(2);
     assert(one.transportError() == Blaeck::TransportError::ClientLimitLocked);
     assert(debug.text.find("already set up") != std::string::npos);
   }
-  assert(!b.open && !c.open);
+  assert(!a.open && !b.open);
 
   // Adapter allocation, session-array allocation, and client-array allocation failures.
   for (int stage = 0; stage < 3; ++stage)
@@ -345,14 +341,24 @@ static void lifecycleAndErrors()
     assert(before == allocations); // Failure is latched, not a tight allocation retry loop.
     device.begin(server).withClients(1);
     device.read();
-    assert(device.transportError() == Blaeck::TransportError::None);
+    assert(device.transportError() == Blaeck::TransportError::OutOfMemory);
+    assert(before == allocations && server.accepts == 0);
+    FakeStream stream;
+    device.begin(stream);
+    device.read();
+    assert(device.transportError() == Blaeck::TransportError::OutOfMemory);
+    assert(stream.data.output.empty() && before == allocations);
+    device.end();
+    device.begin(stream);
+    assert(device.transportError() == Blaeck::TransportError::BeginAlreadyCalled);
   }
   Blaeck device;
   device.begin(first).withClients(0).withDebugStream(&debug);
   assert(device.transportError() == Blaeck::TransportError::InvalidClientCount);
-  device.begin(first).withClients(255);
-  device.read(); // Regression: byte-sized round-robin counter would loop forever at 255.
-  assert(device.transportError() == Blaeck::TransportError::None);
+  Blaeck manyClients;
+  manyClients.begin(second).withClients(255);
+  manyClients.read(); // Regression: byte-sized round-robin counter would loop forever at 255.
+  assert(manyClients.transportError() == Blaeck::TransportError::None);
 }
 
 static void detachFromCallbacks()
@@ -366,28 +372,33 @@ static void detachFromCallbacks()
   server.pending.push_back(&a);
   device.read();
   assert(!a.open && device.transportError() == Blaeck::TransportError::NotStarted);
-  device.setClientConnectedCallback(nullptr);
-  device.setClientDisconnectedCallback(detachInCallback);
-  device.begin(server);
+  Blaeck disconnected;
+  callbackDevice = &disconnected;
+  disconnected.setClientDisconnectedCallback(detachInCallback);
+  disconnected.begin(server);
   server.pending.push_back(&b);
-  device.read();
+  disconnected.read();
   b.open = false;
-  device.read();
-  assert(device.transportError() == Blaeck::TransportError::NotStarted);
+  disconnected.read();
+  assert(disconnected.transportError() == Blaeck::TransportError::NotStarted);
 
   // Detaching from the disconnect callback of a host takeover.
   SocketState first, second;
-  device.begin(server);
+  Blaeck takeover;
+  callbackDevice = &takeover;
+  takeover.setClientDisconnectedCallback(detachInCallback);
+  takeover.begin(server);
   server.pending = {&first, &second};
-  device.read();
-  device.read();
+  takeover.read();
+  takeover.read();
   first.input = "<BLAECK.GET_DEVICES>";
-  device.read();
+  takeover.read();
   first.output.clear();
   second.input = "<BLAECK.WRITE_SYMBOLS>";
-  device.read();
+  takeover.read();
   assert(!first.open && !second.open && second.output.empty());
-  assert(device.transportError() == Blaeck::TransportError::NotStarted);
+  assert(takeover.transportError() == Blaeck::TransportError::NotStarted);
+  callbackDevice = nullptr;
 }
 
 static void unifiedConnections()
@@ -397,7 +408,7 @@ static void unifiedConnections()
   SocketState host;
   Blaeck device;
   size_t before = allocations;
-  device.begin(stream);
+  auto handle = device.begin(stream);
   assert(allocations == before); // Stream attachment creates no TCP adapter or client array.
   assert(device.isBufferedWrites() == BLAECK_SERIAL_BUFFERED_WRITES_DEFAULT);
   stream.data.input = "<BLAECK.GET_DEVICES><BLAECK.GET_DEVICES>";
@@ -409,31 +420,25 @@ static void unifiedConnections()
   device.Terminal.print("text");
   assert(stream.data.output == "text");
 
-  stream.data.input = "<BLAECK.GET_";
-  device.read();
-  device.begin(server).withClients(1);
-  assert(device.isBufferedWrites() == BLAECK_TCP_BUFFERED_WRITES_DEFAULT);
-  assert(stream.data.open);
-  server.pending.push_back(&host);
-  device.read();
-  device.begin(stream);
+  {
+    Blaeck tcp;
+    tcp.begin(server).withClients(1);
+    assert(tcp.isBufferedWrites() == BLAECK_TCP_BUFFERED_WRITES_DEFAULT);
+    server.pending.push_back(&host);
+    tcp.read();
+  }
   assert(!host.open && stream.data.open);
-  assert(device.isBufferedWrites() == BLAECK_SERIAL_BUFFERED_WRITES_DEFAULT);
-  stream.data.output.clear();
-  stream.data.input = "DEVICES>";
-  device.read();
-  assert(stream.data.output.empty()); // A previous attachment's partial command was discarded.
 
-  device.setBufferedWrites(false);
-  device.begin(server);
-  assert(!device.isBufferedWrites());
-  device.begin(stream);
-  assert(!device.isBufferedWrites());
-  device.setBufferedWrites(true);
-  device.begin(server);
-  device.begin(stream);
-  assert(device.isBufferedWrites());
-  auto handle = device.begin(stream);
+  for (bool buffered : {false, true})
+  {
+    Blaeck serial, tcp;
+    serial.setBufferedWrites(buffered);
+    tcp.setBufferedWrites(buffered);
+    serial.begin(stream);
+    tcp.begin(server);
+    assert(serial.isBufferedWrites() == buffered);
+    assert(tcp.isBufferedWrites() == buffered);
+  }
   handle.withClients(1);
   assert(device.transportError() == Blaeck::TransportError::NotServer);
   device.end();
@@ -625,6 +630,133 @@ static void command(Blaeck &device, FakeStream &stream, const char *text)
 {
   stream.data.input = text;
   device.read();
+}
+
+static void beginOnlyOnce()
+{
+  for (bool tcp : {false, true})
+  {
+    FakeStream stream;
+    FakeServer<> server;
+    SocketState host;
+    Blaeck device;
+    auto setup = tcp ? device.begin(server) : device.begin(stream);
+    if (tcp)
+      setup.withClients(1);
+    const size_t before = allocations;
+    if (tcp)
+      device.begin(server).withClients(0);
+    else
+      device.begin(stream).withClients(0);
+    assert(allocations == before);
+    assert(device.transportError() == Blaeck::TransportError::BeginAlreadyCalled);
+    SocketState &io = tcp ? host : stream.data;
+    if (tcp)
+      server.pending.push_back(&host);
+    io.input = "<BLAECK.GET_DEVICES>";
+    device.read(); // Rejection before the first read must not block initial setup.
+    assert(io.output.find("blaeck") != std::string::npos);
+    device.end();
+    Capture debug;
+    assert(device.printTransportError(&debug));
+    assert(debug.text.find("transport ended") != std::string::npos);
+  }
+
+  for (bool tcp : {false, true})
+  for (bool nextTcp : {false, true})
+  for (bool ended : {false, true})
+  for (bool buffered : {false, true})
+  {
+    hostMillis() = 0;
+    FakeStream stream, otherStream;
+    FakeServer<> server, otherServer;
+    SocketState host;
+    Capture debug, ignoredDebug;
+    Blaeck device;
+    device.end(); // Teardown before initialization does not consume begin().
+    auto setup = tcp ? device.begin(server) : device.begin(stream);
+    setup.withSignals(3).withDebugStream(&debug);
+    if (tcp)
+    {
+      setup.withClients(2);
+      server.pending.push_back(&host);
+    }
+    device.setBufferedWrites(buffered);
+    float periodic = 10, change = 20, extra = 30;
+    device.addSignal(F("Interval"), &periodic);
+    device.addSignal(F("OnChange"), &change)
+        .writeAtInterval(BLAECK_OFF).writeOnChange(1);
+    SocketState &io = tcp ? host : stream.data;
+    const auto receive = [&](const char *text)
+    {
+      io.input += text;
+      device.read();
+    };
+    receive("<BLAECK.GET_DEVICES>");
+    device.read(); // Send the boot notice before testing that it is not repeated.
+    receive("<BLAECK.ACTIVATE,1000>");
+    device.writeIfDue();
+    auto frames = takeData(io.output, {4, 4});
+    assert(frames.size() == 1 && frames[0].ids == std::vector<int>({0, 1}));
+    receive("<BLAECK.PAUSE_WRITES,FOREVER>");
+    receive("<BLAECK.RESUME_");
+    io.output.clear();
+
+    if (ended)
+    {
+      device.end();
+      device.end();
+    }
+    const size_t before = allocations;
+    auto rejected = nextTcp ? device.begin(otherServer) : device.begin(otherStream);
+    rejected.withClients(1).withSignals(1).withStateChannels(0)
+        .withEventChannels(0).withEventTypes(0).withCommands(0)
+        .withDebugStream(&ignoredDebug);
+    assert(allocations == before);
+    assert(device.transportError() == Blaeck::TransportError::BeginAlreadyCalled);
+    assert(debug.text.find("only once per instance") != std::string::npos);
+    assert(ignoredDebug.text.empty() && !device.hasRejections());
+    assert(device.SignalCount == 2 && device.findSignalIndex("OnChange") == 1);
+    assert(device.isTimedDataActive() && device.getIntervalMs() == 1000);
+    assert(device.isBufferedWrites() == buffered);
+    device.writeIfDue();
+    assert(io.output.empty());
+    assert(otherStream.data.output.empty() && otherServer.accepts == 0);
+    assert(!otherServer.noDelay);
+    if (ended)
+    {
+      device.read();
+      assert(io.output.empty() && otherServer.accepts == 0);
+      assert(tcp ? !host.open : stream.data.open);
+      continue;
+    }
+
+    assert(io.open);
+    receive("WRITES>"); // The original receiver's partial command survived.
+    device.writeIfDue();
+    assert(otherStream.data.output.empty());
+    assert(takeData(io.output, {4, 4}).empty()); // No baseline reset.
+    hostMillis() = 1000;
+    device.writeIfDue();
+    frames = takeData(io.output, {4, 4});
+    assert(frames.size() == 1 && frames[0].ids == std::vector<int>({0}));
+    assert(frames[0].flags == 0x04); // Still active, no new boot flag.
+    change = 21;
+    device.writeIfDue();
+    frames = takeData(io.output, {4, 4});
+    assert(frames.size() == 1 && frames[0].ids == std::vector<int>({1}));
+    device.addSignal(F("Extra"), &extra).writeAtInterval(BLAECK_OFF);
+    assert(device.SignalCount == 3 && !device.hasRejections());
+
+    if (tcp)
+    {
+      SocketState terminal;
+      server.pending.push_back(&terminal);
+      device.read();
+      assert(terminal.open && server.pending.empty()); // Original client limit retained.
+      device.end(); // Release before the socket double goes out of scope.
+    }
+  }
 }
 
 static void reportingPolicies(bool buffered)
@@ -1314,6 +1446,7 @@ int main()
     lifecycleAndErrors();
     detachFromCallbacks();
     unifiedConnections();
+    beginOnlyOnce();
   }
   reportingPolicies(false);
   reportingPolicies(true);

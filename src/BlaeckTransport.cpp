@@ -5,12 +5,24 @@ namespace blaeck
 
 BlaeckBeginRef Blaeck::begin(Stream &stream)
 {
-  end();
+  if (!_beginOnce())
+    return BlaeckBeginRef(nullptr);
   _resetSignalCatalog();
   _setBufferedWritesDefault(BLAECK_SERIAL_BUFFERED_WRITES_DEFAULT);
   _stream = &stream;
   _setTransportError(TransportError::None);
   return BlaeckBeginRef(this);
+}
+
+bool Blaeck::_beginOnce()
+{
+  if (_beginCalled)
+  {
+    _setTransportError(TransportError::BeginAlreadyCalled);
+    return false;
+  }
+  _beginCalled = true;
+  return true;
 }
 
 void Blaeck::end()
@@ -66,7 +78,10 @@ bool Blaeck::printTransportError(Print *out) const
   switch (_transportError)
   {
   case TransportError::NotStarted:
-    out->println(F("call begin(stream) or begin(server) before read() or tick()."));
+    if (_beginCalled)
+      out->println(F("transport ended; begin() cannot be called again on this instance."));
+    else
+      out->println(F("call begin(stream) or begin(server) before read() or tick()."));
     break;
   case TransportError::OutOfMemory:
     out->println(F("transport allocation failed; reduce client count in setup()."));
@@ -79,6 +94,9 @@ bool Blaeck::printTransportError(Print *out) const
     break;
   case TransportError::NotServer:
     out->println(F("withClients() requires begin(server), not a Stream."));
+    break;
+  case TransportError::BeginAlreadyCalled:
+    out->println(F("begin() may be called only once per instance, even after end(); call ignored."));
     break;
   case TransportError::None:
     break;

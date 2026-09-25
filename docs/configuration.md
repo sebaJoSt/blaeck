@@ -30,6 +30,12 @@ void setup()
 `device.begin(Serial)` alone gives every table the default for the board.
 Use `.withSignals(20)` on the begin chain to choose a different size.
 
+Call `begin()` once per instance, normally in `setup()`. A later call reports
+`BeginAlreadyCalled` and does not change the transport or apply its chained settings.
+This also applies after `end()` or failed initialization; a latched `OutOfMemory`
+error is retained. `end()` closes the transport; it does not reset the instance for
+another `begin()`.
+
 The defaults:
 
 | | Small AVR (2 kB SRAM or less) | Mega and larger AVR | ESP32, SAMD, RP2040, ... |
