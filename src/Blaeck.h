@@ -492,7 +492,8 @@ public:
   /*!
     @brief   Sets how many signals fit in the signal table.
 
-    Each signal takes 9 bytes of SRAM on AVR.
+    Each signal takes 11 bytes of SRAM on AVR, and a signal with a unit, icon or
+    other description 18 more.
 
     @param   count  Up to 32767. A larger literal fails the build.
     @return  The same handle, for chaining.
@@ -507,7 +508,8 @@ public:
     @brief   Sets how many state channels fit in the state channel table.
 
     Count the channels from addStateChannel() plus one for each command that uses
-    withOwnState(). Copied names and metadata need storage in addition to the table.
+    withOwnState(). Each channel takes 34 bytes of SRAM on AVR, plus any RAM strings
+    it copies.
 
     @param   count  Up to 32767. A larger literal fails the build.
     @return  The same handle, for chaining.
@@ -521,7 +523,7 @@ public:
   /*!
     @brief   Sets how many event channels fit in the event channel table.
 
-    Copied names and metadata need storage in addition to the table.
+    Each channel takes 12 bytes of SRAM on AVR, plus any RAM strings it copies.
 
     @param   count  Up to 32767. A larger literal fails the build.
     @return  The same handle, for chaining.
@@ -536,7 +538,8 @@ public:
     @brief   Sets how many event types fit, counted across all channels.
 
     All channels share one table of types, so give the total: four channels with
-    five types each need 20. Copied type strings need additional storage.
+    five types each need 20. Each type takes 6 bytes of SRAM on AVR, plus the copy
+    of a type list given as a RAM string.
 
     @param   count  Up to 32767. A larger literal fails the build.
     @return  The same handle, for chaining.
@@ -550,9 +553,9 @@ public:
   /*!
     @brief   Sets how many commands fit in the command table.
 
-    onCommand() and all the typed commands share this table. Copied metadata needs
-    additional storage. A command using withOwnState() also needs a state channel,
-    so raise withStateChannels() to match.
+    onCommand() and all the typed commands share this table. Each command takes 65
+    bytes of SRAM on AVR, plus any RAM strings it copies. A command using
+    withOwnState() also needs a state channel, so raise withStateChannels() to match.
 
     @param   count  Up to 32767. A larger literal fails the build.
     @return  The same handle, for chaining.
