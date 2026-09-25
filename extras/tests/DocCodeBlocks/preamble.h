@@ -79,6 +79,17 @@ inline bool isRunning() { return true; }
 // --- A signal a switch command can mirror ---
 bool ledState = false;
 
+// --- A second board, for the addDevice() and inDevice() blocks ---
+BlaeckDeviceRef pump;
+float pumpFlow = 0.0f;
+bool pumpAnswered = true;
+unsigned long lastPumpUptime = 0;
+// What the sketch last read from the pump, for the writeRestarted() block.
+struct
+{
+  unsigned long uptimeMs;
+} reading = {0};
+
 // Declared, not defined: a @code block on writeCommandState() shows this handler in
 // full, and the extractor emits it at file scope. Blocks are emitted in header order,
 // so one using the name earlier needs it declared here first.
@@ -99,4 +110,5 @@ inline void onSetRelay(const char *command, const char *const *params, byte para
 inline void onCalibrate(const char *command, const char *const *params, byte paramCount) {}
 inline void onDutActivate(const char *command, const char *const *params, byte paramCount) {}
 inline void onSwitchLED(const char *command, const char *const *params, byte paramCount) {}
+inline void onSetPumpSpeed(const char *command, const char *const *params, byte paramCount) {}
 inline void onAny(const char *command, const char *const *params, byte count) {}
