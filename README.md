@@ -193,7 +193,7 @@ ones:
 | `deleteSignals()` | `clearAllSignals()` |
 | `setCommandCallback()` | `onCommand()` or `onAnyCommand()` |
 | Names as `String` | `const char *` or `F()`; add `.c_str()` to a `String` |
-| `BlaeckSerialConfig.h`, `BlaeckTCPConfig.h` | One `BlaeckConfig.h`. The old files stop the build with a message |
+| `BlaeckSerialConfig.h`, `BlaeckTCPConfig.h` | One `BlaeckConfig.h`. If an old config file is still present, the build fails and asks you to move its settings there |
 
 BlaeckSerial's I2C master/slave mode has no replacement. A sketch that uses `beginMaster()` or
 `beginSlave()` should stay on BlaeckSerial 6.0.1.
