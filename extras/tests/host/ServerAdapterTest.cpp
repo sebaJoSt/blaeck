@@ -11,6 +11,10 @@
 #define BLAECK_TEST_REPORTING_ONLY 0
 #endif
 
+#ifndef BLAECK_TEST_COMMAND_BUFFER_ONLY
+#define BLAECK_TEST_COMMAND_BUFFER_ONLY 0
+#endif
+
 static_assert(!std::is_polymorphic<Blaeck>::value, "Blaeck needs no virtual transport hooks");
 static_assert(!std::is_copy_constructible<Blaeck>::value, "Blaeck owns its allocations");
 static_assert(!std::is_copy_assignable<Blaeck>::value, "Blaeck owns its allocations");
@@ -22,6 +26,28 @@ static_assert(std::is_same<
 
 static int failAfter = -1;
 static size_t allocations = 0;
+
+static_assert(BLAECK_ANY_CHANGE == 0, "Any-change is a zero numeric threshold");
+static_assert(std::is_same<decltype(BLAECK_ANY_CHANGE), const double>::value,
+              "Any-change must not select the mode overload");
+static_assert(std::is_same<
+    decltype(std::declval<BlaeckNumericSignalRef &>()
+                 .writeOnChange(0).writeOnChange(0, 0)
+                 .writeOnChange(BLAECK_ANY_CHANGE, 250).writeOnChange(BLAECK_OFF)),
+    BlaeckNumericSignalRef &>::value, "Reporting overloads preserve the handle type");
+
+template <class Handle>
+static auto acceptsModeWithInterval(int) -> decltype(
+    std::declval<Handle &>().writeOnChange(BLAECK_OFF, 100), std::true_type{});
+template <class>
+static std::false_type acceptsModeWithInterval(...);
+
+static_assert(!decltype(acceptsModeWithInterval<BlaeckNumericSignalRef>(0))::value,
+              "An enum mode plus rate limit must not become a numeric threshold");
+static_assert(!decltype(acceptsModeWithInterval<BlaeckBoolSignalRef>(0))::value,
+              "Boolean signals must also reject modes with rate limits");
+static_assert(!decltype(acceptsModeWithInterval<BlaeckTextSignalRef>(0))::value,
+              "Text signals must also reject modes with rate limits");
 
 void *operator new(size_t size, const std::nothrow_t &) noexcept
 {
@@ -156,6 +182,12 @@ public:
     _framePos = size;
     _sendBuffered();
   }
+};
+
+class ReportingProbe : public Blaeck
+{
+public:
+  const SignalReporting *reporting(int index) const { return Signals[index].Reporting; }
 };
 
 static_assert(std::is_same<
@@ -632,6 +664,132 @@ static void command(Blaeck &device, FakeStream &stream, const char *text)
   device.read();
 }
 
+static std::string commandFramePayload(const std::string &output, byte key, uint32_t messageId)
+{
+  const std::string marker = std::string("<BLAECK:") + char(key) + ':';
+  const size_t start = output.find(marker);
+  assert(start != std::string::npos);
+  size_t p = start + marker.size();
+  assert(p + 5 <= output.size());
+  uint32_t actualId;
+  memcpy(&actualId, output.data() + p, 4);
+  assert(actualId == messageId);
+  p += 4;
+  assert(output[p++] == ':');
+  const size_t end = output.find("/BLAECK>\r\n", p);
+  assert(end != std::string::npos);
+  assert(output.find(marker, end) == std::string::npos);
+  return output.substr(p, end - p);
+}
+
+static uint32_t commandHash(const std::string &value)
+{
+  uint32_t hash = 2166136261UL;
+  for (unsigned char c : value)
+    hash = (hash ^ c) * 16777619UL;
+  return hash;
+}
+
+static void commandBufferBoundaries(bool tcp, bool buffered)
+{
+  const size_t capacity = BLAECK_COMMAND_MAX_CHARS_DEFAULT;
+  assert(capacity >= 32);
+  FakeStream stream;
+  FakeServer<> server;
+  SocketState host;
+  Blaeck device;
+  if (tcp)
+  {
+    device.begin(server).withClients(1);
+    server.pending.push_back(&host);
+  }
+  else
+    device.begin(stream);
+  device.setBufferedWrites(buffered);
+  device.onCommand("Ping", onPing);
+  SocketState &io = tcp ? host : stream.data;
+  const auto receive = [&](const std::string &input)
+  {
+    io.input += input;
+    device.read();
+    assert(io.input.empty());
+  };
+  const auto expectAck = [&](const std::string &payload, uint32_t id, byte reason)
+  {
+    const std::string ack = commandFramePayload(io.output, 0xA5, id);
+    assert(ack.size() == 10);
+    uint32_t actualHash, nameHash;
+    memcpy(&actualHash, ack.data(), 4);
+    memcpy(&nameHash, ack.data() + 4, 4);
+    assert(actualHash == commandHash(payload));
+    assert(nameHash == commandHash("Ping"));
+    assert(static_cast<byte>(ack[8]) == (reason == BLAECK_ACK_OK ? 0 : 1));
+    assert(static_cast<byte>(ack[9]) == reason);
+    io.output.clear();
+  };
+  receive("<BLAECK.GET_DEVICES>");
+  device.read();
+  io.output.clear();
+#if BLAECK_ENABLE_COMMAND_META
+  receive("<BLAECK.WRITE_COMMANDS>");
+  const std::string catalog = commandFramePayload(io.output, 0xA0, 0);
+  assert(catalog.size() >= 4);
+  uint16_t advertised;
+  memcpy(&advertised, catalog.data() + 2, 2);
+  assert(advertised == capacity - 1);
+  io.output.clear();
+#endif
+
+  for (size_t length : {capacity - 1, capacity, capacity + 257})
+  {
+    pings.clear();
+    const std::string payload = "Ping," + std::string(length - 5, 'x');
+    const size_t split = capacity > 255 ? 255 : capacity / 2;
+    receive("<" + payload.substr(0, split));
+    assert(pings.empty() && io.output.empty());
+    receive(payload.substr(split) + ">");
+    if (length < capacity)
+    {
+      assert(pings == std::vector<std::string>({payload.substr(5)}));
+      expectAck(payload, 0, BLAECK_ACK_OK);
+    }
+    else
+    {
+      assert(pings.empty());
+      expectAck(payload.substr(0, capacity - 1), 0, BLAECK_ACK_TRUNCATED);
+    }
+    pings.clear();
+    receive("<Ping,next>");
+    assert(pings == std::vector<std::string>({"next"}));
+    expectAck("Ping,next", 0, BLAECK_ACK_OK);
+  }
+
+  // Restarting an oversized, unfinished command also clears its overflow verdict.
+  pings.clear();
+  receive("<Ping," + std::string(capacity + 257, 'x'));
+  assert(pings.empty() && io.output.empty());
+  receive("<Ping,recovered>");
+  assert(pings == std::vector<std::string>({"recovered"}));
+  expectAck("Ping,recovered", 0, BLAECK_ACK_OK);
+
+  std::string prefix;
+  while (prefix.size() + 3 + 11 < capacity)
+    prefix += "#1:";
+  prefix += "#42:";
+  if (capacity >= 300)
+    assert(prefix.size() > 255);
+  pings.clear();
+  receive("<" + prefix + "Ping,ok>");
+  assert(pings == std::vector<std::string>({"ok"}));
+  expectAck("Ping,ok", 42, BLAECK_ACK_OK);
+
+  pings.clear();
+  const std::string oversized = "Ping," + std::string(capacity, 'x');
+  receive("<" + prefix + oversized + ">");
+  assert(pings.empty());
+  expectAck(oversized.substr(0, capacity - 1 - prefix.size()), 42, BLAECK_ACK_TRUNCATED);
+}
+
 static void beginOnlyOnce()
 {
   for (bool tcp : {false, true})
@@ -820,6 +978,173 @@ static void reportingPolicies(bool buffered)
   hostMillis() = 4100;
   device.writeIfDue();
   expectData(stream, widths, {2});
+}
+
+static void reportingToggle(bool buffered)
+{
+  for (BlaeckIntervalMode mode : {BLAECK_OFF, BLAECK_ALWAYS, BLAECK_ON_CHANGE})
+  {
+    hostMillis() = 0;
+    FakeStream stream;
+    ReportingProbe device;
+    device.begin(stream).withSignals(3);
+    device.setBufferedWrites(buffered);
+    float value = 0;
+    bool flag = false;
+    char text[] = "a";
+    auto number = device.addSignal(F("Number"), &value);
+    auto boolean = device.addSignal(F("Bool"), &flag);
+    auto string = device.addSignal(F("Text"), text);
+    const std::vector<int> widths{4, 1, -1};
+    size_t before = allocations;
+    number.writeOnChange(BLAECK_OFF).writeOnChange(BLAECK_OFF);
+    boolean.writeOnChange(BLAECK_OFF);
+    string.writeOnChange(BLAECK_OFF);
+    assert(allocations == before);
+    for (int i = 0; i < 3; ++i)
+      assert(device.reporting(i) == nullptr);
+
+    number.writeAtInterval(mode, 0.5).writeOnChange(0);
+    boolean.writeAtInterval(mode, BLAECK_ANY_CHANGE).writeOnChange(BLAECK_ANY_CHANGE);
+    string.writeAtInterval(mode, BLAECK_ANY_CHANGE).writeOnChange(BLAECK_ANY_CHANGE);
+    command(device, stream, "<BLAECK.ACTIVATE,1000>");
+    device.writeIfDue();
+    expectData(stream, widths, {0, 1, 2});
+    assert(device.reporting(2)->text != nullptr);
+
+    before = allocations;
+    const SignalReporting *retained = device.reporting(0);
+    const char *retainedText = device.reporting(2)->text;
+    failAfter = 0;
+    number.writeOnChange(BLAECK_OFF);
+    boolean.writeOnChange(BLAECK_OFF);
+    string.writeOnChange(BLAECK_OFF).writeOnChange(BLAECK_OFF);
+    failAfter = -1;
+    assert(allocations == before && !device.hasRejections());
+    for (int i = 0; i < 3; ++i)
+    {
+      const SignalReporting *r = device.reporting(i);
+      if (mode == BLAECK_ON_CHANGE)
+        assert(r != nullptr && !r->immediate && r->valid);
+      else
+        assert(r == nullptr);
+    }
+    if (mode == BLAECK_ON_CHANGE)
+    {
+      assert(device.reporting(0) == retained && retained->intervalDelta == 0.5);
+      assert(device.reporting(2)->text == retainedText);
+    }
+
+    value = 0.25f;
+    flag = true;
+    text[0] = 'b';
+    hostMillis() = 100;
+    device.writeIfDue();
+    expectData(stream, widths, {});
+    hostMillis() = 1000;
+    device.writeIfDue();
+    if (mode == BLAECK_ALWAYS)
+      expectData(stream, widths, {0, 1, 2});
+    else if (mode == BLAECK_ON_CHANGE)
+      expectData(stream, widths, {1, 2});
+    else
+      expectData(stream, widths, {});
+    value = 0.5f;
+    hostMillis() = 2000;
+    device.writeIfDue();
+    if (mode == BLAECK_ALWAYS)
+      expectData(stream, widths, {0, 1, 2});
+    else if (mode == BLAECK_ON_CHANGE)
+      expectData(stream, widths, {0});
+    else
+      expectData(stream, widths, {});
+
+    command(device, stream, "<BLAECK.DEACTIVATE>");
+    device.write("Number", 3.0f);
+    expectData(stream, widths, {0});
+    device.writeAllData();
+    expectData(stream, widths, {0, 1, 2});
+    number.writeOnChange(0.1, 250);
+    boolean.writeOnChange(BLAECK_ANY_CHANGE, 250);
+    string.writeOnChange(BLAECK_ANY_CHANGE, 250);
+    device.writeIfDue();
+    if (mode == BLAECK_ON_CHANGE)
+      expectData(stream, widths, {});
+    else
+      expectData(stream, widths, {0, 1, 2});
+    value = 4;
+    flag = false;
+    text[0] = 'c';
+    hostMillis() = 2249;
+    device.writeIfDue();
+    expectData(stream, widths, {});
+    hostMillis() = 2250;
+    device.writeIfDue();
+    expectData(stream, widths, {0, 1, 2});
+
+    number.writeOnChange(BLAECK_OFF).writeAtInterval(BLAECK_ALWAYS);
+    boolean.writeAtInterval(BLAECK_ALWAYS).writeOnChange(BLAECK_OFF);
+    string.writeOnChange(BLAECK_OFF).writeAtInterval(BLAECK_ALWAYS);
+    for (int i = 0; i < 3; ++i)
+      assert(device.reporting(i) == nullptr);
+    assert(!device.hasRejections());
+  }
+}
+
+static void reportingToggleFailures()
+{
+  hostMillis() = 0;
+  FakeStream stream;
+  Capture debug;
+  ReportingProbe device;
+  device.begin(stream).withSignals(1).withDebugStream(&debug);
+  float value = 0;
+  auto signal = device.addSignal(F("Value"), &value);
+  signal.writeAtInterval(BLAECK_OFF).writeOnChange(BLAECK_ANY_CHANGE, 0);
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+  for (BlaeckIntervalMode mode : {BLAECK_ALWAYS, BLAECK_ON_CHANGE,
+                                 static_cast<BlaeckIntervalMode>(255)})
+  {
+    debug.text.clear();
+    signal.writeOnChange(mode);
+    assert(debug.text.find("Invalid change reporting mode") != std::string::npos);
+    assert(debug.text.find("previous policy retained") != std::string::npos);
+    value += 1;
+    device.writeIfDue();
+    expectData(stream, {4}, {0});
+  }
+  signal.writeOnChange(BLAECK_OFF);
+  assert(device.reporting(0) == nullptr);
+  debug.text.clear();
+  failAfter = 0;
+  signal.writeOnChange(BLAECK_ANY_CHANGE);
+  failAfter = -1;
+  assert(device.reporting(0) == nullptr && debug.text.find("No RAM") != std::string::npos);
+  value += 1;
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  signal.writeOnChange(0, 0);
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+
+  signal.writeAtInterval(BLAECK_ON_CHANGE, BLAECK_ANY_CHANGE).writeOnChange(BLAECK_OFF);
+  const size_t before = allocations;
+  failAfter = 0;
+  signal.writeOnChange(BLAECK_ANY_CHANGE, 0);
+  failAfter = -1;
+  assert(allocations == before); // Interval filtering retained the tracking allocation.
+  device.writeIfDue();
+  expectData(stream, {4}, {});
+  value += 0.25f;
+  device.writeIfDue();
+  expectData(stream, {4}, {0});
+
+  auto rejected = device.addSignal(F("Overflow"), &value);
+  debug.text.clear();
+  rejected.writeOnChange(BLAECK_OFF).writeOnChange(BLAECK_ANY_CHANGE)
+      .writeOnChange(BLAECK_ALWAYS);
+  assert(debug.text.empty()); // Invalid handles remain inert for both overloads.
 }
 
 static void reportingActivationSnapshot(bool buffered)
@@ -1439,6 +1764,18 @@ int main()
 {
   if (!BLAECK_TEST_REPORTING_ONLY)
   {
+    for (bool tcp : {false, true})
+      for (bool buffered : {false, true})
+        commandBufferBoundaries(tcp, buffered);
+  }
+  if (BLAECK_TEST_COMMAND_BUFFER_ONLY)
+  {
+    std::cout << "PASS: command buffer size " << BLAECK_COMMAND_MAX_CHARS_DEFAULT
+              << ", capacity, long prefixes, acknowledgements and recovery on Serial/TCP\n";
+    return 0;
+  }
+  if (!BLAECK_TEST_REPORTING_ONLY)
+  {
     diagnosticMessages();
     crc32Behavior();
     sessionBehavior(false);
@@ -1450,6 +1787,9 @@ int main()
   }
   reportingPolicies(false);
   reportingPolicies(true);
+  reportingToggle(false);
+  reportingToggle(true);
+  reportingToggleFailures();
   reportingActivationSnapshot(false);
   reportingActivationSnapshot(true);
   sharedBaselineAndClock();

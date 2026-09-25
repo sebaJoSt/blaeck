@@ -36,6 +36,31 @@ def main():
         metadata_command[-1] = str(metadata_off)
         subprocess.run(metadata_command, check=True)
         subprocess.run([str(metadata_off)], check=True, timeout=20)
+        for capacity in (48, 255, 256, 300, 512):
+            buffer_exe = Path(temp) / f"command-buffer-{capacity}.exe"
+            buffer_command = command[:]
+            buffer_command[1:1] = [
+                f"-DBLAECK_COMMAND_MAX_CHARS_DEFAULT={capacity}",
+                "-DBLAECK_TEST_COMMAND_BUFFER_ONLY=1",
+            ]
+            buffer_command[-1] = str(buffer_exe)
+            subprocess.run(buffer_command, check=True)
+            subprocess.run([str(buffer_exe)], check=True, timeout=20)
+        for capacity in (1, 65535, 0, -1, 65536, 4294967296):
+            bounds = subprocess.run(
+                [args.cxx, "-std=c++11", "-fsyntax-only", "-x", "c++",
+                 f"-DBLAECK_COMMAND_MAX_CHARS_DEFAULT={capacity}",
+                 "-I" + str(host), "-I" + str(ROOT / "src"), "-"],
+                input="#include <Blaeck.h>\n", capture_output=True, text=True)
+            if capacity in (1, 65535):
+                if bounds.returncode != 0:
+                    raise RuntimeError(f"Valid buffer size {capacity} rejected:\n"
+                                       + bounds.stdout + bounds.stderr)
+            elif (bounds.returncode == 0 or
+                  "must be between 1 and 65535 bytes" not in bounds.stderr):
+                raise RuntimeError(f"Invalid buffer size {capacity} not rejected as expected:\n"
+                                   + bounds.stdout + bounds.stderr)
+        print("PASS: command-buffer compile-time bounds")
         disabled = Path(temp) / "server-no-delay-test.exe"
         command[1:1] = ["-DBLAECK_TCP_NO_DELAY_DEFAULT=false"]
         command[-1] = str(disabled)

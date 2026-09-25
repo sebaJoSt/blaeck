@@ -51,9 +51,9 @@
 #endif
 
 #ifndef BLAECK_COMMAND_MAX_CHARS_DEFAULT
-  // The longest command the device can receive, in characters. 128 fits a 32-byte text value
-  // even when every byte arrives percent-encoded as three characters. Two buffers have this
-  // size, so AVR boards smaller than a Mega get 48.
+  // Command buffer bytes, including the terminator. 128 fits a 32-byte text value even
+  // when percent-encoded. There are two fixed buffers plus one per allocated TCP slot,
+  // so AVR boards smaller than a Mega get 48.
   #if defined(__AVR__)
     #if defined(RAMEND) && (RAMEND >= 0x10FF)
       #define BLAECK_COMMAND_MAX_CHARS_DEFAULT 128
@@ -64,6 +64,10 @@
     #define BLAECK_COMMAND_MAX_CHARS_DEFAULT 128
   #endif
 #endif
+
+static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
+                  BLAECK_COMMAND_MAX_CHARS_DEFAULT <= 65535UL,
+              "BLAECK_COMMAND_MAX_CHARS_DEFAULT must be between 1 and 65535 bytes.");
 
 // Table sizes (signals, commands, channels) are set in the sketch, on the begin() chain:
 // device.begin(...).withCommands(16).
@@ -278,6 +282,20 @@ enum BlaeckIntervalMode : uint8_t
   BLAECK_ALWAYS,
   BLAECK_ON_CHANGE
 };
+
+/*!
+  @brief   A zero threshold: any difference from the last sent value qualifies.
+
+  The minimum reporting interval still applies. This is a threshold, not a mode;
+  numeric zero has the same meaning.
+
+  @code
+    device.addSignal(F("Temperature"), &Temperature)
+        .writeAtInterval(BLAECK_ON_CHANGE, BLAECK_ANY_CHANGE)
+        .writeOnChange(BLAECK_ANY_CHANGE);
+  @endcode
+*/
+constexpr double BLAECK_ANY_CHANGE = 0;
 
 struct SignalReporting
 {
@@ -1650,6 +1668,7 @@ protected:
   void _setNameSuffix(uint8_t suffix);
   void _setInterval(BlaeckIntervalMode mode, double delta);
   void _setOnChange(double delta, uint32_t minIntervalMs);
+  void _setOnChange(BlaeckIntervalMode mode);
 
   Blaeck *_owner;
   int16_t _index;
@@ -1671,7 +1690,8 @@ public:
     Explicit writes bypass both policies and update their shared baseline.
 
     @param   mode   BLAECK_ALWAYS, BLAECK_ON_CHANGE or BLAECK_OFF.
-    @param   delta  Nonnegative finite numeric threshold; zero means any difference.
+    @param   delta  Nonnegative finite numeric threshold; BLAECK_ANY_CHANGE (zero)
+                    means any difference.
                     Ignored for boolean and text signals.
     @return  The same handle, for chaining.
 
@@ -1680,7 +1700,7 @@ public:
           .writeAtInterval(BLAECK_ON_CHANGE, 0.1);
     @endcode
   */
-  TYPE &writeAtInterval(BlaeckIntervalMode mode, double delta = 0)
+  TYPE &writeAtInterval(BlaeckIntervalMode mode, double delta = BLAECK_ANY_CHANGE)
   {
     _setInterval(mode, delta);
     return _self();
@@ -1693,16 +1713,19 @@ public:
     configured by writeAtInterval(), and defaults to BLAECK_ALWAYS. The first
     value bypasses the rate limit. Later changes compare against the last value
     sent by any data write. Intermediate values are not queued.
+    Calling this again replaces the threshold and rate limit, or re-enables
+    change reporting after writeOnChange(BLAECK_OFF).
 
-    @param   delta          Nonnegative finite numeric threshold; ignored for
-                            boolean and text signals, where callers use zero.
+    @param   delta          Nonnegative finite numeric threshold; BLAECK_ANY_CHANGE
+                            (zero) means any difference. Ignored for boolean and
+                            text signals, where callers use BLAECK_ANY_CHANGE.
     @param   minIntervalMs  Minimum time since the last data write for this signal,
                             in milliseconds. Defaults to 100; zero removes the limit.
     @return  The same handle, for chaining.
 
     @code
       device.addSignal(F("Pulse"), &Pulse)
-          .writeAtInterval(BLAECK_OFF).writeOnChange(0);
+          .writeAtInterval(BLAECK_OFF).writeOnChange(BLAECK_ANY_CHANGE);
     @endcode
   */
   TYPE &writeOnChange(double delta, uint32_t minIntervalMs = 100)
@@ -1710,6 +1733,33 @@ public:
     _setOnChange(delta, minIntervalMs);
     return _self();
   }
+
+  /*!
+    @brief   Disables prompt change reporting with BLAECK_OFF.
+
+    Leaves interval reporting and explicit writes unchanged. Frees change-tracking
+    storage unless interval filtering still needs it. Re-enable with a numeric
+    threshold or BLAECK_ANY_CHANGE; an existing shared baseline and rate-limit clock
+    are retained, otherwise the next eligible report sends an initial value.
+
+    @param   mode  BLAECK_OFF. Other modes are rejected with a policy warning,
+                    leaving the previous policy intact.
+    @return  The same handle, for chaining.
+
+    @code
+      auto signal = device.addSignal(F("Temperature"), &Temperature);
+      signal.writeOnChange(0.1);
+      signal.writeOnChange(BLAECK_OFF);
+    @endcode
+  */
+  TYPE &writeOnChange(BlaeckIntervalMode mode)
+  {
+    _setOnChange(mode);
+    return _self();
+  }
+
+  // A mode with a rate limit must not fall through to the numeric-threshold overload.
+  TYPE &writeOnChange(BlaeckIntervalMode mode, uint32_t minIntervalMs) = delete;
 
   /*!
     @brief   Adds a number to the end of the signal's name.
@@ -4047,6 +4097,7 @@ protected:
 
   void _setSignalInterval(int16_t index, BlaeckIntervalMode mode, double delta);
   void _setSignalOnChange(int16_t index, double delta, uint32_t minIntervalMs);
+  void _setSignalOnChange(int16_t index, BlaeckIntervalMode mode);
   SignalReporting *_ensureSignalReporting(int16_t index);
   void _reportSignalPolicyError(const __FlashStringHelper *message);
   void _resetReportingBaselines();
@@ -4237,7 +4288,7 @@ protected:
 
   // Fixed name and buffer lengths. They set the layout of each entry, so they can't change at
   // runtime.
-  static const int MAXIMUM_CHAR_COUNT = BLAECK_COMMAND_MAX_CHARS_DEFAULT;
+  static const uint16_t MAXIMUM_CHAR_COUNT = BLAECK_COMMAND_MAX_CHARS_DEFAULT;
   static const byte MAX_COMMAND_PARAM_COUNT = 10;
   static const byte MAX_COMMAND_NAME_COUNT = blaeck_detail::MAX_COMMAND_NAME_COUNT;
   // Room for the longest built-in command name, which may be longer than a sketch's command
@@ -4268,7 +4319,7 @@ protected:
   struct Receiver
   {
     char chars[MAXIMUM_CHAR_COUNT];
-    byte ndx = 0;
+    uint16_t ndx = 0;
     bool inProgress = false;
     // Set once the command's characters no longer fit and are being dropped. The receive
     // loop is the only place that can see it happen.
@@ -4550,7 +4601,7 @@ protected:
   // The message id from the command's '#' prefix, echoed in its ack and reply. 0 if none.
   uint16_t _parsedPrefixMsgId = 0;
   // Length of the prefix. The ack's hash covers what follows it.
-  byte _parsedPrefixLen = 0;
+  uint16_t _parsedPrefixLen = 0;
 #if BLAECK_ENABLE_STATE_CHANNELS
   bool _stateCatalogDirty = false;
 #endif
@@ -4928,6 +4979,12 @@ inline void BlaeckSignalRefBase::_setOnChange(double delta, uint32_t minInterval
 {
   if (_owner != nullptr)
     _owner->_setSignalOnChange(_index, delta, minIntervalMs);
+}
+
+inline void BlaeckSignalRefBase::_setOnChange(BlaeckIntervalMode mode)
+{
+  if (_owner != nullptr)
+    _owner->_setSignalOnChange(_index, mode);
 }
 
 inline void BlaeckSignalRefBase::_setFlash(const __FlashStringHelper *value, uint16_t bit)

@@ -785,6 +785,26 @@ void Blaeck::_setSignalOnChange(int16_t index, double delta, uint32_t minInterva
   }
 }
 
+void Blaeck::_setSignalOnChange(int16_t index, BlaeckIntervalMode mode)
+{
+  if (index < 0 || index >= _signalIndex)
+    return;
+  if (mode != BLAECK_OFF)
+  {
+    _reportSignalPolicyError(F("Invalid change reporting mode; use BLAECK_OFF or a numeric threshold; previous policy retained."));
+    return;
+  }
+  Signal &s = Signals[index];
+  if (s.Reporting == nullptr)
+    return;
+  s.Reporting->immediate = false;
+  if (s.IntervalMode != BLAECK_ON_CHANGE)
+  {
+    delete s.Reporting;
+    s.Reporting = nullptr;
+  }
+}
+
 void Blaeck::_resetReportingBaselines()
 {
   for (int i = 0; i < _signalIndex; ++i)
@@ -2016,7 +2036,7 @@ void Blaeck::_parseCommandTokens(const char *raw)
     p = (char *)scan + 1;
   }
   // The ack hashes the command after the prefix, as its sender wrote it.
-  _parsedPrefixLen = (byte)(p - _parsedTokenBuffer);
+  _parsedPrefixLen = static_cast<uint16_t>(p - _parsedTokenBuffer);
 
   // The command name is everything before the first comma.
   char *tokenStart = p;

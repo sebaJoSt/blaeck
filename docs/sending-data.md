@@ -145,8 +145,8 @@ normally. It does not reset or force signals with `writeAtInterval(BLAECK_OFF)`;
 independent change reporting and explicit writes continue as before.
 
 Calling `writeAtInterval()` again replaces the previous interval policy. Its threshold
-defaults to zero: any unequal value qualifies. Assign the variable normally and keep calling
-`tick()`; there are no update flags to manage.
+defaults to `BLAECK_ANY_CHANGE` (zero): any unequal value qualifies. Assign the variable
+normally and keep calling `tick()`; there are no update flags to manage.
 
 For changes that should not wait for the host interval:
 
@@ -160,6 +160,28 @@ device.addSignal(F("Temperature"), &temperature)
 `writeIfDue()`. The threshold is required; the minimum interval defaults to 100 ms.
 It is a rate limit since the last report, not a debounce timer. It works without ACTIVATE,
 and DEACTIVATE does not stop it. Pause/resume writes still governs all data reporting.
+
+Use `writeOnChange(BLAECK_ANY_CHANGE)` to report any difference from the last sent value,
+still subject to the minimum interval. Numeric zero remains equivalent; it does not turn
+reporting off. The same named threshold works in
+`writeAtInterval(BLAECK_ON_CHANGE, BLAECK_ANY_CHANGE)`.
+
+Disable immediate change reporting with `writeOnChange(BLAECK_OFF)`, without changing
+the interval policy or blocking explicit writes:
+
+```cpp
+auto signal = device.addSignal(F("Temperature"), &temperature);
+signal.writeOnChange(BLAECK_ANY_CHANGE, 250);
+signal.writeOnChange(BLAECK_OFF); // Back to interval-only reporting.
+signal.writeOnChange(0.1);       // Enable again, with the default 100 ms rate limit.
+```
+
+Disabling is harmless if already off and frees tracking storage when interval filtering
+does not need it. Re-enabling replaces the threshold and minimum interval. If interval
+filtering retained the shared baseline and clock, they are reused; otherwise the next
+eligible report sends an initial value. `BLAECK_OFF` takes no minimum-interval argument.
+Other mode values, such as `BLAECK_ALWAYS` and `BLAECK_ON_CHANGE`, are invalid for
+`writeOnChange()` and produce a policy warning rather than acting as numeric thresholds.
 
 The two paths are independent. For small changes at intervals and larger changes promptly:
 
@@ -181,8 +203,8 @@ without restarting its interval countdown.
 
 Numeric thresholds are inclusive and measured from the last sent value, so small changes can
 accumulate. Thresholds must be finite and nonnegative. Booleans and text ignore the threshold;
-use zero. Text comparisons retain an exact copy of the transmitted text, up to the protocol's
-255-byte limit, rather than a hash. Stable NaN representations do not continually resend;
+use `BLAECK_ANY_CHANGE`. Text comparisons retain an exact copy of the transmitted text,
+up to the protocol's 255-byte limit, rather than a hash. Stable NaN representations do not continually resend;
 transitions involving NaN, infinity or subnormal floating-point values qualify as changes.
 
 Change tracking allocates a small record per opted-in signal. Text also retains a buffer

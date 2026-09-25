@@ -137,7 +137,7 @@ These change a default:
 
 | Define | Default |
 |---|---|
-| `BLAECK_COMMAND_MAX_CHARS_DEFAULT` | 128, or 48 on a small AVR. The command parser's buffer, and the library keeps three of them |
+| `BLAECK_COMMAND_MAX_CHARS_DEFAULT` | 128, or 48 on a small AVR. Bytes per command buffer, including the terminating null byte. Two fixed buffers plus one per allocated TCP slot |
 | `BLAECK_SERIAL_BUFFERED_WRITES_DEFAULT` | `false` on AVR, `true` everywhere else |
 | `BLAECK_TCP_BUFFERED_WRITES_DEFAULT` | `true` on every board |
 | `BLAECK_TCP_NO_DELAY_DEFAULT` | `true`. Applied to supplied servers and accepted clients that provide `setNoDelay()` |
@@ -145,6 +145,16 @@ These change a default:
 | `BLAECK_BUFFERED_WRITES_DEFAULT` | Optional build-wide override for both transports, unless a transport-specific default is supplied |
 | `BLAECK_USB_PACKET_BYTES` | 64. The USB packet size a frame is padded away from, so it never ends on a full one and stalls in the host. Lower it to match a core built with a smaller endpoint |
 | `BLAECK_STATE_MAX_OPTION_CHARS` | 24. Room for one resolved select option while a frame is built |
+
+Command buffers support configured sizes from 1 to 65535 bytes, subject to the board's
+RAM and compiler object-size limits. The maximum command content is one byte less than
+the buffer size; `<` and `>` are not stored. Oversized commands are rejected rather than
+executed as fragments. Larger buffers do not raise the separate command-name,
+parameter-count, or typed text-value limits.
+
+Buffer storage alone uses twice the configured size for Serial, or `(2 + client slots)`
+times the size for TCP. With four TCP slots, the default 128-byte buffers use 768 bytes;
+300-byte buffers use 1800 bytes. Increasing the size does not happen automatically.
 
 > [!IMPORTANT]
 > An override has to reach **both** your sketch and the library's compiled source files.
