@@ -2,8 +2,13 @@
   WriteModes.ino
 
   Five signals get the same value every 100 ms: a smooth 12-second sine wave
-  from -0.8 to +0.8. Two rounded spikes add up to 4 at 5.0-5.6 and 6.0-6.6
-  seconds. The wave and spikes join smoothly, including between cycles.
+  with a maximum amplitude of 0.8. Its amplitude follows a 24-second pattern:
+    0-8 s: full amplitude, with rounded spikes at 5.0-5.6 and 6.0-6.6 s.
+    8-12 s: smoothly fade to zero.
+    12-18 s: stay exactly flat, with no spikes.
+    18-24 s: smoothly grow back to full amplitude.
+  Each spike adds up to 4. The wave and spikes join smoothly between sections
+  and across the pattern's repeat.
   Only the reporting policy differs:
 
     Interval                     the default: every host interval, even if unchanged.
@@ -15,16 +20,19 @@
 
   Try this:
     Set the host's logging interval to 2000 ms, or send <BLAECK.ACTIVATE,2000>.
-    One cycle takes 12 seconds:
+    The full pattern takes 24 seconds:
       Interval samples the underlying wave, but can miss the spikes.
       OnChangeAtInterval samples the wave, skipping interval changes below 0.05.
       OnChange follows the wave and spikes whenever a change reaches 0.1.
       OnChangeAndOnChangeAtInterval also reports changes from 0.05 at interval times.
       Explicit shows the complete wave and rounded spike shapes.
     The separate and combined modes use matching thresholds for a fair comparison.
-    Interval and OnChangeAtInterval can look alike here: most interval samples
-    exceed the small threshold. With constant or slowly changing values, Interval
-    keeps reporting while OnChangeAtInterval skips reports.
+    During the full-amplitude wave, Interval and OnChangeAtInterval can look alike.
+    As the wave fades, change-filtered signals send fewer values. Once flat and
+    any qualifying transition has been reported, all three stop sending.
+    Interval still sends every 2 seconds; Explicit still sends every 100 ms.
+    Look for blank change-filtered columns in those rows: fewer signal values
+    are stored, but Explicit keeps creating rows. A plotted line alone can hide this.
     OnChange and the combined signal can look similar with these fine thresholds;
     their report times can differ because interval reports update the shared baseline.
     A 2-second interval cannot sample both short spikes one second apart; it may
@@ -114,8 +122,16 @@ void UpdateSignals()
     return;
   lastUpdate = now;
 
-  const unsigned long phaseMs = now % 12000UL;
-  float value = 0.8f * sin(phaseMs * (TWO_PI / 12000.0f));
+  const unsigned long phaseMs = now % 24000UL;
+  float amplitude = 0.8f;
+  if (phaseMs >= 18000UL)
+    amplitude = 0.4f * (1.0f - cos(PI * ((phaseMs - 18000UL) / 6000.0f)));
+  else if (phaseMs >= 12000UL)
+    amplitude = 0.0f;
+  else if (phaseMs >= 8000UL)
+    amplitude = 0.4f * (1.0f + cos(PI * ((phaseMs - 8000UL) / 4000.0f)));
+
+  float value = amplitude * sin((phaseMs % 12000UL) * (TWO_PI / 12000.0f));
   if ((phaseMs >= 5000UL && phaseMs < 5600UL) ||
       (phaseMs >= 6000UL && phaseMs < 6600UL))
   {

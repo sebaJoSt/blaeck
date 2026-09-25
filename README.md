@@ -167,7 +167,7 @@ Start with **Basic**, then **Signals** and **Commands**. Follow with **StateChan
 | [StateChannels](examples/StateChannels) | Values shown but never logged, from variables, getters or explicit writes |
 | [EventChannels](examples/EventChannels) | Declaring and reporting occurrences |
 | [WaveformGenerator](examples/WaveformGenerator) | A complete, controllable waveform dashboard |
-| [WriteModes](examples/WriteModes) | Per-signal interval policies, automatic change reporting and explicit writes |
+| [WriteModes](examples/WriteModes) | Interval, on-change, and explicit signal writes |
 | [more / ConfigurableSignals](examples/more/ConfigurableSignals) | Choose which signals to log through commands and save the selection in EEPROM |
 | [more / SHT31TempHumiditySensor](examples/more/SHT31TempHumiditySensor) | Read a real temperature and humidity sensor; requires Adafruit SHT31 |
 | [more / TimestampsRTC](examples/more/TimestampsRTC) | Wall-clock timestamps using the UNO R4's RTC |
