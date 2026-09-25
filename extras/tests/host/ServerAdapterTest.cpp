@@ -637,6 +637,102 @@ static void reportingPolicies(bool buffered)
   expectData(stream, widths, {2});
 }
 
+static void reportingActivationSnapshot(bool buffered)
+{
+  hostMillis() = 0;
+  FakeStream stream;
+  Blaeck device;
+  device.begin(stream).withSignals(7);
+  device.setBufferedWrites(buffered);
+  float periodic = 0, filtered = 0, change = 0, combined = 0, explicitValue = 0;
+  bool flag = false;
+  char text[] = "same";
+  device.addSignal(F("Interval"), &periodic);
+  device.addSignal(F("IntervalOnChange"), &filtered).writeAtInterval(BLAECK_ON_CHANGE, 0.5);
+  device.addSignal(F("OnChange"), &change).writeAtInterval(BLAECK_OFF).writeOnChange(1);
+  device.addSignal(F("Combined"), &combined)
+      .writeAtInterval(BLAECK_ON_CHANGE, 0.5).writeOnChange(1);
+  device.addSignal(F("Explicit"), &explicitValue).writeAtInterval(BLAECK_OFF);
+  device.addSignal(F("Bool"), &flag).writeAtInterval(BLAECK_ON_CHANGE);
+  device.addSignal(F("Text"), text).writeAtInterval(BLAECK_ON_CHANGE);
+  const std::vector<int> widths = {4, 4, 4, 4, 4, 1, -1};
+  device.writeAllData();
+  expectData(stream, widths, {0, 1, 2, 3, 4, 5, 6});
+
+  const auto expectInitial = [&]()
+  {
+    const auto frames = takeData(stream.data.output, widths);
+    assert(frames.size() == 1);
+    const auto &frame = frames[0];
+    assert(frame.ids == std::vector<int>({0, 1, 3, 5, 6}));
+    assert(frame.flags == 0x04);
+    assert(frame.values[1] == std::string(reinterpret_cast<const char *>(&filtered), 4));
+    assert(frame.values[2] == std::string(reinterpret_cast<const char *>(&combined), 4));
+    assert(frame.values[3] == std::string(1, '\0') && frame.values[4] == "same");
+  };
+  filtered = combined = 0.25f;
+  hostMillis() = 10;
+  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  device.writeIfDue();
+  expectInitial(); // bypass thresholds and the combined signal's rate limit
+  device.writeIfDue();
+  expectData(stream, widths, {});
+
+  change = 1;
+  combined = 1.25f;
+  hostMillis() = 99;
+  device.writeIfDue();
+  expectData(stream, widths, {});
+  hostMillis() = 100;
+  device.writeIfDue();
+  expectData(stream, widths, {2}); // activation did not reset the independent clock
+  hostMillis() = 109;
+  device.writeIfDue();
+  expectData(stream, widths, {});
+  hostMillis() = 110;
+  device.writeIfDue();
+  expectData(stream, widths, {3}); // initial report updated the shared baseline and clock
+
+  hostMillis() = 1010;
+  device.writeIfDue();
+  expectData(stream, widths, {0});
+  filtered = 0.75f;
+  hostMillis() = 2010;
+  device.writeIfDue();
+  expectData(stream, widths, {0, 1}); // normal interval filtering uses the initial value
+
+  command(device, stream, "<BLAECK.DEACTIVATE>");
+  hostMillis() = 2050;
+  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  device.writeIfDue();
+  expectInitial();
+  hostMillis() = 2060;
+  command(device, stream, "<BLAECK.ACTIVATE,500>");
+  device.writeIfDue();
+  expectInitial(); // changing an active interval also establishes initial values
+  hostMillis() = 2560;
+  device.writeIfDue();
+  expectData(stream, widths, {0});
+  command(device, stream, "<BLAECK.ACTIVATE,0>");
+  device.writeIfDue();
+  expectInitial();
+  device.writeIfDue();
+  expectData(stream, widths, {0}); // zero interval does not keep forcing filtered signals
+
+  command(device, stream, "<BLAECK.PAUSE_WRITES,FOREVER>");
+  command(device, stream, "<BLAECK.ACTIVATE,500>");
+  device.writeIfDue();
+  expectData(stream, widths, {});
+  hostMillis() = 3000;
+  device.writeIfDue();
+  expectData(stream, widths, {});
+  command(device, stream, "<BLAECK.RESUME_WRITES>");
+  device.writeIfDue();
+  expectInitial(); // a paused pass must not consume the initial report
+  device.writeIfDue();
+  expectData(stream, widths, {});
+}
+
 static void sharedBaselineAndClock()
 {
   hostMillis() = 0;
@@ -679,7 +775,7 @@ static void sharedBaselineAndClock()
   expectData(stream, {4}, {0});
   command(device, stream, "<BLAECK.ACTIVATE,100>");
   device.writeIfDue();
-  expectData(stream, {4}, {});
+  expectData(stream, {4}, {0});
   value = 32;
   hostMillis() = 48;
   device.writeIfDue();
@@ -796,7 +892,7 @@ static void reportingCallbacksAndTimestamps()
   assert(beforeWriteCalls == 0);
   command(device, stream, "<BLAECK.ACTIVATE,1000>");
   device.writeIfDue();
-  expectData(stream, {4}, {0}); // callback produced a qualifying immediate change
+  expectData(stream, {4}, {0}); // initial interval merges with the callback's immediate change
   assert(beforeWriteCalls == 1);
   hostMillis() = 1;
   device.writeIfDue();
@@ -1110,7 +1206,7 @@ static void reportingFrameClassification(bool buffered)
   expectFlags(0x02);
   command(device, stream, "<BLAECK.ACTIVATE,1000>");
   device.writeIfDue();
-  expectData(stream, {4}, {});
+  expectFlags(0x04); // initial interval bypasses the previously requested baseline
   value = 1.5f;
   hostMillis() = 1000;
   device.writeIfDue();
@@ -1168,6 +1264,8 @@ int main()
   }
   reportingPolicies(false);
   reportingPolicies(true);
+  reportingActivationSnapshot(false);
+  reportingActivationSnapshot(true);
   sharedBaselineAndClock();
   reportingTypesAndFailures(false);
   reportingTypesAndFailures(true);

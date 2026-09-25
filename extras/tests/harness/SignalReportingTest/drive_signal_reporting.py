@@ -162,7 +162,7 @@ def run(driver, buffered):
     driver.expect("initial values without ACTIVATE", {2: 0, 3: 0, 4: False, 5: "", 6: 0, 7: 0, 8: 0})
     driver.expect("equal values suppressed", None)
     driver.expect("activate does not poll", None, "SYNC", builtin="ACTIVATE,0")
-    driver.expect("initial interval values", {0: 0, 1: 0}, interval=True)
+    driver.expect("initial interval includes previously sent combined value", {0: 0, 1: 0, 3: 0}, interval=True)
     driver.set(1, 0.25)
     driver.expect("below interval threshold", {0: 0}, interval=True)
     driver.set(1, 0.5)
@@ -218,7 +218,7 @@ def run(driver, buffered):
 
     driver.expect("enable callback", None, "CALLBACK", 1)
     driver.expect("activate long interval", None, "SYNC", builtin="ACTIVATE,1000")
-    driver.expect("periodic snapshot shares previous baseline", {0: 0}, interval=True)
+    driver.expect("reactivation refreshes all interval values", {0: 0, 1: 0.5, 3: 1}, interval=True)
     anchor = driver.millis
     assert driver.callbacks == 1
     driver.expect("no callback between intervals", None)

@@ -1659,6 +1659,8 @@ public:
     BLAECK_ALWAYS is the default. BLAECK_ON_CHANGE compares against the last sent
     value when the interval is due. BLAECK_OFF excludes this signal from interval
     reports. This replaces the interval policy, independently of writeOnChange().
+    Every ACTIVATE makes an initial interval report due: all interval-enabled
+    signals are included, without change filtering, even when already active.
     Explicit writes bypass both policies and update their shared baseline.
 
     @param   mode   BLAECK_ALWAYS, BLAECK_ON_CHANGE or BLAECK_OFF.
@@ -3276,6 +3278,8 @@ public:
     do not. A signal eligible through both paths is included only once. Nothing
     is sent when no signal qualifies. Call frequently, separately from read() or
     through tick(). The before-write callback runs only for a due interval.
+    The first interval after every ACTIVATE includes all interval-enabled signals
+    without change filtering. Pause/resume still applies.
 
     @code
       device.read();

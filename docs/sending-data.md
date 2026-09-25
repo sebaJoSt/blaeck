@@ -134,6 +134,16 @@ device.addSignal(F("Temperature"), &temperature)
 | `writeAtInterval(BLAECK_ON_CHANGE, delta)` | Send if it differs enough from the last sent value |
 | `writeAtInterval(BLAECK_OFF)` | Do not include it |
 
+Every `ACTIVATE` makes an initial interval report immediately due. It includes all
+interval-enabled signals, without change filtering, even if they were sent before.
+This also applies when `ACTIVATE` changes the interval while already active. Later
+intervals apply the policies above normally. If writes are paused, the initial report
+waits until they resume.
+
+The initial report updates each included signal's shared baseline and rate-limit clock
+normally. It does not reset or force signals with `writeAtInterval(BLAECK_OFF)`; their
+independent change reporting and explicit writes continue as before.
+
 Calling `writeAtInterval()` again replaces the previous interval policy. Its threshold
 defaults to zero: any unequal value qualifies. Assign the variable normally and keep calling
 `tick()`; there are no update flags to manage.

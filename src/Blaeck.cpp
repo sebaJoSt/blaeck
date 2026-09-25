@@ -4014,6 +4014,7 @@ void Blaeck::writeIfDue(unsigned long long timestamp)
 {
   const uint32_t now = static_cast<uint32_t>(millis());
   const uint32_t elapsed = now - _lastIntervalMs;
+  const bool initialInterval = _timedActivated && _timedFirstTime;
   const bool intervalDue = _timedActivated &&
       (_timedFirstTime || _timedInterval_ms == 0 || elapsed >= _timedInterval_ms);
   if (intervalDue)
@@ -4022,12 +4023,13 @@ void Blaeck::writeIfDue(unsigned long long timestamp)
       _lastIntervalMs = now;
     else
       _lastIntervalMs += elapsed - (elapsed % _timedInterval_ms);
-    _timedFirstTime = false;
     if (_signalIndex != 0 && _beforeWriteCallback != nullptr)
       _beforeWriteCallback();
   }
   if (!_mayWriteFrame())
     return;
+  if (intervalDue)
+    _timedFirstTime = false;
 
   const uint32_t changeNow = static_cast<uint32_t>(millis());
   bool intervalReport = false;
@@ -4036,7 +4038,8 @@ void Blaeck::writeIfDue(unsigned long long timestamp)
     Signal &s = Signals[i];
     SignalReporting *r = s.Reporting;
     const bool interval = intervalDue && (s.IntervalMode == BLAECK_ALWAYS ||
-        (s.IntervalMode == BLAECK_ON_CHANGE && _signalChanged(s, r->intervalDelta)));
+        (s.IntervalMode == BLAECK_ON_CHANGE &&
+         (initialInterval || _signalChanged(s, r->intervalDelta))));
     const bool immediate = r != nullptr && r->immediate &&
         (!r->valid || static_cast<uint32_t>(changeNow - r->lastWriteMs) >= r->minIntervalMs) &&
         _signalChanged(s, r->changeDelta);
