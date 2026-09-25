@@ -73,5 +73,5 @@ The shared `ha_registry.py DEVICE_FILTER [--json]` helper inspects the entity re
 For timing checks also set `TSDB_HOST`, `TSDB_DB`, `TSDB_USER`, `TSDB_PASSWORD`, and
 optionally `TSDB_PORT` (default 5432). Supply credentials only through the environment.
 
-These drivers are not part of the native host suite in `extras/scripts/testserver.py`,
+These drivers are not part of the native host suite in `extras/scripts/runhosttests.py`,
 which exercises library behavior without a board or external services.

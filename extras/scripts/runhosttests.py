@@ -1,4 +1,4 @@
-"""Compile and run the protocol/transport implementation with host-only socket doubles."""
+"""Compile and run the library on this computer against fake Arduino, Stream and network doubles."""
 import argparse
 from pathlib import Path
 import subprocess
@@ -12,8 +12,8 @@ def main():
     parser.add_argument("--cxx", default="g++")
     args = parser.parse_args()
     host = ROOT / "extras" / "tests" / "host"
-    with tempfile.TemporaryDirectory(prefix="blaeck-server-") as temp:
-        exe = Path(temp) / "server-test.exe"
+    with tempfile.TemporaryDirectory(prefix="blaeck-host-tests-") as temp:
+        exe = Path(temp) / "host-tests.exe"
         # BLAECK_NATIVE_TEST drops the 4-byte long checks, which a 64-bit Linux/macOS host fails.
         command = [args.cxx, "-std=c++11", "-Wall", "-Wextra", "-O1", "-DBLAECK_NATIVE_TEST",
                    "-I" + str(host), "-I" + str(ROOT / "src"),

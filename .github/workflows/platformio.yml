@@ -2,9 +2,9 @@ name: PlatformIO
 
 on:
   push:
-    paths: ["src/**", "examples/**", "extras/tests/**", "extras/scripts/testserver.py", "library.*", ".github/workflows/platformio.yml"]
+    paths: ["src/**", "examples/**", "extras/tests/**", "extras/scripts/runhosttests.py", "library.*", ".github/workflows/platformio.yml"]
   pull_request:
-    paths: ["src/**", "examples/**", "extras/tests/**", "extras/scripts/testserver.py", "library.*", ".github/workflows/platformio.yml"]
+    paths: ["src/**", "examples/**", "extras/tests/**", "extras/scripts/runhosttests.py", "library.*", ".github/workflows/platformio.yml"]
   workflow_dispatch:
 
 permissions:
@@ -75,4 +75,4 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.x"
-      - run: python extras/scripts/testserver.py
+      - run: python extras/scripts/runhosttests.py
