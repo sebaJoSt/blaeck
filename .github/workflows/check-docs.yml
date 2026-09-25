@@ -2,10 +2,14 @@ name: Check API Docs
 
 on:
   push:
-    paths: ["src/**", "extras/scripts/checkdocs.py", "extras/tests/DocCodeBlocks/**", "extras/tests/host/**", ".github/workflows/check-docs.yml"]
+    paths: ["src/**", "extras/scripts/checkdocs.py", "extras/tests/DocCodeBlocks/**", "extras/tests/host/**", ".github/workflows/check-docs.yml", "!**/*.md"]
   pull_request:
-    paths: ["src/**", "extras/scripts/checkdocs.py", "extras/tests/DocCodeBlocks/**", "extras/tests/host/**", ".github/workflows/check-docs.yml"]
+    paths: ["src/**", "extras/scripts/checkdocs.py", "extras/tests/DocCodeBlocks/**", "extras/tests/host/**", ".github/workflows/check-docs.yml", "!**/*.md"]
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

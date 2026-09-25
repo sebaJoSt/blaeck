@@ -2,10 +2,14 @@ name: Source Checks
 
 on:
   push:
-    paths: ["src/**", "examples/**", "extras/scripts/checkpackage.py", "extras/scripts/syncnetwork.py", "library.*", ".github/workflows/source-checks.yml"]
+    paths: ["src/**", "examples/**", "extras/scripts/checkpackage.py", "extras/scripts/syncnetwork.py", "library.*", ".github/workflows/source-checks.yml", "!**/*.md"]
   pull_request:
-    paths: ["src/**", "examples/**", "extras/scripts/checkpackage.py", "extras/scripts/syncnetwork.py", "library.*", ".github/workflows/source-checks.yml"]
+    paths: ["src/**", "examples/**", "extras/scripts/checkpackage.py", "extras/scripts/syncnetwork.py", "library.*", ".github/workflows/source-checks.yml", "!**/*.md"]
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
