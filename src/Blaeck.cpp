@@ -1172,7 +1172,6 @@ void Blaeck::read()
       // below then doesn't acknowledge again.
       bool builtinMatched = true;
       const unsigned long msg_id = _parsedPrefixMsgId;
-      _replying = true;
 
       if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_SYMBOLS)))
       {
@@ -1252,8 +1251,6 @@ void Blaeck::read()
       {
         builtinMatched = false;
       }
-      // A handler may write state or events, which are for every host.
-      _replying = false;
 
       _dispatchRegisteredHandlers(!builtinMatched);
     }
@@ -2143,7 +2140,7 @@ uint32_t Blaeck::_fnv1a32(const char *s)
 
 void Blaeck::_writeCommandAck(const char *rawCommand, byte status, byte reasonCode)
 {
-  if (!_mayWriteFrame())
+  if (!_requesterIsHost() || !_mayWriteFrame())
     return;
 
   // The name hash still identifies a command that didn't arrive whole, since the name comes
@@ -2160,7 +2157,7 @@ void Blaeck::_writeCommandAck(const char *rawCommand, byte status, byte reasonCo
   // which of two same-named commands it answers.
   uint32_t ackMsgId = (uint32_t)_parsedPrefixMsgId;
 
-  if (!_frameOpen(0xA5, ackMsgId, false, AUDIENCE_REQUESTER))
+  if (!_frameOpen(0xA5, ackMsgId))
     return;
   // Command hash (4 bytes, little-endian), name hash (4), status (1), reason (1).
   ulngCvt.val = _fnv1a32(payload);
@@ -4148,12 +4145,11 @@ void Blaeck::_setBufferedWritesDefault(bool enabled)
   _bufferedWritesExplicit = false;
 }
 
-bool Blaeck::_frameOpen(byte msgKey, unsigned long msgId, bool withCrc, Audience audience)
+bool Blaeck::_frameOpen(byte msgKey, unsigned long msgId, bool withCrc)
 {
   if (!_mayWriteFrame())
     return false;
 
-  _frameAudience = _replying ? AUDIENCE_REQUESTER : audience;
   _frameWriteFailed = false;
 
   _frameDirect = !_bufReady();
@@ -4292,7 +4288,7 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
   if (!any)
     return;
 
-  if (!_frameOpen(0xD2, msg_id, true, AUDIENCE_SUBSCRIBERS))
+  if (!_frameOpen(0xD2, msg_id, true))
     return;
 
   bool restartFlagSnapshot = _sendRestartFlag;
@@ -4642,8 +4638,10 @@ void Blaeck::validatePlatformSizes()
   static_assert(sizeof(unsigned int) == 4, "Blaeck: Expected 4-byte unsigned int on 32-bit platforms");
   static_assert(sizeof(double) == 8, "Blaeck: Expected 8-byte double on 32-bit platforms");
   static_assert(sizeof(double) != sizeof(float), "Blaeck: double should differ from float on 32-bit platforms");
+#ifndef BLAECK_NATIVE_TEST
   static_assert(sizeof(int) == sizeof(long), "Blaeck: int/long size mismatch breaks type remapping");
   static_assert(sizeof(unsigned int) == sizeof(unsigned long), "Blaeck: uint/ulong size mismatch breaks type remapping");
+#endif
 #endif
 
   // The same on every board
@@ -4651,8 +4649,11 @@ void Blaeck::validatePlatformSizes()
   static_assert(sizeof(byte) == 1, "Blaeck: Expected 1-byte byte");
   static_assert(sizeof(short) == 2, "Blaeck: Expected 2-byte short");
   static_assert(sizeof(unsigned short) == 2, "Blaeck: Expected 2-byte unsigned short");
+  // A 64-bit host running the native test suite has an 8-byte long; no Arduino board does.
+#ifndef BLAECK_NATIVE_TEST
   static_assert(sizeof(long) == 4, "Blaeck: Expected 4-byte long");
   static_assert(sizeof(unsigned long) == 4, "Blaeck: Expected 4-byte unsigned long");
+#endif
   static_assert(sizeof(float) == 4, "Blaeck: Expected 4-byte float");
 }
 

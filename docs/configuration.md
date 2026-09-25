@@ -127,7 +127,7 @@ would have cost:
 Your sketch needs no `#ifdef` around any of it. The calls still compile and simply store
 nothing, so the same sketch builds either way.
 
-Four more change a default:
+These change a default:
 
 | Define | Default |
 |---|---|
@@ -135,6 +135,7 @@ Four more change a default:
 | `BLAECK_SERIAL_BUFFERED_WRITES_DEFAULT` | `false` on AVR, `true` everywhere else |
 | `BLAECK_TCP_BUFFERED_WRITES_DEFAULT` | `true` on every board |
 | `BLAECK_TCP_NO_DELAY_DEFAULT` | `true`. Applied to supplied servers and accepted clients that provide `setNoDelay()` |
+| `BLAECK_TCP_STOP_TIMEOUT_MS` | 100. How long closing a connection waits for the peer, on clients that provide `setConnectionTimeout()` |
 | `BLAECK_BUFFERED_WRITES_DEFAULT` | Optional build-wide override for both transports, unless a transport-specific default is supplied |
 | `BLAECK_USB_PACKET_BYTES` | 64. The USB packet size a frame is padded away from, so it never ends on a full one and stalls in the host. Lower it to match a core built with a smaller endpoint |
 | `BLAECK_STATE_MAX_OPTION_CHARS` | 24. Room for one resolved select option while a frame is built |

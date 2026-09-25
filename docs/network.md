@@ -93,21 +93,34 @@ This transport status is separate from the core's table-registration `hasRejecti
 
 ## Hosts and terminals
 
-Every connection starts as a **terminal**. It becomes a **host** when it sends a command
-whose name starts with `BLAECK.`, such as `<BLAECK.GET_DEVICES>`, and stays one until it
-disconnects.
+Every connection starts as a **terminal**. It becomes the **host** when it sends a command
+whose name starts with `BLAECK.`, such as `<BLAECK.GET_DEVICES>`, and stays the host until it
+disconnects or another connection takes over.
 
 | | Host | Terminal |
 |---|---|---|
 | Typical client | Loggbok, blaecktcpy | PuTTY, telnet |
+| How many | one | the remaining connections |
 | Receives frames | yes | never |
 | Receives text from `device.Terminal` | no | yes |
 | Its commands | run and acknowledged | run, not acknowledged |
 
-Hosts share one device, as they would a serial port: `ACTIVATE` sets one interval for all of
-them, `PAUSE_WRITES` holds back frames to all of them, and data, state values and events go to
-every host. The answer to a request - a catalog, the device frame, an acknowledgement - goes
-only to the host that asked.
+There is one host at a time, as on a serial port. When another connection sends a `BLAECK.`
+command, it becomes the host and the device closes the previous host's connection. That
+connection is reported like any other disconnect, and on the debug stream:
+
+```text
+Client #2 is the host
+Client #0 disconnected: replaced as host
+```
+
+The newest host wins so that a host reconnecting after a dropped link is never locked out by
+its own dead connection, which the network stack may take minutes to notice. Two hosts that both
+reconnect on their own will keep taking over from each other; point only one host at a device.
+
+Closing sends the old host a FIN at once. Where the client supports `setConnectionTimeout()`,
+as the Ethernet library's does, the wait for a peer that no longer answers is bounded by
+`BLAECK_TCP_STOP_TIMEOUT_MS` (100 ms by default) instead of the library's own second.
 
 The [Connections page](https://sebajost.github.io/blaeck-protocol/protocol/connections) of
 the protocol specification is the full contract, for anyone writing a host.

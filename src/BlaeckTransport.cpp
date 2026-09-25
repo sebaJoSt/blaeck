@@ -23,6 +23,7 @@ void Blaeck::end()
   _tcpSelected = false;
   _receiver = Receiver();
   _requester = 0;
+  _hostSlot = NO_HOST;
   _transportError = TransportError::NotStarted;
   _transportErrorReported = false;
 }
@@ -122,27 +123,20 @@ bool Blaeck::_ensureConnections()
 
 // ----- Frames out -----
 
-bool Blaeck::_receivesFrame(byte slot) const
+// Frames go to the host alone. Terminals only receive Terminal text.
+bool Blaeck::_hostConnected() const
 {
-  const Connection &c = _connections[slot];
-  if (!c.open || !c.host || !_adapter->client(slot).connected())
-    return false;
-  return _frameAudience != AUDIENCE_REQUESTER || slot == _requester;
+  return _connections != nullptr && _hostSlot != NO_HOST && _adapter->client(_hostSlot).connected();
 }
 
 bool Blaeck::_transportReady() const
 {
-  if (_stream != nullptr)
-    return true;
-  if (_connections == nullptr)
-    return false;
-  for (byte i = 0; i < _maxClients; i++)
-  {
-    const Connection &c = _connections[i];
-    if (c.open && c.host && _adapter->client(i).connected())
-      return true;
-  }
-  return false;
+  return _stream != nullptr || _hostConnected();
+}
+
+bool Blaeck::_requesterIsHost() const
+{
+  return _stream != nullptr || (_connections != nullptr && _requester == _hostSlot);
 }
 
 void Blaeck::_writeDirect(const byte *data, size_t len)
@@ -153,17 +147,7 @@ void Blaeck::_writeDirect(const byte *data, size_t len)
       _frameWriteFailed = true;
     return;
   }
-  bool delivered = false;
-  for (byte i = 0; i < _maxClients; i++)
-  {
-    if (_receivesFrame(i))
-    {
-      delivered = true;
-      if (_adapter->client(i).write(data, len) != len)
-        _frameWriteFailed = true;
-    }
-  }
-  if (!delivered)
+  if (!_hostConnected() || _adapter->client(_hostSlot).write(data, len) != len)
     _frameWriteFailed = true;
 }
 
@@ -182,17 +166,8 @@ void Blaeck::_sendBuffered()
     _sendStreamBuffered();
     return;
   }
-  bool delivered = false;
-  for (byte i = 0; i < _maxClients; i++)
-  {
-    if (_receivesFrame(i))
-    {
-      delivered = true;
-      if (_adapter->client(i).write(_frameBuf, _framePos) != static_cast<size_t>(_framePos))
-        _frameWriteFailed = true;
-    }
-  }
-  if (!delivered)
+  if (!_hostConnected() ||
+      _adapter->client(_hostSlot).write(_frameBuf, _framePos) != static_cast<size_t>(_framePos))
     _frameWriteFailed = true;
 }
 
@@ -226,7 +201,6 @@ void Blaeck::_acceptConnection()
       return;
     c.open = true;
     c.receiver = Receiver();
-    c.host = false;
     if (_debugStream != nullptr)
     {
       _debugStream->print(F("Client #"));
@@ -248,25 +222,43 @@ void Blaeck::_dropClosedConnections()
 {
   for (byte i = 0; i < _maxClients; i++)
   {
-    Connection &c = _connections[i];
-    if (!c.open || _adapter->client(i).connected())
+    if (!_connections[i].open || _adapter->client(i).connected())
       continue;
 
-    _adapter->client(i).stop();
-    c.open = false;
-    c.host = false;
-    c.receiver = Receiver();
-    if (_debugStream != nullptr)
-    {
-      _debugStream->print(F("Client #"));
-      _debugStream->print(i);
-      _debugStream->println(F(" disconnected"));
-    }
-    if (_disconnectedCallback != nullptr)
-      _disconnectedCallback(i);
+    _releaseConnection(i);
+    _announceDisconnect(i, nullptr);
     if (_connections == nullptr)
       return;
   }
+}
+
+void Blaeck::_releaseConnection(byte slot)
+{
+  Connection &c = _connections[slot];
+  _adapter->client(slot).stop();
+  c.open = false;
+  c.receiver = Receiver();
+  if (_hostSlot == slot)
+    _hostSlot = NO_HOST;
+}
+
+// The callback may call end(), so callers must check _connections afterwards.
+void Blaeck::_announceDisconnect(byte slot, const __FlashStringHelper *reason)
+{
+  if (_debugStream != nullptr)
+  {
+    _debugStream->print(F("Client #"));
+    _debugStream->print(slot);
+    _debugStream->print(F(" disconnected"));
+    if (reason != nullptr)
+    {
+      _debugStream->print(F(": "));
+      _debugStream->print(reason);
+    }
+    _debugStream->println();
+  }
+  if (_disconnectedCallback != nullptr)
+    _disconnectedCallback(slot);
 }
 
 bool Blaeck::_receiveCommand()
@@ -315,22 +307,28 @@ bool Blaeck::_receiveCommand()
   return false;
 }
 
+// One host at a time, as on a serial port. The newest takes over and the previous one is
+// closed: a host that died without closing would otherwise hold the role until the network
+// stack gave up on it, and a live one learns from the close that it was replaced.
 void Blaeck::_builtinCommandReceived()
 {
-  if (_stream != nullptr)
-    return;
-  Connection &c = _connections[_requester];
-  if (c.host)
+  if (_stream != nullptr || _hostSlot == _requester)
     return;
 
-  c.host = true;
+  const byte previous = _hostSlot;
+  _hostSlot = _requester;
+  // Released before anything is printed, so neither host receives the lines as Terminal text.
+  if (previous != NO_HOST)
+    _releaseConnection(previous);
   _resetReportingBaselines();
   if (_debugStream != nullptr)
   {
     _debugStream->print(F("Client #"));
     _debugStream->print(_requester);
-    _debugStream->println(F(" is a host"));
+    _debugStream->println(F(" is the host"));
   }
+  if (previous != NO_HOST)
+    _announceDisconnect(previous, F("replaced as host"));
 }
 
 // ----- Terminal -----
@@ -348,8 +346,8 @@ size_t BlaeckTerminal::write(const uint8_t *buffer, size_t size)
     return size;
   for (byte i = 0; i < _owner->_maxClients; i++)
   {
-    Blaeck::Connection &c = _owner->_connections[i];
-    if (c.open && !c.host && _owner->_adapter->client(i).connected())
+    const Blaeck::Connection &c = _owner->_connections[i];
+    if (c.open && i != _owner->_hostSlot && _owner->_adapter->client(i).connected())
       _owner->_adapter->client(i).write(buffer, size);
   }
   return size;

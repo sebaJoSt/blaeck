@@ -43,6 +43,7 @@ struct SocketState
 {
   bool open = true;
   bool noDelay = false;
+  uint16_t stopTimeout = 0;
   unsigned int stops = 0;
   std::string input;
   std::string output;
@@ -84,6 +85,7 @@ public:
     return accepted;
   }
   void setNoDelay(bool enabled) { if (state) state->noDelay = enabled; }
+  void setConnectionTimeout(uint16_t ms) { if (state) state->stopTimeout = ms; }
   const char *remoteIP() { return "192.0.2.1"; }
   uint16_t remotePort() { return 1234; }
 };
@@ -112,6 +114,7 @@ class PlainClient : public FakeClient
 public:
   using FakeClient::FakeClient;
   void setNoDelay(bool) = delete;
+  void setConnectionTimeout(uint16_t) = delete;
 };
 
 class PlainServer : public FakeServer<PlainClient>
@@ -167,6 +170,11 @@ static void onOpen(byte slot) { opened.push_back(slot); }
 static void onClose(byte slot) { closed.push_back(slot); }
 static Blaeck *callbackDevice;
 static void detachInCallback(byte) { callbackDevice->end(); }
+static std::vector<std::string> pings;
+static void onPing(const char *, const char *const *params, byte count)
+{
+  pings.push_back(count > 0 ? params[0] : "");
+}
 
 static void assertLibraryIdentity(const std::string &frames)
 {
@@ -180,6 +188,7 @@ static void sessionBehavior(bool buffered)
 {
   opened.clear();
   closed.clear();
+  pings.clear();
   FakeServer<> server;
   SocketState host1, host2, terminal, excess, replacement;
   server.pending = {&host1, &host2, &terminal};
@@ -191,6 +200,7 @@ static void sessionBehavior(bool buffered)
   assert(server.noDelay == BLAECK_TCP_NO_DELAY_DEFAULT);
   device.setClientConnectedCallback(onOpen);
   device.setClientDisconnectedCallback(onClose);
+  device.onCommand("Ping", onPing);
   float value = 12.5f;
   device.addSignal(F("Value"), &value);
   device.read();
@@ -198,6 +208,7 @@ static void sessionBehavior(bool buffered)
   device.read();
   assert((opened == std::vector<byte>{0, 1, 2}));
   assert(host1.noDelay == BLAECK_TCP_NO_DELAY_DEFAULT);
+  assert(host1.stopTimeout == BLAECK_TCP_STOP_TIMEOUT_MS);
   assert(host1.input.empty()); // Silent connections are accepted.
   assert(debug.text.find("192.0.2.1:1234") != std::string::npos);
   device.Terminal.print("hello");
@@ -211,46 +222,74 @@ static void sessionBehavior(bool buffered)
   device.read(); // Consume the one-time restart notification.
   assert(!host1.output.empty() && host2.output.empty() && terminal.output.empty());
   assertLibraryIdentity(host1.output);
+  assert(debug.text.find("Client #0 is the host\r\n") != std::string::npos);
+
+  // A second host takes over; the first is closed, as a disconnect.
   host1.output.clear();
+  debug.text.clear();
   host2.input = "<BLAECK.GET_DEVICES>";
   device.read();
-  assert(host1.output.empty() && !host2.output.empty() && terminal.output.empty());
+  assert(!host1.open && host1.stops == 1 && host1.output.empty());
+  assert(!host2.output.empty() && terminal.output.empty());
+  assert((closed == std::vector<byte>{0}));
+  assert(debug.text == "Client #1 is the host\r\n"
+                       "Client #0 disconnected: replaced as host\r\n"
+                       "<BLAECK.GET_DEVICES>\r\n");
   host2.output.clear();
   device.Terminal.print("terminal");
-  assert(host1.output.empty() && host2.output.empty() && terminal.output == "terminal");
+  assert(host2.output.empty() && terminal.output == "terminal");
   terminal.output.clear();
   device.writeAllData();
-  assert(!host1.output.empty() && host1.output == host2.output && terminal.output.empty());
+  assert(!host2.output.empty() && terminal.output.empty());
 
-  host1.output.clear();
+  // A terminal's command runs unacknowledged, with no failed-write warning.
   host2.output.clear();
-  host1.input = "<BLAECK.GET_";
-  host2.input = "<BLAECK.GET_DEVICES><BLAECK.GET_DEVICES>";
+  debug.text.clear();
+  terminal.input = "<Ping,t>";
   device.read();
-  assert(host1.output.empty() && !host2.output.empty());
-  host2.output.clear();
-  host1.input += "DEVICES>";
-  device.read();
-  assert(!host1.output.empty() && host2.output.empty()); // Fairness and independent parsers.
-  assert(host2.input == "<BLAECK.GET_DEVICES>");
-  device.read();
+  assert((pings == std::vector<std::string>{"t"}));
+  assert(terminal.output.empty() && host2.output.empty());
+  assert(debug.text.find("Incomplete transport write") == std::string::npos);
 
-  server.pending.push_back(&excess);
+  // Round-robin fairness and independent parsers.
+  pings.clear();
+  terminal.input = "<Ping,t";
+  host2.input = "<Ping,a><Ping,b>";
   device.read();
-  assert(!excess.open && excess.stops == 1 && opened.size() == 3);
-  host1.open = false;
+  assert((pings == std::vector<std::string>{"a"}));
+  terminal.input += "1>";
   device.read();
-  assert((closed == std::vector<byte>{0}));
+  assert((pings == std::vector<std::string>{"a", "t1"}));
+  assert(host2.input == "<Ping,b>");
+  device.read();
+  assert((pings == std::vector<std::string>{"a", "t1", "b"}));
+  assert(terminal.output.empty() && !host2.output.empty());
+
   size_t before = allocations;
   server.pending.push_back(&replacement);
   device.read();
   assert(allocations == before); // No adapter/client-array allocation per connection.
   assert(opened.back() == 0);
+  host2.output.clear();
   device.Terminal.print("new terminal");
   assert(replacement.output == "new terminal"); // Reused slot has no old host state.
+  assert(host2.output.empty());
+
+  server.pending.push_back(&excess);
+  device.read();
+  assert(!excess.open && excess.stops == 1 && opened.size() == 4);
+  assert(excess.stopTimeout == BLAECK_TCP_STOP_TIMEOUT_MS);
+
+  host2.open = false;
+  device.read();
+  assert((closed == std::vector<byte>{0, 1}));
+  terminal.output.clear();
+  replacement.output.clear();
+  device.writeAllData();
+  assert(terminal.output.empty() && replacement.output.empty()); // No host, no frames.
 
   device.end();
-  assert(!host2.open && !terminal.open && !replacement.open);
+  assert(!terminal.open && !replacement.open);
   assert(device.transportError() == Blaeck::TransportError::NotStarted);
   size_t accepts = server.accepts;
   device.read();
@@ -334,6 +373,20 @@ static void detachFromCallbacks()
   device.read();
   b.open = false;
   device.read();
+  assert(device.transportError() == Blaeck::TransportError::NotStarted);
+
+  // Detaching from the disconnect callback of a host takeover.
+  SocketState first, second;
+  device.begin(server);
+  server.pending = {&first, &second};
+  device.read();
+  device.read();
+  first.input = "<BLAECK.GET_DEVICES>";
+  device.read();
+  first.output.clear();
+  second.input = "<BLAECK.WRITE_SYMBOLS>";
+  device.read();
+  assert(!first.open && !second.open && second.output.empty());
   assert(device.transportError() == Blaeck::TransportError::NotStarted);
 }
 

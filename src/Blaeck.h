@@ -145,6 +145,13 @@
   #define BLAECK_TCP_NO_DELAY_DEFAULT true
 #endif
 
+// How long closing a connection waits for the peer to close its end, where the client
+// supports setConnectionTimeout() (the Ethernet library: 1000 ms otherwise). The FIN goes out
+// at once either way; this only bounds the wait for an unresponsive or dead peer.
+#ifndef BLAECK_TCP_STOP_TIMEOUT_MS
+  #define BLAECK_TCP_STOP_TIMEOUT_MS 100
+#endif
+
 // One namespace and set of types for both transports.
 namespace blaeck
 {
@@ -3847,7 +3854,7 @@ public:
     _tcpSelected = true;
     _setBufferedWritesDefault(BLAECK_TCP_BUFFERED_WRITES_DEFAULT);
     _adapter = new (std::nothrow) blaeck::detail::TypedServerAdapter<Server>(
-        server, BLAECK_TCP_NO_DELAY_DEFAULT);
+        server, BLAECK_TCP_NO_DELAY_DEFAULT, BLAECK_TCP_STOP_TIMEOUT_MS);
     _setTransportError(_adapter != nullptr ? TransportError::None : TransportError::OutOfMemory);
     return BlaeckBeginRef(this);
   }
@@ -3959,24 +3966,13 @@ protected:
   // complete command.
   bool _receiveCommand();
   // Called when a received command's name starts with BLAECK., before anything answers it.
-  // A transport with several connections marks the sender as a host here.
+  // A transport with several connections makes the sender the host here.
   void _builtinCommandReceived();
+  // False for a terminal, which never receives frames and so gets no acknowledgement.
+  bool _requesterIsHost() const;
   // Sent in the device frames.
   const char *_libraryName() const { return "blaeck"; }
   const char *_libraryVersion() const { return BLAECK_VERSION; }
-
-  // Who a frame is for. Over one port it makes no difference; a transport with several
-  // connections reads _frameAudience and sends the frame only there.
-  enum Audience : uint8_t
-  {
-    AUDIENCE_ALL,         // every host: restart notice, catalogs, state values, events
-    AUDIENCE_REQUESTER,   // the host whose command is being handled: acks and replies
-    AUDIENCE_SUBSCRIBERS  // hosts receiving data
-  };
-  // The current frame's audience, set by _frameOpen().
-  Audience _frameAudience = AUDIENCE_ALL;
-  // Set while read() answers a built-in command, so the answer goes only to the requester.
-  bool _replying = false;
 
   unsigned long long getTimeStamp();
   void setSignalName(int signalIndex, const char *signalName);
@@ -4357,10 +4353,8 @@ protected:
   // On while a data frame's CRC is being computed.
   bool _frameCrcOn = false;
 
-  // Starts a frame. False if no frame may be written (no stream yet, or writes paused).
-  // While _replying, every frame goes to the requester whatever audience is passed.
-  bool _frameOpen(byte msgKey, unsigned long msgId, bool withCrc = false,
-                  Audience audience = AUDIENCE_ALL);
+  // Starts a frame. False if no frame may be written (no host yet, or writes paused).
+  bool _frameOpen(byte msgKey, unsigned long msgId, bool withCrc = false);
   // False if buffering failed or the transport did not accept every byte.
   bool _frameClose();
   uint32_t _frameCrcEnd()
@@ -4625,8 +4619,8 @@ private:
     // The slot holds a connection. Tracked here because a client's own bool means
     // "connected" on some cores and "has a socket" on others.
     bool open = false;
-    bool host = false;
   };
+  static const byte NO_HOST = 255;
 
   // Allocated by the first read(), so withClients() on the begin() chain can size it.
   Connection *_connections = nullptr;
@@ -4636,8 +4630,10 @@ private:
   TransportError _transportError = TransportError::NotStarted;
   bool _transportErrorReported = false;
   byte _maxClients = 4;
-  // The connection whose command is being handled; acks and answers go only there.
+  // The connection whose command is being handled.
   byte _requester = 0;
+  // The one connection that receives frames. The newest to send a built-in takes over.
+  byte _hostSlot = NO_HOST;
 
   void (*_connectedCallback)(byte clientNo) = nullptr;
   void (*_disconnectedCallback)(byte clientNo) = nullptr;
@@ -4646,8 +4642,10 @@ private:
   void _sendStreamBuffered();
   void _acceptConnection();
   void _dropClosedConnections();
-  // Whether the frame being written goes to this connection.
-  bool _receivesFrame(byte slot) const;
+  // Frees a slot. _announceDisconnect() reports it once the transport state is consistent.
+  void _releaseConnection(byte slot);
+  void _announceDisconnect(byte slot, const __FlashStringHelper *reason);
+  bool _hostConnected() const;
   void _setMaxClients(byte count);
   void _setTransportError(TransportError error);
   void _reportTransportError();

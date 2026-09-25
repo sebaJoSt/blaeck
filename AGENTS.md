@@ -20,6 +20,9 @@ Version 7.0.0 is in development; setting its metadata does not publish a release
   preserve explicit overrides across later begin() calls.
 - Both connections report lowercase `blaeck` version 7.0.0. Keep the class/header
   `Blaeck`/`Blaeck.h` and uppercase BLAECK protocol framing and command names unchanged.
+- TCP has one host at a time. A connection's first `BLAECK.*` command makes it the host; the
+  previous host is closed and reported as "Client #N disconnected: replaced as host". Frames go
+  only to the host, terminals get Terminal text, and terminal commands are not acknowledged.
 - Reuse the allocated client slots. Teardown closes accepted clients, not the supplied
   server. Report allocation/setup errors through transportError()/printTransportError().
 - Examples start with `Blaeck.h` to select this package while the old libraries coexist.

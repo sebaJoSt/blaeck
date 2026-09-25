@@ -30,6 +30,17 @@ auto setNoDelay(T &socket, bool enabled, int)
 template<class T>
 void setNoDelay(T &, bool, long) {}
 
+// Bounds how long stop() waits for the peer, where the client supports it.
+template<class T>
+auto setStopTimeout(T &socket, uint16_t ms, int)
+    -> decltype(socket.setConnectionTimeout(ms), void())
+{
+  socket.setConnectionTimeout(ms);
+}
+
+template<class T>
+void setStopTimeout(T &, uint16_t, long) {}
+
 template<class Server>
 class TypedServerAdapter : public ServerAdapter
 {
@@ -37,7 +48,8 @@ class TypedServerAdapter : public ServerAdapter
   using Socket = decltype(static_cast<Server *>(nullptr)->accept());
 
 public:
-  TypedServerAdapter(Server &server, bool noDelay) : _server(server), _noDelay(noDelay)
+  TypedServerAdapter(Server &server, bool noDelay, uint16_t stopTimeoutMs)
+      : _server(server), _noDelay(noDelay), _stopTimeoutMs(stopTimeoutMs)
   {
     setNoDelay(_server, _noDelay, 0);
   }
@@ -65,6 +77,7 @@ public:
     Socket incoming = _server.accept();
     if (!incoming)
       return false;
+    setStopTimeout(incoming, _stopTimeoutMs, 0);
     if (slot < 0)
     {
       incoming.stop();
@@ -92,6 +105,7 @@ private:
   Socket *_clients = nullptr;
   byte _count = 0;
   bool _noDelay;
+  uint16_t _stopTimeoutMs;
 };
 
 } // namespace detail

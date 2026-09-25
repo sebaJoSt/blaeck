@@ -14,7 +14,8 @@ def main():
     host = ROOT / "extras" / "tests" / "host"
     with tempfile.TemporaryDirectory(prefix="blaeck-server-") as temp:
         exe = Path(temp) / "server-test.exe"
-        command = [args.cxx, "-std=c++11", "-Wall", "-Wextra", "-O1",
+        # BLAECK_NATIVE_TEST drops the 4-byte long checks, which a 64-bit Linux/macOS host fails.
+        command = [args.cxx, "-std=c++11", "-Wall", "-Wextra", "-O1", "-DBLAECK_NATIVE_TEST",
                    "-I" + str(host), "-I" + str(ROOT / "src"),
                    str(host / "ServerAdapterTest.cpp"), str(ROOT / "src" / "Blaeck.cpp"),
                    str(ROOT / "src" / "BlaeckTransport.cpp"),
