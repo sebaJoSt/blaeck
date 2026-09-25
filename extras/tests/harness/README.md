@@ -20,9 +20,25 @@ with the required MQTT/Home Assistant or TimescaleDB outputs configured.
 | EventMetadataTest | `drive_event_metadata.py [seconds\|capture.json]`: discovery/registry and live HA event checks |
 | SignalTimingTest | `drive_signal_timing.py [table]`: issue HA commands and check recorded TimescaleDB rows |
 | SignalReportingTest | `drive_signal_reporting.py SERIAL_PORT`: Mega/AVR reporting policies, shared baselines, rate limits, numeric/text values and CRC32, with direct and buffered Serial writes |
+| DeviceTreeTest | `drive_device_tree.py SERIAL_PORT`: devices from addDevice() - device list, ownership of signals, commands and channels, missing devices and device restarts, with a simulated second board |
 
 Run each Python driver from its sketch directory, or pass its full path.
 The scripts' module docstrings describe their individual expectations.
+
+## Mega device checks
+
+`DeviceTreeTest` needs only a Mega and USB: the second board is simulated in the sketch, so
+there is no wiring. The driver needs pyserial (`pip install pyserial`). Close Loggbok and serial
+monitors first, and substitute the actual Mega port for `COMxx`:
+
+```powershell
+arduino-cli compile --fqbn arduino:avr:mega extras\tests\harness\DeviceTreeTest
+arduino-cli upload --fqbn arduino:avr:mega --port COMxx extras\tests\harness\DeviceTreeTest
+python extras\tests\harness\DeviceTreeTest\drive_device_tree.py COMxx
+```
+
+Each check prints PASS or FAIL. Afterwards, connect Loggbok to see the Pump controller listed
+below DeviceTreeTest.
 
 ## Mega signal-reporting checks
 

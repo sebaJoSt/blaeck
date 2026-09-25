@@ -700,6 +700,8 @@ struct DataFrame
   uint64_t timestamp = 0;
   byte mode = 0;
   byte flags = 0;
+  byte status = 0;
+  std::string statusPayload;
 };
 
 static std::vector<DataFrame> takeData(std::string &output, const std::vector<int> &widths)
@@ -738,6 +740,8 @@ static std::vector<DataFrame> takeData(std::string &output, const std::vector<in
       p += size;
     }
     assert(p == end - 9);
+    frame.status = static_cast<byte>(output[end - 9]);
+    frame.statusPayload = output.substr(end - 8, 4);
     uint32_t actual;
     memcpy(&actual, output.data() + end - 4, 4);
     blaeck::detail::BlaeckCRC32 crc;
@@ -1533,6 +1537,268 @@ static void beginOnlyOnce()
       device.end(); // Release before the socket double goes out of scope.
     }
   }
+}
+
+// The two ownership bytes of the catalog record that holds `name`: master/slave and slave ID.
+// They sit right before the name, or before the payload length in a command record.
+static std::string ownerOf(const std::string &payload, const char *name, size_t gap = 0)
+{
+  const std::string key = std::string(name) + '\0';
+  const size_t at = payload.find(key);
+  assert(at != std::string::npos && at >= 2 + gap);
+  return payload.substr(at - 2 - gap, 2);
+}
+
+static std::string owner(byte config, byte id)
+{
+  return std::string(1, static_cast<char>(config)) + static_cast<char>(id);
+}
+
+static std::string deviceRecord(byte config, byte id, const char *name, const char *hw, const char *fw)
+{
+  return owner(config, id) + name + '\0' + hw + '\0' + fw + '\0' + BLAECK_VERSION + '\0' +
+         "blaeck" + '\0';
+}
+
+static void noDeviceOwnership()
+{
+  FakeStream stream;
+  Blaeck device;
+  device.begin(stream);
+  device.DeviceName = "Solo";
+  device.DeviceHWVersion = "Mega";
+  float value = 1;
+  device.addSignal(F("Value"), &value);
+  device.read();
+  stream.data.output.clear();
+  command(device, stream, "<BLAECK.GET_DEVICES>");
+  // Without devices the board is "single", as it always was.
+  assert(commandFramePayload(stream.data.output, 0xB3, 0) ==
+         deviceRecord(0x00, 0, "Solo", "Mega", "n/a"));
+  stream.data.output.clear();
+  command(device, stream, "<BLAECK.WRITE_SYMBOLS>");
+  assert(ownerOf(commandFramePayload(stream.data.output, 0xB0, 0), "Value") == owner(0x00, 0));
+}
+
+static void subDevices(bool buffered)
+{
+  hostMillis() = 0;
+  auto handler = [](const char *, const char *const *, byte) {};
+  FakeStream stream;
+  Capture debug;
+  Blaeck device;
+  device.begin(stream).withDevices(2).withDebugStream(&debug);
+  device.setBufferedWrites(buffered);
+  device.DeviceName = "Board";
+  device.DeviceHWVersion = "Mega";
+
+  float boardValue = 1, flow = 2, pressure = 3, orphan = 4;
+  byte speed = 0;
+  bool pumpOn = false;
+  device.addSignal(F("BoardValue"), &boardValue);
+  BlaeckDeviceRef pump = device.addDevice(F("Pump")).withHWVersion("Nano").withFWVersion(F("1.2"));
+  BlaeckDeviceRef fan = device.addDevice("Fan");
+  assert(!pump.isMissing() && !fan.isMissing());
+
+  // A duplicate name, a full table and an empty name are rejected; their handles do nothing.
+  debug.text.clear();
+  BlaeckDeviceRef duplicate = device.addDevice(F("Pump"));
+  assert(debug.text.find("duplicate device name") != std::string::npos);
+  BlaeckDeviceRef third = device.addDevice(F("Third"));
+  assert(debug.text.find("Dropped 'Third': table full at 2") != std::string::npos);
+  BlaeckDeviceRef empty = device.addDevice("");
+  BlaeckDeviceRef unset;
+  third.markMissing();
+  empty.writeRestarted();
+  assert(!third.isMissing() && !unset.isMissing() && !duplicate.isMissing());
+  debug.text.clear();
+  assert(device.printRejections(&debug));
+  assert(debug.text.find("3 device registrations rejected; table capacity: 2.") != std::string::npos);
+
+  device.addSignal(F("Flow"), &flow).inDevice(pump);
+  device.addSignal(F("Pressure"), &pressure).inDevice(pump);
+  // A rejected or foreign handle leaves the entry on the board.
+  Blaeck other;
+  FakeStream otherStream;
+  other.begin(otherStream);
+  BlaeckDeviceRef foreign = other.addDevice(F("Foreign"));
+  device.addSignal(F("Orphan"), &orphan).inDevice(third).inDevice(foreign);
+
+  // A command's own state follows the command's device in either order.
+  device.onNumberCommand("PUMP_SPEED", handler).withRange(0.0f, 100.0f, 1.0f)
+      .withOwnState(F("PumpSpeedState"), &speed).inDevice(pump);
+  device.onSwitchCommand("PUMP_ON", handler).inDevice(pump).withOwnState(F("PumpOnState"), &pumpOn);
+  device.onButtonCommand("BOARD_RESET", handler);
+  device.addStateChannel(F("PumpStatus"), BlaeckText).inDevice(pump);
+  device.addEventChannel(F("FanAlarm"), F("stall")).inDevice(fan);
+
+  // The board's restart notice calls it the master once devices exist.
+  device.read();
+  const std::string restart = commandFramePayload(stream.data.output, 0xC0, 0);
+  assert(restart == deviceRecord(0x01, 0, "Board", "Mega", "n/a"));
+  stream.data.output.clear();
+
+  command(device, stream, "<BLAECK.GET_DEVICES>");
+  assert(commandFramePayload(stream.data.output, 0xB3, 0) ==
+         deviceRecord(0x01, 0, "Board", "Mega", "n/a") +
+         deviceRecord(0x02, 1, "Pump", "Nano", "1.2") +
+         deviceRecord(0x02, 2, "Fan", "n/a", "n/a"));
+  stream.data.output.clear();
+
+  command(device, stream, "<BLAECK.WRITE_SYMBOLS>");
+  std::string payload = commandFramePayload(stream.data.output, 0xB0, 0);
+  assert(ownerOf(payload, "BoardValue") == owner(0x01, 0));
+  assert(ownerOf(payload, "Flow") == owner(0x02, 1));
+  assert(ownerOf(payload, "Pressure") == owner(0x02, 1));
+  assert(ownerOf(payload, "Orphan") == owner(0x01, 0));
+  stream.data.output.clear();
+
+  command(device, stream, "<BLAECK.WRITE_COMMANDS>");
+  payload = commandFramePayload(stream.data.output, 0xA0, 0);
+  assert(ownerOf(payload, "PUMP_SPEED", 2) == owner(0x02, 1));
+  assert(ownerOf(payload, "PUMP_ON", 2) == owner(0x02, 1));
+  assert(ownerOf(payload, "BOARD_RESET", 2) == owner(0x01, 0));
+  stream.data.output.clear();
+
+  command(device, stream, "<BLAECK.WRITE_STATE_CHANNELS>");
+  payload = commandFramePayload(stream.data.output, 0x90, 0);
+  assert(ownerOf(payload, "PumpStatus") == owner(0x02, 1));
+  assert(ownerOf(payload, "PumpSpeedState") == owner(0x02, 1));
+  assert(ownerOf(payload, "PumpOnState") == owner(0x02, 1));
+  stream.data.output.clear();
+
+  command(device, stream, "<BLAECK.WRITE_EVENT_CHANNELS>");
+  assert(ownerOf(commandFramePayload(stream.data.output, 0x80, 0), "FanAlarm") == owner(0x02, 2));
+  stream.data.output.clear();
+
+  device.writeState(F("PumpStatus"), "ok");
+  assert(commandFramePayload(stream.data.output, 0x95, 0).substr(0, 2) == owner(0x02, 1));
+  stream.data.output.clear();
+  device.writeEvent(F("FanAlarm"), F("stall"));
+  assert(commandFramePayload(stream.data.output, 0x85, 0).substr(0, 2) == owner(0x02, 2));
+  stream.data.output.clear();
+
+  // A device restart is reported for that device only.
+  pump.writeRestarted();
+  assert(commandFramePayload(stream.data.output, 0xC0, 0) == deviceRecord(0x02, 1, "Pump", "Nano", "1.2"));
+  stream.data.output.clear();
+
+  const std::vector<int> widths = {4, 4, 4, 4};
+  command(device, stream, "<BLAECK.ACTIVATE,0>");
+  stream.data.output.clear();
+  device.writeIfDue();
+  auto frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 1, 2, 3}));
+  assert(frames[0].status == 0 && frames[0].statusPayload == std::string(4, '\0'));
+
+  // A missing device's signals leave the frame, and the status names the first and its device.
+  pump.markMissing();
+  pump.markMissing();
+  assert(pump.isMissing());
+  device.writeIfDue();
+  frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 3}));
+  assert(frames[0].status == 0x01 && frames[0].statusPayload == std::string("\0\1\0\1", 4));
+  device.writeAllData();
+  frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 3}) && frames[0].status == 0x01);
+  device.write("Flow", 5.0f);
+  assert(takeData(stream.data.output, widths).empty()); // nothing left to send
+
+  // A device without signals changes nothing when it goes missing.
+  pump.markPresent();
+  fan.markMissing();
+  device.writeIfDue();
+  frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 1, 2, 3}) && frames[0].status == 0);
+  fan.markPresent();
+
+  // After a gap, a changed-only signal is sent again even if its value did not change.
+  command(device, stream, "<BLAECK.DEACTIVATE>");
+  stream.data.output.clear();
+  Blaeck changes;
+  FakeStream changesStream;
+  changes.begin(changesStream).withDevices(1);
+  float level = 7;
+  BlaeckDeviceRef tank = changes.addDevice(F("Tank"));
+  changes.addSignal(F("Level"), &level).writeAtInterval(BLAECK_OFF).writeOnChange(BLAECK_ANY_CHANGE)
+      .inDevice(tank);
+  changes.read();
+  changesStream.data.output.clear();
+  changes.writeIfDue();
+  assert(takeData(changesStream.data.output, {4}).size() == 1);
+  changes.writeIfDue();
+  assert(takeData(changesStream.data.output, {4}).empty());
+  tank.markMissing();
+  tank.markPresent();
+  changes.writeIfDue();
+  frames = takeData(changesStream.data.output, {4});
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0}));
+
+  // The device table holds at most 255: slave IDs are one byte and 0 is the board.
+  Blaeck big;
+  FakeStream bigStream;
+  debug.text.clear();
+  big.begin(bigStream).withDebugStream(&debug).withDevices(300);
+  assert(debug.text.find("withDevices(300): clamped to 255") != std::string::npos);
+}
+
+static void ackResult(const std::string &output, uint32_t messageId, const char *bare, byte status)
+{
+  const std::string ack = commandFramePayload(output, 0xA5, messageId);
+  uint32_t hash, nameHash;
+  memcpy(&hash, ack.data(), 4);
+  memcpy(&nameHash, ack.data() + 4, 4);
+  const std::string name = std::string(bare).substr(0, std::string(bare).find(','));
+  assert(hash == commandHash(bare) && nameHash == commandHash(name));
+  assert(static_cast<byte>(ack[8]) == status);
+}
+
+static void routedDeviceCommands()
+{
+  pings.clear();
+  FakeStream stream;
+  Blaeck device;
+  device.begin(stream).withDevices(2);
+  BlaeckDeviceRef pump = device.addDevice(F("Pump"));
+  device.addDevice(F("Fan"));
+  device.onNumberCommand("SET_PUMP_SPEED", onPing).withRange(0.0f, 100.0f, 1.0f).inDevice(pump);
+  device.onCommand("BOARD_PING", onPing);
+  device.read();
+  stream.data.output.clear();
+
+  // How Loggbok sends a device's command: '@' names the device, '#' carries the message id,
+  // and the ack hashes the command after both, as the host wrote it.
+  command(device, stream, "<@1:#7:SET_PUMP_SPEED,40>");
+  assert((pings == std::vector<std::string>{"40"}));
+  ackResult(stream.data.output, 7, "SET_PUMP_SPEED,40", 0);
+  stream.data.output.clear();
+
+  // Prefix order carries no meaning.
+  command(device, stream, "<#8:@1:SET_PUMP_SPEED,41>");
+  assert(pings.back() == "41");
+  ackResult(stream.data.output, 8, "SET_PUMP_SPEED,41", 0);
+  stream.data.output.clear();
+
+  // Routed to the wrong device, or a board command routed to a device: unknown, not run.
+  command(device, stream, "<@2:#9:SET_PUMP_SPEED,42>");
+  ackResult(stream.data.output, 9, "SET_PUMP_SPEED,42", 1);
+  stream.data.output.clear();
+  command(device, stream, "<@1:#10:BOARD_PING,1>");
+  ackResult(stream.data.output, 10, "BOARD_PING,1", 1);
+  stream.data.output.clear();
+  assert(pings.size() == 2);
+
+  // A device the board does not have: the item stays in the name, as the spec requires.
+  command(device, stream, "<@9:#11:SET_PUMP_SPEED,43>");
+  assert(pings.size() == 2);
+  const std::string ack = commandFramePayload(stream.data.output, 0xA5, 0);
+  assert(static_cast<byte>(ack[8]) == 1);
+  stream.data.output.clear();
+
+  // Typed by hand, without routing, a device's command still runs.
+  command(device, stream, "<SET_PUMP_SPEED,44>");
+  assert(pings.back() == "44");
 }
 
 static void reportingPolicies(bool buffered)
@@ -2426,6 +2692,10 @@ int main()
     detachFromCallbacks();
     unifiedConnections();
     beginOnlyOnce();
+    noDeviceOwnership();
+    subDevices(false);
+    subDevices(true);
+    routedDeviceCommands();
   }
   reportingPolicies(false);
   reportingPolicies(true);

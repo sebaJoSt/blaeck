@@ -47,12 +47,12 @@ The defaults:
 | `withCommands` | 6 | 16 | 32 |
 
 RAM is what you are sizing against, not just the entry count. On AVR, with the default
-settings, a signal costs 11 bytes, an event type 6, an event channel 12, a state channel 34
-and a command 65 - the largest there is. A signal with a unit, icon or other description takes
-18 bytes more. Each configuration string passed as ordinary RAM text is copied, at about its
-length plus 7 bytes (a reference count, the terminator and the heap's own header); an `F()`
-string costs nothing extra. A Mega's 8 kB is gone at a few hundred of anything, where an ESP32
-has room for thousands.
+settings, a signal costs 12 bytes, an event type 6, an event channel 13, a state channel 35, a
+device 10 and a command 66 - the largest there is. A signal with a unit, icon or other
+description takes 18 bytes more. Each configuration string passed as ordinary RAM text is
+copied, at about its length plus 7 bytes (a reference count, the terminator and the heap's own
+header); an `F()` string costs nothing extra. A Mega's 8 kB is gone at a few hundred of
+anything, where an ESP32 has room for thousands.
 
 Two slots are easy to miss. A command that reports its own value with `withOwnState()` takes a
 state channel as well as a command slot. Event types share one table across every channel, so

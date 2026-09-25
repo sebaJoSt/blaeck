@@ -143,6 +143,7 @@ and the optional TelnetStream setup.
 | [Commands](docs/commands.md) | Reacting to commands, and declaring them as controls |
 | [State channels](docs/state-channels.md) | Reporting a value that is displayed but not logged |
 | [Events](docs/events.md) | Reporting that something happened |
+| [Devices](docs/devices.md) | Showing a second board, or a part of this one, as its own device |
 | [Sending data](docs/sending-data.md) | Intervals, sending it yourself, timestamps, buffered writes |
 | [Configuration](docs/configuration.md) | Table sizes and compile-time settings |
 | [Networking](docs/network.md) | Servers, client limits, terminal output and transport errors |
@@ -176,6 +177,7 @@ Start with **Basic**, then **Signals** and **Commands**. Follow with **StateChan
 | [more / WiFi](examples/more/WiFi) | WiFi-specific connection setup |
 | [more / ESP32C6BugBoard](examples/more/ESP32C6BugBoard) | An ESP32-C6 board-specific example |
 | [more / BridgeESP32PoE](examples/more/BridgeESP32PoE) | A bridge between a UART and TCP |
+| [more / SubDevices](examples/more/SubDevices) | A second board shown as its own device, polled over a UART |
 
 ## Coming from BlaeckSerial or BlaeckTCP
 

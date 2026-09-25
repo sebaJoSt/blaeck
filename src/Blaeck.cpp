@@ -45,6 +45,12 @@ void Blaeck::_emitTextBytes(const void *text, bool inFlash, size_t length)
       _emitByte(_textByte(text, true, i));
 }
 
+// A device's unset version, sent as "n/a" like the board's DeviceFWVersion default.
+static BlaeckString _orNotAvailable(BlaeckString value)
+{
+  return value != nullptr ? value : BlaeckString(F("n/a"));
+}
+
 static const char *_defaultBoardName()
 {
 #if defined(ARDUINO_AVR_MEGA2560)
@@ -90,6 +96,8 @@ Blaeck::~Blaeck()
   Signals = nullptr;
   delete[] _commandHandlers;
   _commandHandlers = nullptr;
+  delete[] _devices;
+  _devices = nullptr;
 #if BLAECK_ENABLE_STATE_CHANNELS
   delete[] _stateChannels;
   _stateChannels = nullptr;
@@ -186,7 +194,8 @@ bool Blaeck::hasRejections() const
 {
   if (_rejectedStringCount != 0)
     return true;
-  if (_rejectedSignalCount > 0 || _rejectedCommandCount > 0 || _rejectedSignalPolicyCount > 0)
+  if (_rejectedSignalCount > 0 || _rejectedCommandCount > 0 || _rejectedSignalPolicyCount > 0
+      || _rejectedDeviceCount > 0)
     return true;
 #if BLAECK_ENABLE_SIGNAL_META
   if (_rejectedSignalMetaCount > 0)
@@ -240,6 +249,8 @@ bool Blaeck::printRejections(Print *out)
   if (_rejectedCommandCount > 0)
     _printRejectionLine(out, F("command"), _rejectedCommandCount,
                         _commandCapacity);
+  if (_rejectedDeviceCount > 0)
+    _printRejectionLine(out, F("device"), _rejectedDeviceCount, _deviceCapacity);
 #if BLAECK_ENABLE_STATE_CHANNELS
   if (_rejectedStateChannelCount > 0)
     _printRejectionLine(out, F("state channel"),
@@ -301,6 +312,10 @@ void Blaeck::_setTableCapacity(TableId table, unsigned int count)
     existing = _commandHandlers;
     chainCall = F("withCommands");
     break;
+  case TABLE_DEVICES:
+    existing = _devices;
+    chainCall = F("withDevices");
+    break;
   default:
     return;
   }
@@ -351,6 +366,18 @@ void Blaeck::_setTableCapacity(TableId table, unsigned int count)
 #endif
   case TABLE_COMMANDS:
     _commandCapacity = (count > MAX_TABLE_ENTRIES) ? MAX_TABLE_ENTRIES : (uint16_t)count;
+    break;
+  case TABLE_DEVICES:
+    // Slave IDs are one byte, so far fewer fit than in the other tables.
+    if (count > MAX_DEVICES && _debugStream != nullptr)
+    {
+      _debugStream->print(F("BLAECK.withDevices("));
+      _debugStream->print(count);
+      _debugStream->print(F("): clamped to "));
+      _debugStream->print(MAX_DEVICES);
+      _debugStream->println(F(", which is the most slave IDs allow."));
+    }
+    _deviceCapacity = (count > MAX_DEVICES) ? MAX_DEVICES : (uint16_t)count;
     break;
   default:
     break;
@@ -425,6 +452,224 @@ bool Blaeck::_ensureCommandTable()
     _debugStream->println(F(" commands). Every command will be dropped."));
   }
   return _commandHandlers != nullptr;
+}
+
+// ----- Devices -----
+
+bool Blaeck::_ensureDeviceTable()
+{
+  if (_devices != nullptr)
+    return true;
+  if (_deviceCapacity == 0)
+    return false;
+  _devices = new (std::nothrow) DeviceEntry[_deviceCapacity]();
+  if (_devices == nullptr && _debugStream != nullptr)
+  {
+    _debugStream->print(F("No RAM for the device table ("));
+    _debugStream->print(_deviceCapacity);
+    _debugStream->println(F(" devices). Every device will be dropped."));
+  }
+  return _devices != nullptr;
+}
+
+BlaeckDeviceRef Blaeck::addDevice(BlaeckString name)
+{
+  if (name == nullptr || name.read() == 0)
+  {
+    if (_debugStream != nullptr)
+      _debugStream->println(F("Dropped a device with an empty name."));
+    ++_rejectedDeviceCount;
+    return BlaeckDeviceRef();
+  }
+  // A host names a device after its path, so two devices of one board can't share a name.
+  for (byte i = 0; i < _deviceCount; ++i)
+  {
+    if (BlaeckString(_devices[i].name) == name)
+    {
+      if (_debugStream != nullptr)
+      {
+        _debugStream->print(F("Dropped duplicate device name: "));
+        name.printTo(*_debugStream);
+        _debugStream->println();
+      }
+      ++_rejectedDeviceCount;
+      return BlaeckDeviceRef();
+    }
+  }
+  if (_deviceCount >= _deviceCapacity || !_ensureDeviceTable())
+  {
+    if (name.inFlash())
+      _warnTableFull(F("withDevices"), _deviceCapacity,
+                     reinterpret_cast<const __FlashStringHelper *>(name.data()));
+    else
+      _warnTableFull(F("withDevices"), _deviceCapacity, name.data());
+    ++_rejectedDeviceCount;
+    return BlaeckDeviceRef();
+  }
+  if (!_storeString(_devices[_deviceCount].name, name))
+  {
+    ++_rejectedDeviceCount;
+    return BlaeckDeviceRef();
+  }
+  ++_deviceCount;
+  return BlaeckDeviceRef(this, _deviceCount);
+}
+
+int Blaeck::_deviceIdOf(const BlaeckDeviceRef &device) const
+{
+  if (device._owner != this || _deviceEntry(device._id) == nullptr)
+    return -1;
+  return device._id;
+}
+
+void Blaeck::_setDeviceMissing(byte id, bool missing)
+{
+  DeviceEntry *d = _deviceEntry(id);
+  if (d == nullptr || d->missing == missing)
+    return;
+  d->missing = missing;
+  if (missing)
+    return;
+  // The host got none of its values meanwhile, so each signal that reports on change is
+  // due again rather than compared with a value from before the gap.
+  for (int i = 0; i < _signalIndex; ++i)
+    if (Signals[i].DeviceId == id && Signals[i].Reporting != nullptr)
+      Signals[i].Reporting->valid = false;
+}
+
+void Blaeck::_writeDeviceRestarted(byte id)
+{
+  const DeviceEntry *d = _deviceEntry(id);
+  if (d == nullptr || !_frameOpen(0xC0, 0))
+    return;
+  _emitDevice(id, d->name, _orNotAvailable(d->hwVersion), _orNotAvailable(d->fwVersion));
+  _frameClose();
+}
+
+void Blaeck::_setSignalDevice(int16_t index, const BlaeckDeviceRef &device)
+{
+  const int id = _deviceIdOf(device);
+  if (id < 0 || index < 0 || index >= _signalIndex)
+    return;
+  Signals[index].DeviceId = (uint8_t)id;
+}
+
+void Blaeck::_setCommandDevice(int16_t index, const BlaeckDeviceRef &device)
+{
+  const int id = _deviceIdOf(device);
+  if (id < 0 || index < 0 || (uint16_t)index >= _commandSlots() || !_commandHandlers[index].inUse)
+    return;
+  CommandHandlerEntry &e = _commandHandlers[index];
+  if (e.deviceId == id)
+    return;
+  e.deviceId = (uint8_t)id;
+  _commandCatalogDirty = true;
+#if BLAECK_ENABLE_COMMAND_META && BLAECK_ENABLE_STATE_CHANNELS
+  // A command's own state channel belongs to the same device.
+  if (e.stateSource == BLAECK_STATE_CHANNEL && e.stateSignal != nullptr)
+  {
+    int ch = _findStateChannel(BlaeckString(e.stateSignal));
+    if (ch >= 0 && _stateChannels[ch].ownedByCommand)
+    {
+      _stateChannels[ch].deviceId = (uint8_t)id;
+      _stateCatalogDirty = true;
+    }
+  }
+#endif
+}
+
+void Blaeck::_setStateChannelDevice(int16_t index, const BlaeckDeviceRef &device)
+{
+#if BLAECK_ENABLE_STATE_CHANNELS
+  const int id = _deviceIdOf(device);
+  if (id < 0 || index < 0 || (uint16_t)index >= _stateChannelSlots() || !_stateChannels[index].inUse
+      || _stateChannels[index].deviceId == id)
+    return;
+  _stateChannels[index].deviceId = (uint8_t)id;
+  _stateCatalogDirty = true;
+#else
+  (void)index;
+  (void)device;
+#endif
+}
+
+void Blaeck::_setEventChannelDevice(int16_t index, const BlaeckDeviceRef &device)
+{
+#if BLAECK_ENABLE_EVENTS
+  const int id = _deviceIdOf(device);
+  if (id < 0 || index < 0 || (uint16_t)index >= _eventChannelSlots() || !_eventChannels[index].inUse
+      || _eventChannels[index].deviceId == id)
+    return;
+  _eventChannels[index].deviceId = (uint8_t)id;
+  _eventCatalogDirty = true;
+#else
+  (void)index;
+  (void)device;
+#endif
+}
+
+BlaeckDeviceRef &BlaeckDeviceRef::withHWVersion(BlaeckString hwVersion)
+{
+  if (_owner != nullptr)
+    if (Blaeck::DeviceEntry *d = _owner->_deviceEntry(_id))
+      _owner->_storeString(d->hwVersion, hwVersion);
+  return *this;
+}
+
+BlaeckDeviceRef &BlaeckDeviceRef::withFWVersion(BlaeckString fwVersion)
+{
+  if (_owner != nullptr)
+    if (Blaeck::DeviceEntry *d = _owner->_deviceEntry(_id))
+      _owner->_storeString(d->fwVersion, fwVersion);
+  return *this;
+}
+
+void BlaeckDeviceRef::markMissing()
+{
+  if (_owner != nullptr)
+    _owner->_setDeviceMissing(_id, true);
+}
+
+void BlaeckDeviceRef::markPresent()
+{
+  if (_owner != nullptr)
+    _owner->_setDeviceMissing(_id, false);
+}
+
+bool BlaeckDeviceRef::isMissing() const
+{
+  return _owner != nullptr && _owner->_deviceMissing(_id);
+}
+
+void BlaeckDeviceRef::writeRestarted()
+{
+  if (_owner != nullptr)
+    _owner->_writeDeviceRestarted(_id);
+}
+
+void BlaeckSignalRefBase::_setDevice(const BlaeckDeviceRef &device)
+{
+  if (_owner != nullptr)
+    _owner->_setSignalDevice(_index, device);
+}
+
+void BlaeckCommandRefBase::_setDevice(const BlaeckDeviceRef &device)
+{
+  if (_owner != nullptr)
+    _owner->_setCommandDevice(_index, device);
+}
+
+void BlaeckStateRefBase::_setDevice(const BlaeckDeviceRef &device)
+{
+  if (_owner != nullptr)
+    _owner->_setStateChannelDevice(_index, device);
+}
+
+BlaeckEventChannelRef BlaeckEventChannelRef::inDevice(const BlaeckDeviceRef &device)
+{
+  if (_owner != nullptr)
+    _owner->_setEventChannelDevice(_index, device);
+  return *this;
 }
 
 #if BLAECK_ENABLE_STATE_CHANNELS
@@ -516,6 +761,7 @@ int Blaeck::_registerSignalCommon(const char *ram, const __FlashStringHelper *fl
   Signals[_signalIndex].Selected = 0;
   Signals[_signalIndex].HasSuffix = 0;
   Signals[_signalIndex].NameSuffix = 0;
+  Signals[_signalIndex].DeviceId = 0;
 #if BLAECK_ENABLE_SIGNAL_META
   // A reused slot may still hold a metadata record from before; free it.
   if (Signals[_signalIndex].Meta != nullptr)
@@ -1399,6 +1645,7 @@ int Blaeck::_registerCommand(const char *command, BlaeckCommandHandler handler, 
       _commandHandlers[i].command[MAX_COMMAND_NAME_COUNT - 1] = '\0';
       _commandHandlers[i].handler = handler;
       _commandHandlers[i].inUse = true;
+      _commandHandlers[i].deviceId = 0;
       _resetCommandMeta(i, kind);
       _commandCatalogDirty = true;
       return (int)i;
@@ -1623,6 +1870,7 @@ bool Blaeck::_addOwnedStateChannel(BlaeckString channelName, BlaeckStateTextGett
     _stateChannels[i].truncationWarned = false;
     _stateChannels[i].ownedByCommand = true;
     _stateChannels[i].inUse = true;
+    _stateChannels[i].deviceId = 0;
     _stateCatalogDirty = true;
     return true;
   }
@@ -1671,6 +1919,9 @@ bool Blaeck::_declareOwnState(uint16_t handlerIndex, BlaeckString channelName,
       _stateChannels[ch].stateIsSelectName = true;
     if (cmd.kind == BLAECK_CMD_SELECT && cmd.options != nullptr)
       _stateChannels[ch].options = cmd.options;
+    // The channel belongs to the command's device, whichever of inDevice() and
+    // withOwnState() came first.
+    _stateChannels[ch].deviceId = cmd.deviceId;
   }
 #else
   // No channel was added, so there is nothing to give the options to.
@@ -2080,6 +2331,7 @@ void Blaeck::_parseCommandTokens(const char *raw)
   _parsedCommand[0] = '\0';
   _parsedParamCount = 0;
   _parsedPrefixMsgId = 0;
+  _parsedRoutingDevice = 0;
   _parsedPrefixLen = 0;
   // Characters were lost while receiving, so this is a fragment. Reset here, before the
   // empty-command check, so an empty command doesn't keep the previous verdict.
@@ -2101,10 +2353,13 @@ void Blaeck::_parseCommandTokens(const char *raw)
   char *p = _parsedTokenBuffer;
 
   // The prefix: zero or more items before the command name, each starting with a sigil and
-  // ending with ':'. Only '#' (message id) is understood. Anything else, including a malformed
-  // item, stays part of the name, so the command doesn't match and is answered as unknown.
-  while (*p == '#')
+  // ending with ':', in any order. '#' is the message id; '@' routes the command to a device
+  // from addDevice(), by its slave ID. Anything else, including a malformed item or an '@' for
+  // a device this board does not have, stays part of the name, so the command doesn't match
+  // and is answered as unknown.
+  while (*p == '#' || *p == '@')
   {
+    const bool routing = (*p == '@');
     const char *scan = p + 1;
     uint32_t id = 0;
     byte digits = 0;
@@ -2114,10 +2369,21 @@ void Blaeck::_parseCommandTokens(const char *raw)
       scan++;
       digits++;
     }
-    // 0 means no id, so "#0:" is malformed.
-    if (digits == 0 || *scan != ':' || id == 0 || id > 65535UL)
+    if (digits == 0 || *scan != ':')
       break;
-    _parsedPrefixMsgId = (uint16_t)id;
+    if (routing)
+    {
+      if (id > 255UL || _deviceEntry((byte)id) == nullptr)
+        break;
+      _parsedRoutingDevice = (byte)id;
+    }
+    else
+    {
+      // 0 means no id, so "#0:" is malformed.
+      if (id == 0 || id > 65535UL)
+        break;
+      _parsedPrefixMsgId = (uint16_t)id;
+    }
     p = (char *)scan + 1;
   }
   // The ack hashes the command after the prefix, as its sender wrote it.
@@ -2185,7 +2451,9 @@ void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
   {
     if (_commandHandlers[i].inUse &&
         _commandHandlers[i].handler != nullptr &&
-        strcmp(_commandHandlers[i].command, _parsedCommand) == 0)
+        strcmp(_commandHandlers[i].command, _parsedCommand) == 0 &&
+        // A command routed with '@' runs only if it belongs to that device.
+        (_parsedRoutingDevice == 0 || _commandHandlers[i].deviceId == _parsedRoutingDevice))
     {
       matched = true;
 #if BLAECK_ENABLE_COMMAND_META
@@ -2381,6 +2649,7 @@ int Blaeck::_registerStateChannel(const char *channelName, const __FlashStringHe
       _stateChannels[i].stateIsSelectName = false;
       _stateChannels[i].stateIsSwitchBool = false;
       _stateChannels[i].inUse = true;
+      _stateChannels[i].deviceId = 0;
       _stateCatalogDirty = true;
       return (int)i;
     }
@@ -2787,8 +3056,7 @@ void Blaeck::_writeStateFrame(int channelIndex, const char *text, const byte *pu
   if (!_frameOpen(0x95, 0))
     return;
   // Layout: State (0x95) in the protocol spec.
-  _emitByte((byte)0);
-  _emitByte((byte)0);
+  _emitOwner(_stateChannels[channelIndex].deviceId);
   _emitByte((byte)(channelIndex & 0xFF));
   _emitByte((byte)((channelIndex >> 8) & 0xFF));
   _emitByte(_dtypeCode(e.valueType));
@@ -3076,8 +3344,7 @@ void Blaeck::writeStateChannelsFrame(unsigned long msg_id)
 
     uint16_t flags = _stateChannelFlags(e, stateText != nullptr || valueLen > 0);
 
-    _emitByte((byte)0);
-    _emitByte((byte)0);
+    _emitOwner(e.deviceId);
     if (e.nameInFlash)
       _emitFlashStr0(reinterpret_cast<const __FlashStringHelper *>(e.name));
     else
@@ -3248,6 +3515,7 @@ int Blaeck::_registerEventChannel(const char *channelName, const __FlashStringHe
       _eventChannels[i].diagnostic = false;
       _eventChannels[i].disabledByDefault = false;
       _eventChannels[i].inUse = true;
+      _eventChannels[i].deviceId = 0;
       _addEventTypesCsv(i, storedTypes);
       _eventCatalogDirty = true;
       return (int)i;
@@ -3531,8 +3799,7 @@ void Blaeck::writeEventChannelsFrame(unsigned long msg_id)
     if (e.disabledByDefault)
       flags |= 0x0008;
 
-    _emitByte((byte)0);
-    _emitByte((byte)0);
+    _emitOwner(e.deviceId);
     if (e.nameInFlash)
       _emitFlashStr0(reinterpret_cast<const __FlashStringHelper *>(e.name));
     else
@@ -3597,8 +3864,7 @@ void Blaeck::writeEvent(const char *channelName, BlaeckString eventType)
 
   if (!_frameOpen(0x85, 0))
     return;
-  _emitByte((byte)0);
-  _emitByte((byte)0);
+  _emitOwner(_eventChannels[channelIndex].deviceId);
   _emitByte((byte)(channelIndex & 0xFF));
   _emitByte((byte)((channelIndex >> 8) & 0xFF));
   _emitByte((byte)(eventIndex & 0xFF));
@@ -4380,14 +4646,12 @@ bool Blaeck::_frameClose()
   return complete;
 }
 
-void Blaeck::_emitDevice(const char *name, const char *hw, const char *fw)
+void Blaeck::_emitDevice(byte deviceId, BlaeckString name, BlaeckString hw, BlaeckString fw)
 {
-  // Two bytes, always 0.
-  _emitByte((byte)0);
-  _emitByte((byte)0);
-  _emitStr0(name);
-  _emitStr0(hw);
-  _emitStr0(fw);
+  _emitOwner(deviceId);
+  _emitFlashStr0(name);
+  _emitFlashStr0(hw);
+  _emitFlashStr0(fw);
   _emitStr0(_libraryVersion());
   _emitStr0(_libraryName());
 }
@@ -4411,7 +4675,7 @@ void Blaeck::writeRestarted(unsigned long msg_id)
 
     if (!_frameOpen(0xC0, msg_id))
       return;
-    _emitDevice(_deviceName(), DeviceHWVersion, DeviceFWVersion);
+    _emitDevice(0, _deviceName(), DeviceHWVersion, DeviceFWVersion);
     _frameClose();
 
     // Send every catalog after the notice, so a host that stayed connected sees what this run
@@ -4445,7 +4709,12 @@ void Blaeck::writeDevicesFrame(unsigned long msg_id)
 {
   if (!_frameOpen(0xB3, msg_id))
     return;
-  _emitDevice(_deviceName(), DeviceHWVersion, DeviceFWVersion);
+  _emitDevice(0, _deviceName(), DeviceHWVersion, DeviceFWVersion);
+  for (byte i = 0; i < _deviceCount; ++i)
+  {
+    const DeviceEntry &d = _devices[i];
+    _emitDevice(i + 1, d.name, _orNotAvailable(d.hwVersion), _orNotAvailable(d.fwVersion));
+  }
   _frameClose();
 }
 
@@ -4463,11 +4732,20 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
     return; // No valid range
 
   bool any = false;
+  // The first signal left out because its device is missing, reported in the status.
+  int skippedIndex = -1;
   for (int i = signalIndex_start; i <= signalIndex_end; ++i)
   {
     Signal &s = Signals[i];
     if (!selectedOnly)
       s.Selected = true;
+    if (s.Selected && _deviceMissing(s.DeviceId))
+    {
+      s.Selected = false;
+      if (skippedIndex < 0)
+        skippedIndex = i;
+      continue;
+    }
     if (s.Selected)
     {
       if (!_prepareSignalSnapshot(s))
@@ -4546,8 +4824,16 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
 
   }
 
+  // Status 0x01, Device Not Responding: the first skipped signal and its device's slave ID.
   byte statusByte = 0;
   byte statusPayload[4] = {0, 0, 0, 0};
+  if (skippedIndex >= 0)
+  {
+    statusByte = 0x01;
+    statusPayload[1] = (byte)(skippedIndex & 0xFF);
+    statusPayload[2] = (byte)((skippedIndex >> 8) & 0xFF);
+    statusPayload[3] = Signals[skippedIndex].DeviceId;
+  }
   _emitByte(statusByte);
   _emitBytes(statusPayload, 4);
 
@@ -4579,8 +4865,7 @@ void Blaeck::writeSymbolsFrame(unsigned long msg_id)
 
   for (int i = 0; i < _signalIndex; i++)
   {
-    _emitByte((byte)0);
-    _emitByte((byte)0);
+    _emitOwner(Signals[i].DeviceId);
 
     // A reference, to avoid copying the entry.
     const Signal &signal = Signals[i];
@@ -4695,8 +4980,7 @@ void Blaeck::writeCommandsFrame(unsigned long msg_id)
     // The longest command the device can receive, so a host knows how much room is left for
     // parameters.
     uint16_t payloadMax = (uint16_t)(MAXIMUM_CHAR_COUNT - 1);
-    _emitByte((byte)0);
-    _emitByte((byte)0);
+    _emitOwner(e.deviceId);
     _emitByte((byte)(payloadMax & 0xFF));
     _emitByte((byte)((payloadMax >> 8) & 0xFF));
     _emitStr0(e.command);

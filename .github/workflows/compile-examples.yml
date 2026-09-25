@@ -86,10 +86,17 @@ jobs:
               done
             fi
             case "$FQBN" in
-              arduino:avr:mega) compile examples/more/ConfigurableSignals ;;
+              arduino:avr:mega)
+                compile examples/more/ConfigurableSignals
+                compile examples/more/SubDevices/MainBoard
+                compile examples/more/SubDevices/PumpBoard ;;
+              arduino:mbed_giga:giga)
+                compile examples/more/SubDevices/MainBoard
+                compile examples/more/SubDevices/PumpBoard ;;
               arduino:renesas_uno:unor4wifi)
                 compile examples/more/TimestampsRTC
-                compile examples/more/WiFi ;;
+                compile examples/more/WiFi
+                compile examples/more/SubDevices/PumpBoard ;;
               arduino:esp32:nano_nora) compile examples/more/WiFi ;;
             esac
           else

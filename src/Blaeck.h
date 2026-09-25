@@ -330,6 +330,8 @@ struct Signal
   uint8_t HasSuffix : 1;
   // Appended to the name as decimal digits, e.g. Sine_ + 3 gives Sine_3.
   uint8_t NameSuffix;
+  // The device from addDevice() the signal belongs to, 0 for the board itself.
+  uint8_t DeviceId = 0;
   SignalReporting *Reporting = nullptr;
 #if BLAECK_ENABLE_SIGNAL_META
   // Null until the sketch describes the signal. Owned by the entry.
@@ -453,6 +455,7 @@ class BlaeckNumericStateRef;
 class BlaeckTextStateRef;
 class BlaeckBoolStateRef;
 class BlaeckEventChannelRef;
+class BlaeckDeviceRef;
 class Blaeck;
 
 // Returned by begin() to set table sizes and connection limits, e.g.
@@ -492,7 +495,7 @@ public:
   /*!
     @brief   Sets how many signals fit in the signal table.
 
-    Each signal takes 11 bytes of SRAM on AVR, and a signal with a unit, icon or
+    Each signal takes 12 bytes of SRAM on AVR, and a signal with a unit, icon or
     other description 18 more.
 
     @param   count  Up to 32767. A larger literal fails the build.
@@ -508,7 +511,7 @@ public:
     @brief   Sets how many state channels fit in the state channel table.
 
     Count the channels from addStateChannel() plus one for each command that uses
-    withOwnState(). Each channel takes 34 bytes of SRAM on AVR, plus any RAM strings
+    withOwnState(). Each channel takes 35 bytes of SRAM on AVR, plus any RAM strings
     it copies.
 
     @param   count  Up to 32767. A larger literal fails the build.
@@ -523,7 +526,7 @@ public:
   /*!
     @brief   Sets how many event channels fit in the event channel table.
 
-    Each channel takes 12 bytes of SRAM on AVR, plus any RAM strings it copies.
+    Each channel takes 13 bytes of SRAM on AVR, plus any RAM strings it copies.
 
     @param   count  Up to 32767. A larger literal fails the build.
     @return  The same handle, for chaining.
@@ -553,7 +556,7 @@ public:
   /*!
     @brief   Sets how many commands fit in the command table.
 
-    onCommand() and all the typed commands share this table. Each command takes 65
+    onCommand() and all the typed commands share this table. Each command takes 66
     bytes of SRAM on AVR, plus any RAM strings it copies. A command using
     withOwnState() also needs a state channel, so raise withStateChannels() to match.
 
@@ -565,6 +568,20 @@ public:
     @endcode
   */
   BlaeckBeginRef &withCommands(unsigned int count);
+
+  /*!
+    @brief   Sets how many devices addDevice() can add.
+
+    Each device takes 10 bytes of SRAM on AVR, plus any RAM strings it copies.
+
+    @param   count  Up to 255.
+    @return  The same handle, for chaining.
+
+    @code
+      device.begin(Serial).withDevices(2);
+    @endcode
+  */
+  BlaeckBeginRef &withDevices(unsigned int count);
 
   /*!
     @brief   Sets a stream where the library reports what it rejected and why.
@@ -676,6 +693,8 @@ struct CommandHandlerEntry
   char command[MAX_COMMAND_NAME_COUNT];
   BlaeckCommandHandler handler = nullptr;
   bool inUse = false;
+  // The device from addDevice() the command belongs to, 0 for the board itself.
+  uint8_t deviceId = 0;
 #if BLAECK_ENABLE_COMMAND_META
   uint8_t kind = BLAECK_CMD_PLAIN;
   float meta_min = 0.0f;
@@ -740,6 +759,8 @@ struct StateChannelEntry
   bool truncationWarned = false;
   bool textInFlash = false;
   bool inUse = false;
+  // The device from addDevice() the channel belongs to, 0 for the board itself.
+  uint8_t deviceId = 0;
 };
 
 struct EventChannelEntry
@@ -752,6 +773,17 @@ struct EventChannelEntry
   bool diagnostic = false;
   bool disabledByDefault = false;
   bool inUse = false;
+  // The device from addDevice() the channel belongs to, 0 for the board itself.
+  uint8_t deviceId = 0;
+};
+
+// A device added with addDevice(). Its slave ID in the protocol is its index plus one.
+struct DeviceEntry
+{
+  detail::StoredString name;
+  detail::StoredString hwVersion;
+  detail::StoredString fwVersion;
+  bool missing = false;
 };
 
 struct EventTypeEntry
@@ -778,6 +810,8 @@ protected:
 
   // Marks the command catalog as changed, so it is sent again.
   void _markDirty() const;
+
+  void _setDevice(const BlaeckDeviceRef &device);
 
   void _setStateSignal(BlaeckString signalName)
   {
@@ -1134,6 +1168,27 @@ public:
   TYPE &disabledByDefault(bool on = true)
   {
     _setDisabledByDefault(on);
+    return _self();
+  }
+
+  /*!
+    @brief   Assigns the command to a device from addDevice().
+
+    A host then shows the command under that device instead of under the board. Call it in
+    setup(), before a host connects.
+
+    @param   device  The handle addDevice() returned.
+    @return  The same handle, for chaining.
+
+    @code
+      device.onNumberCommand("SET_PUMP_SPEED", onSetPumpSpeed)
+          .withRange(0.0f, 100.0f, 1.0f)
+          .inDevice(pump);
+    @endcode
+  */
+  TYPE &inDevice(const BlaeckDeviceRef &device)
+  {
+    _setDevice(device);
     return _self();
   }
 
@@ -1690,6 +1745,7 @@ protected:
   void _setInterval(BlaeckIntervalMode mode, double delta);
   void _setOnChange(double delta, uint32_t minIntervalMs);
   void _setOnChange(BlaeckIntervalMode mode);
+  void _setDevice(const BlaeckDeviceRef &device);
 
   Blaeck *_owner;
   int16_t _index;
@@ -1910,6 +1966,25 @@ public:
     return _self();
   }
 
+  /*!
+    @brief   Assigns the signal to a device from addDevice().
+
+    A host then shows the signal under that device instead of under the board. Call it in
+    setup(), before a host connects.
+
+    @param   device  The handle addDevice() returned.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addSignal(F("Flow"), &pumpFlow).withUnit(F("L/min")).inDevice(pump);
+    @endcode
+  */
+  TYPE &inDevice(const BlaeckDeviceRef &device)
+  {
+    _setDevice(device);
+    return _self();
+  }
+
 protected:
   BlaeckSignalRefShared(Blaeck *owner, int16_t index) : BlaeckSignalRefBase(owner, index) {}
   BlaeckSignalRefShared() : BlaeckSignalRefBase() {}
@@ -2073,6 +2148,8 @@ protected:
 
   // Marks the state catalog as changed, so it is sent again.
   void _markDirty() const;
+
+  void _setDevice(const BlaeckDeviceRef &device);
 
   // The debug stream, or nullptr.
   Print *_debugStream() const;
@@ -2256,6 +2333,25 @@ public:
         _markDirty();
       }
     }
+    return _self();
+  }
+
+  /*!
+    @brief   Assigns the state channel to a device from addDevice().
+
+    A host then shows the state channel under that device instead of under the board. Call it in
+    setup(), before a host connects.
+
+    @param   device  The handle addDevice() returned.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addStateChannel(F("Pump status"), BlaeckText).inDevice(pump);
+    @endcode
+  */
+  TYPE &inDevice(const BlaeckDeviceRef &device)
+  {
+    _setDevice(device);
     return _self();
   }
 
@@ -2699,9 +2795,124 @@ public:
   */
   BlaeckEventChannelRef disabledByDefault(bool on = true);
 
+  /*!
+    @brief   Assigns the event channel to a device from addDevice().
+
+    A host then shows the event channel under that device instead of under the board. Call it in
+    setup(), before a host connects.
+
+    @param   device  The handle addDevice() returned.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addEventChannel(F("Pump alarms"), F("dry_run,overheat")).inDevice(pump);
+    @endcode
+  */
+  BlaeckEventChannelRef inDevice(const BlaeckDeviceRef &device);
+
 private:
   Blaeck *_owner;
   int16_t _index;
+};
+
+// The handle for a device from addDevice(): another board, or a part of this one, that a host
+// shows as its own device. The sketch fetches its values itself, over any link it likes, and
+// blaeck reports them under the device. A default or rejected handle ignores every call.
+class BlaeckDeviceRef
+{
+public:
+  BlaeckDeviceRef() : _owner(nullptr), _id(0) {}
+
+  /*!
+    @brief   Sets the device's hardware name or revision. Defaults to "n/a".
+
+    @param   hwVersion  The name. RAM text is copied; an F() literal stays in flash.
+    @return  The same handle, for chaining.
+
+    @code
+      pump = device.addDevice(F("Pump controller")).withHWVersion(F("Arduino Nano"));
+    @endcode
+  */
+  BlaeckDeviceRef &withHWVersion(BlaeckString hwVersion);
+
+  /*!
+    @brief   Sets the device's firmware version. Defaults to "n/a".
+
+    @param   fwVersion  The version. RAM text is copied; an F() literal stays in flash.
+    @return  The same handle, for chaining.
+
+    @code
+      pump = device.addDevice(F("Pump controller")).withFWVersion(F("1.2"));
+    @endcode
+  */
+  BlaeckDeviceRef &withFWVersion(BlaeckString fwVersion);
+
+  /*!
+    @brief   Reports that the device stopped answering.
+
+    Until markPresent(), its signals are left out of data frames, and each data frame
+    that leaves one out says so in its status. The sketch decides when a device counts
+    as missing; calling it again changes nothing.
+
+    @code
+      if (!pumpAnswered)
+        pump.markMissing();
+    @endcode
+  */
+  void markMissing();
+
+  /*!
+    @brief   Reports that the device answers again.
+
+    Its signals return to data frames. Each signal that reports on change is sent again
+    at the next chance, since the host lost track of it. Calling it on a device that
+    was not missing changes nothing.
+
+    @code
+      if (pumpAnswered)
+        pump.markPresent();
+    @endcode
+  */
+  void markPresent();
+
+  /*!
+    @brief   Whether markMissing() is in effect.
+
+    @return  True between markMissing() and markPresent().
+
+    @code
+      if (pump.isMissing())
+        Serial.println(F("Pump controller is not answering."));
+    @endcode
+  */
+  bool isMissing() const;
+
+  /*!
+    @brief   Tells a host that the device has restarted.
+
+    Sends a restart notice with the device's name, so a host can report it. The board
+    itself is unaffected. The sketch has to notice the restart, for example from an
+    uptime counter the device reports.
+
+    @code
+      if (reading.uptimeMs < lastPumpUptime)
+        pump.writeRestarted();
+    @endcode
+  */
+  void writeRestarted();
+
+private:
+  BlaeckDeviceRef(Blaeck *owner, byte id) : _owner(owner), _id(id) {}
+
+  Blaeck *_owner;
+  // The slave ID in the protocol, 1 and up; 0 names no device.
+  byte _id;
+
+  friend class Blaeck;
+  friend class BlaeckSignalRefBase;
+  friend class BlaeckCommandRefBase;
+  friend class BlaeckStateRefBase;
+  friend class BlaeckEventChannelRef;
 };
 
 // Text to the attached Stream or connected TCP terminals.
@@ -2947,7 +3158,7 @@ public:
   // ----- Devices -----
 
   /*!
-    @brief   Sends the device's name and versions.
+    @brief   Sends the device's name and versions, followed by each device from addDevice().
 
     The device sends this when a host sends <BLAECK.GET_DEVICES>.
 
@@ -2956,6 +3167,30 @@ public:
     @endcode
   */
   void writeDevices();
+
+  /*!
+    @brief   Adds a device that a host shows below this one, such as a second board.
+
+    blaeck only reports the device. The sketch talks to it, over I2C, UART or anything
+    else, keeps the variables of its signals up to date, and forwards its commands.
+    Assign signals, commands and channels to it with inDevice(). Add devices in setup():
+    a host reads the device list when it connects.
+
+    A host names the device after the board and the device name, so keep the name
+    unique and stable. The first addDevice() makes the board a "master" in the
+    protocol; everything the sketch registered without inDevice() stays on the board.
+
+    @param   name  The name a host shows. RAM text is copied; an F() literal stays in flash.
+    @return  A handle for the device. If the table is full or the name is empty, the
+             device is dropped and the handle ignores every call; hasRejections()
+             reports it.
+
+    @code
+      BlaeckDeviceRef pump = device.addDevice(F("Pump controller"));
+      device.addSignal(F("Flow"), &pumpFlow).inDevice(pump);
+    @endcode
+  */
+  BlaeckDeviceRef addDevice(BlaeckString name);
 
   // ----- Symbols -----
 
@@ -4472,6 +4707,7 @@ protected:
   uint16_t _rejectedStateChannelCount = 0;
   uint16_t _rejectedEventChannelCount = 0;
   uint16_t _rejectedEventTypeCount = 0;
+  uint16_t _rejectedDeviceCount = 0;
 
   bool _writeRestartedAlreadyDone = false;
   bool _sendRestartFlag = true;
@@ -4501,7 +4737,8 @@ protected:
     TABLE_STATE_CHANNELS,
     TABLE_EVENT_CHANNELS,
     TABLE_EVENT_TYPES,
-    TABLE_COMMANDS
+    TABLE_COMMANDS,
+    TABLE_DEVICES
   };
   void _setTableCapacity(TableId table, unsigned int count);
   // For a full table, prints what was dropped and which original begin() setting to raise.
@@ -4526,12 +4763,14 @@ protected:
     static const byte DEFAULT_EVENT_CHANNELS = 6;
     static const byte DEFAULT_EVENT_TYPES = 20;
     static const byte DEFAULT_COMMANDS = 16;
+    static const byte DEFAULT_DEVICES = 4;
   #else
     static const unsigned int DEFAULT_SIGNALS = 8;
     static const byte DEFAULT_STATE_CHANNELS = 3;
     static const byte DEFAULT_EVENT_CHANNELS = 2;
     static const byte DEFAULT_EVENT_TYPES = 8;
     static const byte DEFAULT_COMMANDS = 6;
+    static const byte DEFAULT_DEVICES = 2;
   #endif
 #else
   static const unsigned int DEFAULT_SIGNALS = 64;
@@ -4539,7 +4778,10 @@ protected:
   static const byte DEFAULT_EVENT_CHANNELS = 24;
   static const byte DEFAULT_EVENT_TYPES = 64;
   static const byte DEFAULT_COMMANDS = 32;
+  static const byte DEFAULT_DEVICES = 8;
 #endif
+  // Slave IDs are one byte and 0 is the board itself.
+  static const byte MAX_DEVICES = 255;
 
   // Fixed name and buffer lengths. They set the layout of each entry, so they can't change at
   // runtime.
@@ -4763,7 +5005,16 @@ protected:
     _sendBuffered();
     return !_frameWriteFailed;
   }
-  void _emitDevice(const char *name, const char *hw, const char *fw);
+  // One device record of a B3 or C0 frame: ownership bytes, names, then this library's
+  // version and name, which also stand for a device from addDevice().
+  void _emitDevice(byte deviceId, BlaeckString name, BlaeckString hw, BlaeckString fw);
+  // The master/slave and slave ID bytes for an entry of the given device. The board is
+  // "single" without devices and "master" with them; a device is a "slave" with its ID.
+  void _emitOwner(byte deviceId)
+  {
+    _emitByte(deviceId != 0 ? 0x02 : (_deviceCount > 0 ? 0x01 : 0x00));
+    _emitByte(deviceId);
+  }
 
   static unsigned long long _microsWrapper()
   {
@@ -4778,6 +5029,32 @@ protected:
   uint16_t _commandSlots() const { return _commandHandlers != nullptr ? _commandCapacity : 0; }
   // Allocates the table on first use. False if there isn't enough RAM.
   bool _ensureCommandTable();
+
+  // ── Devices ───────────────────────────────────────────────────────
+  // Added in order and never removed, so a device's slave ID is its index plus one.
+  typedef blaeck_detail::DeviceEntry DeviceEntry;
+  DeviceEntry *_devices = nullptr;
+  uint16_t _deviceCapacity = DEFAULT_DEVICES;
+  byte _deviceCount = 0;
+  bool _ensureDeviceTable();
+  // The entry for a slave ID, or nullptr for 0 or an ID never handed out.
+  DeviceEntry *_deviceEntry(byte id) const
+  {
+    return (id != 0 && id <= _deviceCount) ? &_devices[id - 1] : nullptr;
+  }
+  // The slave ID a handle names, or -1 when it names no device of this Blaeck.
+  int _deviceIdOf(const BlaeckDeviceRef &device) const;
+  bool _deviceMissing(byte id) const
+  {
+    const DeviceEntry *d = _deviceEntry(id);
+    return d != nullptr && d->missing;
+  }
+  void _setDeviceMissing(byte id, bool missing);
+  void _writeDeviceRestarted(byte id);
+  void _setSignalDevice(int16_t index, const BlaeckDeviceRef &device);
+  void _setCommandDevice(int16_t index, const BlaeckDeviceRef &device);
+  void _setStateChannelDevice(int16_t index, const BlaeckDeviceRef &device);
+  void _setEventChannelDevice(int16_t index, const BlaeckDeviceRef &device);
   // Needed even with BLAECK_ENABLE_STATE_CHANNELS=0, because the state handles still compile.
   typedef blaeck_detail::StateChannelEntry StateChannelEntry;
 
@@ -4861,6 +5138,8 @@ protected:
   bool _parsedTruncated = false;
   // The message id from the command's '#' prefix, echoed in its ack and reply. 0 if none.
   uint16_t _parsedPrefixMsgId = 0;
+  // The device an '@' prefix routed the command to, or 0 for the board itself.
+  byte _parsedRoutingDevice = 0;
   // Length of the prefix. The ack's hash covers what follows it.
   uint16_t _parsedPrefixLen = 0;
 #if BLAECK_ENABLE_STATE_CHANNELS
@@ -4946,6 +5225,7 @@ protected:
   friend class BlaeckStateRefBase;
   friend class BlaeckEventChannelRef;
   friend class BlaeckBeginRef;
+  friend class BlaeckDeviceRef;
 
 private:
   struct Connection
@@ -5066,6 +5346,13 @@ inline BlaeckBeginRef &BlaeckBeginRef::withCommands(unsigned int count)
   BLAECK_CHECK_CAPACITY(count);
   if (_owner != nullptr)
     _owner->_setTableCapacity(Blaeck::TABLE_COMMANDS, count);
+  return *this;
+}
+
+inline BlaeckBeginRef &BlaeckBeginRef::withDevices(unsigned int count)
+{
+  if (_owner != nullptr)
+    _owner->_setTableCapacity(Blaeck::TABLE_DEVICES, count);
   return *this;
 }
 
