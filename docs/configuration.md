@@ -46,9 +46,9 @@ The defaults:
 | `withEventTypes` | 8 | 20 | 64 |
 | `withCommands` | 6 | 16 | 32 |
 
-RAM is what you are sizing against, not the entry count. On AVR a signal costs 9 bytes, an
-event type 5, an event channel 10, a state channel 26, and a command 48 - the largest there is.
-A Mega's 8 kB is gone at a few hundred of anything, where an ESP32 has room for thousands.
+RAM is what you are sizing against, not just the entry count. Entries have different sizes,
+and copied configuration strings need additional storage. A Mega's 8 kB leaves much less room
+than an ESP32.
 
 Two slots are easy to miss. A command that reports its own value with `withOwnState()` takes a
 state channel as well as a command slot. Event types share one table across every channel, so
@@ -58,6 +58,17 @@ A table is allocated in full by the first entry added to it, and never grows. A 
 sketch never touches costs nothing, and raising a number costs SRAM whether or not you fill the
 slots. Put the whole `begin()` chain before any `add...()` call: once a table exists its size is
 fixed, and a later `with...()` is refused.
+
+## Configuration text
+
+Ordinary strings work throughout the API. Names, metadata, command state links, press payloads
+and event types supplied through registration or configuration calls are copied when stored.
+Their buffers can then be changed or discarded. `F()` remains optional and avoids these copies.
+An allocation failure leaves an existing setting unchanged and is reported by `hasRejections()`,
+`printRejections()` and the debug stream.
+
+Signal and bound state **values**, text getters and the device identity fields below retain
+their existing lifetime requirements; they are not copied configuration.
 
 ## Finding out what did not fit
 
@@ -125,7 +136,7 @@ would have cost:
 
 | Define | Set to 0 to drop |
 |---|---|
-| `BLAECK_ENABLE_SIGNAL_META` | Everything a signal declares about itself. Saves about 9 bytes of SRAM per signal |
+| `BLAECK_ENABLE_SIGNAL_META` | Everything a signal declares about itself, including its metadata storage |
 | `BLAECK_ENABLE_COMMAND_META` | Everything a command declares. The typed helpers then behave like plain `onCommand()` |
 | `BLAECK_ENABLE_STATE_CHANNELS` | State channels |
 | `BLAECK_ENABLE_EVENTS` | Events |

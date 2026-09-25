@@ -219,6 +219,51 @@ public:
   const SignalReporting *reporting(int index) const { return Signals[index].Reporting; }
 };
 
+class ConfigurationProbe : public Blaeck
+{
+public:
+#if BLAECK_ENABLE_SIGNAL_META
+  const SignalMeta &signalMeta(int index) const { return *Signals[index].Meta; }
+#endif
+  const blaeck::blaeck_detail::CommandHandlerEntry &commandMeta(int index) const { return _commandHandlers[index]; }
+#if BLAECK_ENABLE_STATE_CHANNELS
+  const blaeck::blaeck_detail::StateChannelEntry &stateMeta(int index) const { return _stateChannels[index]; }
+  int stateIndex(blaeck::BlaeckString name) const { return _findStateChannel(name); }
+#endif
+#if BLAECK_ENABLE_EVENTS
+  const blaeck::blaeck_detail::EventChannelEntry &eventMeta(int index) const { return _eventChannels[index]; }
+  const blaeck::blaeck_detail::EventTypeEntry &eventType(int index) const { return _eventTypes[index]; }
+  int eventIndex(const char *name) const { return _findEventChannel(name); }
+#endif
+  void cleanCatalogs()
+  {
+    _commandCatalogDirty = false;
+#if BLAECK_ENABLE_SIGNAL_META
+    _signalConfigDirty = false;
+#endif
+#if BLAECK_ENABLE_STATE_CHANNELS
+    _stateCatalogDirty = false;
+#endif
+#if BLAECK_ENABLE_EVENTS
+    _eventCatalogDirty = false;
+#endif
+  }
+  bool dirtyCatalogs() const
+  {
+    bool dirty = _commandCatalogDirty;
+#if BLAECK_ENABLE_SIGNAL_META
+    dirty |= _signalConfigDirty;
+#endif
+#if BLAECK_ENABLE_STATE_CHANNELS
+    dirty |= _stateCatalogDirty;
+#endif
+#if BLAECK_ENABLE_EVENTS
+    dirty |= _eventCatalogDirty;
+#endif
+    return dirty;
+  }
+};
+
 static_assert(std::is_same<
     decltype(std::declval<Blaeck &>().begin(std::declval<FakeStream &>())),
     BlaeckBeginRef>::value, "Stream begin returns the unified handle");
@@ -1145,6 +1190,220 @@ static void flashStateText(bool buffered)
   device.addStateChannel(F("Reused"), F("New"));
   device.writeState(F("Reused"));
   expectText("New");
+}
+
+static void storedConfigurationStrings()
+{
+  using blaeck::BlaeckString;
+  using blaeck::detail::StoredString;
+  StoredString saved;
+  {
+    char text[] = "Temporary";
+    assert(saved.set(text));
+    text[0] = 'X';
+  }
+  assert(BlaeckString(saved) == "Temporary");
+  StoredString shared = saved;
+  const size_t before = allocations;
+  assert(saved.set(F("Temporary"))); // Equal contents preserve backing storage.
+  assert(allocations == before);
+  failAfter = 0;
+  assert(!saved.set("Replacement"));
+  assert(BlaeckString(saved) == "Temporary");
+  assert(saved.set(F("Flash")));
+  assert(allocations == before + 1); // Only the failed RAM copy tried to allocate.
+  failAfter = -1;
+  assert(BlaeckString(saved) == "Flash");
+  assert(BlaeckString(shared) == F("Temporary"));
+  shared = shared;
+  saved = shared;
+  shared = nullptr;
+  assert(BlaeckString(saved) == "Temporary");
+  assert(saved.set(""));
+  assert(BlaeckString(saved) == F(""));
+  saved = nullptr;
+  assert(saved == nullptr);
+}
+
+static void ordinaryConfiguration(bool buffered)
+{
+  using blaeck::BlaeckString;
+  FakeStream stream;
+  ConfigurationProbe device;
+  device.begin(stream).withSignals(2).withCommands(4).withStateChannels(5)
+      .withEventChannels(2).withEventTypes(5);
+  device.setBufferedWrites(buffered);
+  float value = 1;
+  byte selected = 1;
+  char unit[] = "V", icon[] = "mdi:pulse", label[] = "Voltage";
+  char options[] = "Low,High", ownName[] = "Selected", signalName[] = "Value";
+  char payload[] = "1,2", eventTypes[] = "start,stop", extraType[] = "reset";
+  char deviceClass[] = "voltage";
+  auto signal = device.addSignal("Value", &value);
+  signal.withUnit(unit).withDeviceClass(deviceClass).withIcon(icon).withDisplayName(label);
+  device.addSignal("Level", "Low").withDeviceClass("enum").withOptions(options);
+  auto number = device.onNumberCommand("SET", onPing).withRange(0, 10, 1);
+  number.withUnit(unit).withDeviceClass(deviceClass).withIcon(icon).withDisplayName(label)
+      .withStateFromSignal(signalName);
+  auto select = device.onSelectCommand("SELECT", onPing).withOptions(options);
+  select.withOwnState(ownName, &selected);
+  device.onButtonCommand("PRESS", onPing).withPressPayload(payload).withIcon(icon);
+  device.onTextCommand("TEXT", onPing).withOwnState("Getter", flashTestGetter);
+  auto state = device.addStateChannel("Voltage", &value);
+  state.withUnit(unit).withDeviceClass(deviceClass).withIcon(icon);
+  device.addStateChannel("LevelState", "Low").withDeviceClass("enum").withOptions(options);
+  auto event = device.addEventChannel("Action", eventTypes);
+  event.withIcon(icon).withDeviceClass("button");
+  const bool added = device.addEventType("Action", extraType);
+  assert(added == bool(BLAECK_ENABLE_EVENTS));
+
+  unit[0] = icon[0] = label[0] = options[0] = ownName[0] = signalName[0] =
+      payload[0] = eventTypes[0] = extraType[0] = deviceClass[0] = 'X';
+  device.writeSignalConfig();
+#if BLAECK_ENABLE_SIGNAL_META
+  for (const char *text : {"V", "voltage", "mdi:pulse", "Voltage", "Low,High"})
+    assert(stream.data.output.find(std::string(text) + '\0') != std::string::npos);
+#endif
+  stream.data.output.clear();
+  device.writeCommands();
+#if BLAECK_ENABLE_COMMAND_META
+  for (const char *text : {"V", "voltage", "mdi:pulse", "Voltage", "Low,High", "Value", "Selected", "1,2", "Getter"})
+    assert(stream.data.output.find(std::string(text) + '\0') != std::string::npos ||
+           (!BLAECK_ENABLE_STATE_CHANNELS && (std::string(text) == "Selected" || std::string(text) == "Getter")));
+  char option[8];
+  assert(device.getSelectOptionNameAt("SELECT", 1, option, sizeof(option)));
+  assert(strcmp(option, "High") == 0);
+  assert(device.getSelectOptionIndexOf("SELECT", "Low") == 0);
+  assert(device.getSelectOptionIndexOf("SELECT", "Missing") == -1);
+#endif
+  stream.data.output.clear();
+  device.writeStateChannels();
+#if BLAECK_ENABLE_STATE_CHANNELS
+  for (const char *text : {"V", "voltage", "mdi:pulse", "Low,High"})
+    assert(stream.data.output.find(std::string(text) + '\0') != std::string::npos);
+#endif
+  stream.data.output.clear();
+  device.writeEventChannels();
+#if BLAECK_ENABLE_EVENTS
+  const auto catalog = commandFramePayload(stream.data.output, 0x80, 0);
+  for (const char *text : {"Action", "mdi:pulse", "button", "start", "stop", "reset"})
+    assert(catalog.find(std::string(text) + '\0') != std::string::npos);
+  assert(BlaeckString(device.eventType(0).text).data() == BlaeckString(device.eventType(1).text).data());
+  const size_t beforeEvent = allocations;
+  stream.data.output.clear();
+  device.writeEvent("Action", "stop");
+  const auto ordinaryEvent = stream.data.output;
+  stream.data.output.clear();
+  device.writeEvent(F("Action"), F("stop"));
+  assert(stream.data.output == ordinaryEvent && !ordinaryEvent.empty());
+  assert(allocations == beforeEvent);
+  assert(!device.addEventType(F("Action"), F("reset")));
+#endif
+  stream.data.output.clear();
+#if BLAECK_ENABLE_COMMAND_META && BLAECK_ENABLE_STATE_CHANNELS
+  device.writeCommandState("SELECT");
+  assert(commandFramePayload(stream.data.output, 0x95, 0).substr(6) == "High");
+  stream.data.output.clear();
+  // Replacing the command's copy must not invalidate a channel sharing its old options.
+  device.onSelectCommand("SELECT", onPing).withOptions("New,Other");
+  assert(BlaeckString(device.stateMeta(device.stateIndex("Selected")).options) == "Low,High");
+#endif
+  device.cleanCatalogs();
+  const size_t beforeSame = allocations;
+  signal.withUnit("V").withIcon(F("mdi:pulse"));
+  number.withUnit(F("V")).withStateFromSignal("Value");
+  state.withUnit(F("V")).withIcon("mdi:pulse");
+  event.withIcon(F("mdi:pulse"));
+  assert(!device.dirtyCatalogs() && allocations == beforeSame);
+  signal.withUnit("").withIcon(nullptr);
+  number.withUnit(nullptr);
+  state.withUnit("").withIcon(nullptr);
+  event.withIcon("");
+#if BLAECK_ENABLE_SIGNAL_META
+  assert(device.signalMeta(0).Unit == nullptr && device.signalMeta(0).Icon == nullptr);
+#endif
+  assert(!device.hasRejections());
+  device.clearAllCommandHandlers();
+  device.clearAllStateChannels();
+  device.clearAllEventChannels();
+  device.clearAllSignals();
+#if BLAECK_ENABLE_COMMAND_META
+  assert(device.commandMeta(0).unit == nullptr && device.commandMeta(0).displayName == nullptr);
+  assert(device.commandMeta(2).pressPayload == nullptr);
+#endif
+#if BLAECK_ENABLE_STATE_CHANNELS
+  assert(device.stateMeta(0).options == nullptr && device.stateMeta(0).unit == nullptr);
+#endif
+#if BLAECK_ENABLE_EVENTS
+  assert(device.eventMeta(0).deviceClass == nullptr && device.eventType(0).text == nullptr);
+  assert(device.eventType(2).text == nullptr);
+#endif
+}
+
+static void configurationAllocationFailures()
+{
+  using blaeck::BlaeckString;
+  FakeStream stream;
+  Capture debug;
+  ConfigurationProbe device;
+  device.begin(stream).withDebugStream(&debug).withCommands(2).withStateChannels(3);
+  float value = 0;
+  auto signal = device.addSignal("Signal", &value).withUnit(F("V"));
+  auto number = device.onNumberCommand("SET", onPing).withRange(0, 10, 1)
+      .withUnit(F("V")).withStateFromSignal(F("Signal"));
+  auto state = device.addStateChannel(F("State"), &value).withUnit(F("V"));
+  auto event = device.addEventChannel(F("Event"), F("start")).withIcon(F("mdi:pulse"));
+  device.cleanCatalogs();
+  const size_t before = allocations;
+  failAfter = 0;
+  signal.withUnit("Replacement");
+  number.withUnit("Replacement").withStateFromSignal("Other");
+  state.withUnit("Replacement");
+  event.withIcon("Replacement");
+  device.addEventChannel(F("Rejected"), "start,stop");
+  assert(!device.addEventType("Event", "stop"));
+  number.withOwnState("RejectedState", &value);
+  failAfter = -1;
+  assert(!device.dirtyCatalogs());
+#if BLAECK_ENABLE_SIGNAL_META
+  assert(BlaeckString(device.signalMeta(0).Unit) == "V");
+#endif
+#if BLAECK_ENABLE_COMMAND_META
+  assert(BlaeckString(device.commandMeta(0).unit) == "V");
+  assert(BlaeckString(device.commandMeta(0).stateSignal) == "Signal");
+#endif
+#if BLAECK_ENABLE_STATE_CHANNELS
+  assert(BlaeckString(device.stateMeta(0).unit) == "V");
+  assert(device.stateIndex("RejectedState") == -1);
+#endif
+#if BLAECK_ENABLE_EVENTS
+  assert(BlaeckString(device.eventMeta(0).icon) == "mdi:pulse");
+  assert(device.eventIndex("Rejected") == -1);
+#endif
+  if (allocations != before)
+  {
+    assert(device.hasRejections());
+    assert(debug.text.find("No RAM for configuration text") != std::string::npos);
+    Capture rejections;
+    assert(device.printRejections(&rejections));
+    assert(rejections.text.find("configuration string updates rejected") != std::string::npos);
+  }
+#if BLAECK_ENABLE_COMMAND_META && BLAECK_ENABLE_STATE_CHANNELS
+  FakeStream freshStream;
+  ConfigurationProbe fresh;
+  fresh.begin(freshStream).withStateChannels(1);
+  auto freshNumber = fresh.onNumberCommand("SET", onPing).withRange(0, 10, 1)
+      .withStateFromSignal(F("Signal"));
+  // The command name copy succeeds, but allocating the state table fails.
+  failAfter = 1;
+  freshNumber.withOwnState("RejectedState", &value);
+  failAfter = -1;
+  assert(BlaeckString(fresh.commandMeta(0).stateSignal) == "Signal");
+  assert(fresh.stateIndex("RejectedState") == -1);
+  number.withOwnState("AcceptedState", &value);
+  assert(device.stateIndex("AcceptedState") >= 0);
+  assert(BlaeckString(device.commandMeta(0).stateSignal) == "AcceptedState");
+#endif
 }
 
 static void beginOnlyOnce()
@@ -2119,6 +2378,10 @@ static void reportingFrameClassification(bool buffered)
 
 int main()
 {
+  storedConfigurationStrings();
+  ordinaryConfiguration(false);
+  ordinaryConfiguration(true);
+  configurationAllocationFailures();
   flashSignalText(false);
   flashSignalText(true);
   flashNamesAndFailures();

@@ -152,6 +152,8 @@ The calls are the ones on [Signals](signals.md), and they mean the same here: `w
 `withStateClass()` and `withDisplayPrecision()` on a number, `withIcon()`, `withDeviceClass()`,
 `diagnostic()`, `disabledByDefault()` and `forceUpdate()` on anything.
 
+Ordinary metadata strings are copied, so their buffers can be reused after the call.
+
 Two are particular to a state channel:
 
 | Call | What it does |

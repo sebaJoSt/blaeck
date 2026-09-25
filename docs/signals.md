@@ -120,10 +120,11 @@ The last three calls in the table also take an argument, so `diagnostic(isDebugB
 A call that cannot mean anything for that type does not compile. A text signal has no decimal
 places, and a `bool` has no unit.
 
-All strings must be `F()` literals. They are stored as pointers and never copied.
+Ordinary metadata strings are copied; their buffers can be reused after the call.
+This does not change the lifetime requirement for the signal's value.
 
-Metadata is only paid for by the signals that use it. A described signal costs about 15 bytes
-of RAM, one you say nothing about costs 2.
+Metadata storage is allocated only for signals that use it. Its RAM cost also depends on the
+length of any copied strings.
 
 ## When a signal does not fit
 

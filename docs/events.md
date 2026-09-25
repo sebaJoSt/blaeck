@@ -100,8 +100,8 @@ history, or put it on a [state channel](state-channels.md) if it only has to be 
 | `diagnostic()` | Marks it as information about the device rather than what it does |
 | `disabledByDefault()` | Registered, but switched off until someone enables it |
 
-The channel name is copied. The type list and the strings above are stored as pointers, so they
-have to be `F()` literals.
+Ordinary channel names, type lists and metadata strings are copied; their buffers can be
+reused after registration.
 
 ## When a channel or type does not fit
 
@@ -114,8 +114,8 @@ device.begin(Serial)
     .withEventTypes(20);
 ```
 
-See [Configuration](configuration.md) for the defaults. A type costs 5 bytes on AVR, the
-cheapest entry the library keeps, so this is a cheap table to be generous with.
+See [Configuration](configuration.md) for the defaults. In addition to the entries, ordinary
+type strings need copied storage; types from the same comma-separated list share one copy.
 
 ```cpp
 if (device.hasRejectedEventChannels())

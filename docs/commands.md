@@ -154,7 +154,7 @@ device.onButtonCommand("ACTIVATE_ALL", onActivateRange)
 The handler then reads `params[0]` and `params[1]` as it would from any other sender. Nothing
 checks a press payload, so a typo in it is only found by what the handler does with it.
 
-Every string here must be an `F()` literal. They are stored as pointers and never copied.
+Ordinary configuration strings are copied; their buffers can be reused after the call.
 
 ## The state of a control
 

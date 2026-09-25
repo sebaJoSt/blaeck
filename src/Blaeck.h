@@ -14,6 +14,7 @@
 #include "BlaeckVersion.h"
 #include "detail/BlaeckServerAdapter.h"
 #include "detail/BlaeckCRC32.h"
+#include "detail/BlaeckString.h"
 #include <new>
 #include <string.h>
 #include <limits.h>
@@ -265,12 +266,11 @@ static const byte BLAECK_SCH_STATE_CLASS_SHIFT = 8;
 // something, since most don't and this is larger than the signal entry itself.
 struct SignalMeta
 {
-  // Pointers into flash, so a string costs a pointer of SRAM, not its length.
-  const __FlashStringHelper *Unit = nullptr;
-  const __FlashStringHelper *DeviceClass = nullptr;
-  const __FlashStringHelper *Icon = nullptr;
-  const __FlashStringHelper *Options = nullptr;
-  const __FlashStringHelper *DisplayName = nullptr;
+  detail::StoredString Unit;
+  detail::StoredString DeviceClass;
+  detail::StoredString Icon;
+  detail::StoredString Options;
+  detail::StoredString DisplayName;
   uint16_t MetaFlags = 0;
   uint8_t DisplayPrecision = 0;
 };
@@ -507,7 +507,7 @@ public:
     @brief   Sets how many state channels fit in the state channel table.
 
     Count the channels from addStateChannel() plus one for each command that uses
-    withOwnState(). Each channel takes 26 bytes of SRAM on AVR.
+    withOwnState(). Copied names and metadata need storage in addition to the table.
 
     @param   count  Up to 32767. A larger literal fails the build.
     @return  The same handle, for chaining.
@@ -521,7 +521,7 @@ public:
   /*!
     @brief   Sets how many event channels fit in the event channel table.
 
-    Each channel takes 10 bytes of SRAM on AVR.
+    Copied names and metadata need storage in addition to the table.
 
     @param   count  Up to 32767. A larger literal fails the build.
     @return  The same handle, for chaining.
@@ -536,7 +536,7 @@ public:
     @brief   Sets how many event types fit, counted across all channels.
 
     All channels share one table of types, so give the total: four channels with
-    five types each need 20. Each type takes 5 bytes of SRAM on AVR.
+    five types each need 20. Copied type strings need additional storage.
 
     @param   count  Up to 32767. A larger literal fails the build.
     @return  The same handle, for chaining.
@@ -550,8 +550,8 @@ public:
   /*!
     @brief   Sets how many commands fit in the command table.
 
-    onCommand() and all the typed commands share this table. Each command takes 48
-    bytes of SRAM on AVR. A command using withOwnState() also needs a state channel,
+    onCommand() and all the typed commands share this table. Copied metadata needs
+    additional storage. A command using withOwnState() also needs a state channel,
     so raise withStateChannels() to match.
 
     @param   count  Up to 32767. A larger literal fails the build.
@@ -602,15 +602,15 @@ static const byte WHOLE_STRING = 0xFF;
 
 // True for F(""). Modifiers treat an empty string as not set. Read with pgm_read_byte,
 // since on AVR the pointer is a flash address.
-inline bool flashStrEmpty(const __FlashStringHelper *value)
+inline bool flashStrEmpty(BlaeckString value)
 {
-  return value != nullptr && pgm_read_byte(reinterpret_cast<PGM_P>(value)) == 0;
+  return value != nullptr && value.read() == 0;
 }
 
 // Checks an options list for withOptions(): it must have at least one entry and no blank
 // ones. Prints why on debug when it refuses. `name` is the signal, channel or command named
 // in that message.
-bool optionsAccepted(const __FlashStringHelper *optionsCsv, Print *debug,
+bool optionsAccepted(BlaeckString optionsCsv, Print *debug,
                      const char *name, bool nameInFlash);
 
 // Checks that a channel can take a getter: it must not already read a variable, and the
@@ -678,14 +678,14 @@ struct CommandHandlerEntry
   float meta_min = 0.0f;
   float meta_max = 0.0f;
   float meta_step = 0.0f;
-  const __FlashStringHelper *unit = nullptr;
-  const __FlashStringHelper *deviceClass = nullptr;
-  const __FlashStringHelper *icon = nullptr;
-  const __FlashStringHelper *displayName = nullptr;
-  const __FlashStringHelper *options = nullptr;
-  const __FlashStringHelper *stateSignal = nullptr;
+  detail::StoredString unit;
+  detail::StoredString deviceClass;
+  detail::StoredString icon;
+  detail::StoredString displayName;
+  detail::StoredString options;
+  detail::StoredString stateSignal;
   // Buttons only: the arguments a press sends, or nullptr for none.
-  const __FlashStringHelper *pressPayload = nullptr;
+  detail::StoredString pressPayload;
   uint8_t stateSource = BLAECK_STATE_SIGNAL;
   uint8_t category = BLAECK_CAT_NONE;
   bool disabledByDefault = false;
@@ -699,7 +699,7 @@ struct StateChannelEntry
   // A heap copy, or a flash pointer when nameInFlash. Read it through the helpers only.
   const char *name = nullptr;
   bool nameInFlash = false;
-  const __FlashStringHelper *icon = nullptr;
+  detail::StoredString icon;
   // A getter asked for the value each time it is sent. valueType says which member is in
   // use: getStateText for text, getNumber (cast to the right type) for everything else.
   union
@@ -707,9 +707,9 @@ struct StateChannelEntry
     BlaeckStateTextGetter getStateText = nullptr;
     void (*getNumber)();
   };
-  const __FlashStringHelper *deviceClass = nullptr;
-  const __FlashStringHelper *options = nullptr;
-  const __FlashStringHelper *unit = nullptr;
+  detail::StoredString deviceClass;
+  detail::StoredString options;
+  detail::StoredString unit;
   // The variable the channel reports, when it has one instead of a getter.
   const void *stateValue = nullptr;
   dataType valueType = Blaeck_string;
@@ -744,8 +744,8 @@ struct EventChannelEntry
   // A heap copy, or a flash pointer when nameInFlash. Read it through the helpers only.
   const char *name = nullptr;
   bool nameInFlash = false;
-  const __FlashStringHelper *icon = nullptr;
-  const __FlashStringHelper *deviceClass = nullptr;
+  detail::StoredString icon;
+  detail::StoredString deviceClass;
   bool diagnostic = false;
   bool disabledByDefault = false;
   bool inUse = false;
@@ -754,9 +754,8 @@ struct EventChannelEntry
 struct EventTypeEntry
 {
   uint16_t channelIndex = 0;
-  // A flash string. addEventType() stores one whole (field = WHOLE_STRING); addEventChannel()
-  // stores its list once per type, each entry naming one comma-separated field.
-  const __FlashStringHelper *text = nullptr;
+  // addEventType() stores a whole string; CSV entries share one stored list.
+  detail::StoredString text;
   byte field = WHOLE_STRING;
 };
 
@@ -777,7 +776,7 @@ protected:
   // Marks the command catalog as changed, so it is sent again.
   void _markDirty() const;
 
-  void _setStateSignal(const __FlashStringHelper *signalName)
+  void _setStateSignal(BlaeckString signalName)
   {
 #if BLAECK_ENABLE_COMMAND_META
     if (auto *e = _entry())
@@ -786,7 +785,8 @@ protected:
       // on every loop() pass, and each mark resends the catalog.
       if (e->stateSignal != signalName || e->stateSource != BLAECK_STATE_SIGNAL)
       {
-        e->stateSignal = signalName;
+        if (!_storeString(e->stateSignal, signalName))
+          return;
         e->stateSource = BLAECK_STATE_SIGNAL;
         _markDirty();
       }
@@ -797,10 +797,10 @@ protected:
   }
 
   // Gives the command a state channel of its own, reading a variable or a getter.
-  void _setOwnState(const __FlashStringHelper *channelName, dataType valueType, const void *value,
+  void _setOwnState(BlaeckString channelName, dataType valueType, const void *value,
                     bool selectIndex = false);
 
-  void _setOwnState(const __FlashStringHelper *channelName, BlaeckStateTextGetter getStateText);
+  void _setOwnState(BlaeckString channelName, BlaeckStateTextGetter getStateText);
 
   // A max not above min means no range, so nothing would be checked. Say so.
   void _warnRangeIgnored(float mn, float mx) const;
@@ -815,7 +815,7 @@ protected:
   void _warnMaxLengthTooLong(unsigned int maxLength) const;
 
   // Refuses an options list with no entries or a blank one.
-  bool _optionsAccepted(const __FlashStringHelper *optionsCsv) const;
+  bool _optionsAccepted(BlaeckString optionsCsv) const;
 
   void _setRange(float mn, float mx, float st)
   {
@@ -842,7 +842,7 @@ protected:
 #endif
   }
 
-  void _setUnit(const __FlashStringHelper *unit)
+  void _setUnit(BlaeckString unit)
   {
 #if BLAECK_ENABLE_COMMAND_META
     if (blaeck_detail::flashStrEmpty(unit))
@@ -851,7 +851,8 @@ protected:
     {
       if (e->unit != unit)
       {
-        e->unit = unit;
+        if (!_storeString(e->unit, unit))
+          return;
         _markDirty();
       }
     }
@@ -861,7 +862,7 @@ protected:
   }
 
   // An empty device class is treated as none; a host may reject a blank one.
-  void _setDeviceClass(const __FlashStringHelper *deviceClass)
+  void _setDeviceClass(BlaeckString deviceClass)
   {
 #if BLAECK_ENABLE_COMMAND_META
     if (blaeck_detail::flashStrEmpty(deviceClass))
@@ -870,7 +871,8 @@ protected:
     {
       if (e->deviceClass != deviceClass)
       {
-        e->deviceClass = deviceClass;
+        if (!_storeString(e->deviceClass, deviceClass))
+          return;
         _markDirty();
       }
     }
@@ -879,7 +881,7 @@ protected:
 #endif
   }
 
-  void _setIcon(const __FlashStringHelper *icon)
+  void _setIcon(BlaeckString icon)
   {
 #if BLAECK_ENABLE_COMMAND_META
     if (blaeck_detail::flashStrEmpty(icon))
@@ -888,7 +890,8 @@ protected:
     {
       if (e->icon != icon)
       {
-        e->icon = icon;
+        if (!_storeString(e->icon, icon))
+          return;
         _markDirty();
       }
     }
@@ -897,7 +900,7 @@ protected:
 #endif
   }
 
-  void _setPressPayload(const __FlashStringHelper *pressPayload)
+  void _setPressPayload(BlaeckString pressPayload)
   {
 #if BLAECK_ENABLE_COMMAND_META
     if (blaeck_detail::flashStrEmpty(pressPayload))
@@ -906,7 +909,8 @@ protected:
     {
       if (e->pressPayload != pressPayload)
       {
-        e->pressPayload = pressPayload;
+        if (!_storeString(e->pressPayload, pressPayload))
+          return;
         _markDirty();
       }
     }
@@ -915,7 +919,7 @@ protected:
 #endif
   }
 
-  void _setDisplayName(const __FlashStringHelper *displayName)
+  void _setDisplayName(BlaeckString displayName)
   {
 #if BLAECK_ENABLE_COMMAND_META
     if (blaeck_detail::flashStrEmpty(displayName))
@@ -924,7 +928,8 @@ protected:
     {
       if (e->displayName != displayName)
       {
-        e->displayName = displayName;
+        if (!_storeString(e->displayName, displayName))
+          return;
         _markDirty();
       }
     }
@@ -933,7 +938,7 @@ protected:
 #endif
   }
 
-  void _setOptions(const __FlashStringHelper *optionsCsv)
+  void _setOptions(BlaeckString optionsCsv)
   {
 #if BLAECK_ENABLE_COMMAND_META
     if (auto *e = _entry())
@@ -943,7 +948,8 @@ protected:
         return;
       if (e->options != optionsCsv)
       {
-        e->options = optionsCsv;
+        if (!_storeString(e->options, optionsCsv))
+          return;
         _markDirty();
       }
     }
@@ -1024,6 +1030,8 @@ protected:
 #endif
   }
 
+  bool _storeString(detail::StoredString &slot, BlaeckString value);
+
   Blaeck *_owner;
   int16_t _index;
 };
@@ -1041,7 +1049,7 @@ public:
     Only the label changes. When the control is used, the host still sends the
     command name, such as SET_FREQ, so adding a label later breaks nothing.
 
-    @param   displayName  The label, as an F() literal.
+    @param   displayName  The label.
     @return  The same handle, for chaining.
 
     @code
@@ -1050,7 +1058,7 @@ public:
           .withDisplayName(F("Frequency"));
     @endcode
   */
-  TYPE &withDisplayName(const __FlashStringHelper *displayName)
+  TYPE &withDisplayName(BlaeckString displayName)
   {
     _setDisplayName(displayName);
     return _self();
@@ -1061,14 +1069,14 @@ public:
 
     Where a device class fits, prefer it: a host picks a matching icon from it.
 
-    @param   icon  A Material Design Icons name, as an F() literal.
+    @param   icon  A Material Design Icons name.
     @return  The same handle, for chaining.
 
     @code
       device.onButtonCommand("CALIBRATE", onCalibrate).withIcon(F("mdi:tune"));
     @endcode
   */
-  TYPE &withIcon(const __FlashStringHelper *icon)
+  TYPE &withIcon(BlaeckString icon)
   {
     _setIcon(icon);
     return _self();
@@ -1152,7 +1160,7 @@ public:
       device.onSwitchCommand("LED", onLED).withStateFromSignal(F("LED_State"));
     @endcode
   */
-  TYPE &withStateFromSignal(const __FlashStringHelper *signalName)
+  TYPE &withStateFromSignal(BlaeckString signalName)
   {
     this->_setStateSignal(signalName);
     return this->_self();
@@ -1179,7 +1187,7 @@ public:
           .withOwnState(F("Offset"), offsetText);
     @endcode
   */
-  TYPE &withOwnState(const __FlashStringHelper *channelName, BlaeckStateTextGetter getStateText)
+  TYPE &withOwnState(BlaeckString channelName, BlaeckStateTextGetter getStateText)
   {
     this->_setOwnState(channelName, getStateText);
     return this->_self();
@@ -1202,7 +1210,7 @@ public:
 
     Only a label; the handler gets the number as sent.
 
-    @param   unit  An F() literal. Non-ASCII characters must be UTF-8:
+    @param   unit  The unit. Non-ASCII characters must be UTF-8:
                    F("\xC2\xB0" "C") is degrees Celsius.
     @return  The same handle, for chaining.
 
@@ -1210,7 +1218,7 @@ public:
       device.onNumberCommand("SET_FREQ", onSetFreq).withRange(0.0f, 2.0f, 0.01f).withUnit(F("Hz"));
     @endcode
   */
-  BlaeckNumberCommandRef &withUnit(const __FlashStringHelper *unit)
+  BlaeckNumberCommandRef &withUnit(BlaeckString unit)
   {
     _setUnit(unit);
     return *this;
@@ -1247,7 +1255,7 @@ public:
     Any conversion happens in the host, so values always reach the device in the
     unit declared with withUnit(), and the range stays in that unit too.
 
-    @param   deviceClass  A number device class in lower case, as an F() literal:
+    @param   deviceClass  A number device class in lower case:
                           "temperature", "pressure", "power", "voltage" and so on.
                           Numbers don't take "enum", "timestamp" or "date".
     @return  The same handle, for chaining.
@@ -1263,7 +1271,7 @@ public:
           .withDeviceClass(F("temperature"));
     @endcode
   */
-  BlaeckNumberCommandRef &withDeviceClass(const __FlashStringHelper *deviceClass)
+  BlaeckNumberCommandRef &withDeviceClass(BlaeckString deviceClass)
   {
     _setDeviceClass(deviceClass);
     return *this;
@@ -1286,28 +1294,28 @@ public:
           .withOwnState(F("Amplitude"), &Amplitude);
     @endcode
   */
-  BlaeckNumberCommandRef &withOwnState(const __FlashStringHelper *channelName, byte *value)
+  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, byte *value)
   {
     _setOwnState(channelName, Blaeck_byte, value);
     return *this;
   }
 
   // Reports a short variable as the command's state.
-  BlaeckNumberCommandRef &withOwnState(const __FlashStringHelper *channelName, short *value)
+  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, short *value)
   {
     _setOwnState(channelName, Blaeck_short, value);
     return *this;
   }
 
   // Reports an unsigned short variable as the command's state.
-  BlaeckNumberCommandRef &withOwnState(const __FlashStringHelper *channelName, unsigned short *value)
+  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, unsigned short *value)
   {
     _setOwnState(channelName, Blaeck_ushort, value);
     return *this;
   }
 
   // Reports an int variable as the command's state. An int is 16-bit on AVR, 32-bit elsewhere.
-  BlaeckNumberCommandRef &withOwnState(const __FlashStringHelper *channelName, int *value)
+  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, int *value)
   {
 #ifdef __AVR__
     _setOwnState(channelName, Blaeck_int, value);
@@ -1318,7 +1326,7 @@ public:
   }
 
   // Reports an unsigned int variable as the command's state. 16-bit on AVR, 32-bit elsewhere.
-  BlaeckNumberCommandRef &withOwnState(const __FlashStringHelper *channelName, unsigned int *value)
+  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, unsigned int *value)
   {
 #ifdef __AVR__
     _setOwnState(channelName, Blaeck_uint, value);
@@ -1329,21 +1337,21 @@ public:
   }
 
   // Reports a long variable as the command's state.
-  BlaeckNumberCommandRef &withOwnState(const __FlashStringHelper *channelName, long *value)
+  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, long *value)
   {
     _setOwnState(channelName, Blaeck_long, value);
     return *this;
   }
 
   // Reports an unsigned long variable as the command's state.
-  BlaeckNumberCommandRef &withOwnState(const __FlashStringHelper *channelName, unsigned long *value)
+  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, unsigned long *value)
   {
     _setOwnState(channelName, Blaeck_ulong, value);
     return *this;
   }
 
   // Reports a float variable as the command's state.
-  BlaeckNumberCommandRef &withOwnState(const __FlashStringHelper *channelName, float *value)
+  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, float *value)
   {
     _setOwnState(channelName, Blaeck_float, value);
     return *this;
@@ -1351,7 +1359,7 @@ public:
 
   // Reports a double variable as the command's state. On AVR a double is a 4-byte float and
   // is sent as one.
-  BlaeckNumberCommandRef &withOwnState(const __FlashStringHelper *channelName, double *value)
+  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, double *value)
   {
 #ifdef __AVR__
     _setOwnState(channelName, Blaeck_float, value);
@@ -1385,7 +1393,7 @@ public:
       device.onSwitchCommand("SET_RELAY", onSetRelay).withDeviceClass(F("outlet"));
     @endcode
   */
-  BlaeckSwitchCommandRef &withDeviceClass(const __FlashStringHelper *deviceClass)
+  BlaeckSwitchCommandRef &withDeviceClass(BlaeckString deviceClass)
   {
     _setDeviceClass(deviceClass);
     return *this;
@@ -1404,7 +1412,7 @@ public:
           .withOwnState(F("Enabled"), &Enabled);
     @endcode
   */
-  BlaeckSwitchCommandRef &withOwnState(const __FlashStringHelper *channelName, bool *value)
+  BlaeckSwitchCommandRef &withOwnState(BlaeckString channelName, bool *value)
   {
     _setOwnState(channelName, Blaeck_bool, value);
     return *this;
@@ -1436,7 +1444,7 @@ public:
           .withOwnState(F("Wave"), &waveIndex);
     @endcode
   */
-  BlaeckSelectCommandRef &withOwnState(const __FlashStringHelper *channelName, byte *index)
+  BlaeckSelectCommandRef &withOwnState(BlaeckString channelName, byte *index)
   {
     _setOwnState(channelName, Blaeck_string, index, true);
     return *this;
@@ -1444,7 +1452,7 @@ public:
 
   // Reports the selected option from a buffer holding its name. The sketch keeps the buffer
   // up to date; the name is checked against the options list.
-  BlaeckSelectCommandRef &withOwnState(const __FlashStringHelper *channelName, const char *value)
+  BlaeckSelectCommandRef &withOwnState(BlaeckString channelName, const char *value)
   {
     _setOwnState(channelName, Blaeck_string, value);
     return *this;
@@ -1472,7 +1480,7 @@ public:
       device.onButtonCommand("REBOOT", onReboot).withDeviceClass(F("restart")).diagnostic();
     @endcode
   */
-  BlaeckButtonCommandRef &withDeviceClass(const __FlashStringHelper *deviceClass)
+  BlaeckButtonCommandRef &withDeviceClass(BlaeckString deviceClass)
   {
     _setDeviceClass(deviceClass);
     return *this;
@@ -1484,7 +1492,7 @@ public:
     Without this a press sends none. With it, the handler gets these arguments in
     params, as if they had been typed after the command name.
 
-    @param   pressPayload  Comma-separated arguments, as an F() literal.
+    @param   pressPayload  Comma-separated arguments.
     @return  The same handle, for chaining.
 
     @warning Nothing checks the payload. A typo reaches the handler as written.
@@ -1498,7 +1506,7 @@ public:
           .withDisplayName(F("Activate all DUTs"));
     @endcode
   */
-  BlaeckButtonCommandRef &withPressPayload(const __FlashStringHelper *pressPayload)
+  BlaeckButtonCommandRef &withPressPayload(BlaeckString pressPayload)
   {
     _setPressPayload(pressPayload);
     return *this;
@@ -1527,7 +1535,7 @@ public:
           .withOwnState(F("DeviceLabel"), DeviceLabel);
     @endcode
   */
-  BlaeckTextCommandRef &withOwnState(const __FlashStringHelper *channelName, const char *value)
+  BlaeckTextCommandRef &withOwnState(BlaeckString channelName, const char *value)
   {
     _setOwnState(channelName, Blaeck_string, value);
     return *this;
@@ -1626,7 +1634,7 @@ public:
     atoi(params[0]) is enough; getSelectOptionNameAt() gives the name. The other
     modifiers are available on the handle this returns.
 
-    @param   optionsCsv  Comma-separated option names, as an F() literal. The first
+    @param   optionsCsv  Comma-separated option names. The first
                          has index 0.
     @return  The command's full handle, for chaining.
 
@@ -1641,7 +1649,7 @@ public:
           .withOptions(F("Sine,Square,Triangle,Sawtooth"));
     @endcode
   */
-  BlaeckSelectCommandRef withOptions(const __FlashStringHelper *optionsCsv)
+  BlaeckSelectCommandRef withOptions(BlaeckString optionsCsv)
   {
     _setOptions(optionsCsv);
     return BlaeckSelectCommandRef(_owner, _index);
@@ -1665,13 +1673,13 @@ protected:
   // A handle that names no signal and ignores every call, like a rejected one.
   BlaeckSignalRefBase() : _owner(nullptr), _index(-1) {}
 
-  void _setFlash(const __FlashStringHelper *value, uint16_t bit);
+  void _setFlash(BlaeckString value, uint16_t bit);
 
   void _setBit(uint16_t bit, bool on);
 
   void _setStateClass(BlaeckStateClass stateClass);
 
-  void _setOptions(const __FlashStringHelper *optionsCsv);
+  void _setOptions(BlaeckString optionsCsv);
 
   void _setDisplayPrecision(uint8_t decimals);
 
@@ -1796,14 +1804,14 @@ public:
 
     Sent as written; the library doesn't check it against a list.
 
-    @param   deviceClass  The device class, as an F() literal.
+    @param   deviceClass  The device class.
     @return  The same handle, for chaining.
 
     @code
       device.addSignal(F("Uptime"), &Uptime).withDeviceClass(F("duration"));
     @endcode
   */
-  TYPE &withDeviceClass(const __FlashStringHelper *deviceClass)
+  TYPE &withDeviceClass(BlaeckString deviceClass)
   {
     _setFlash(deviceClass, BLAECK_SIG_HAS_DEVICE_CLASS);
     return _self();
@@ -1812,14 +1820,14 @@ public:
   /*!
     @brief   Sets the icon a host shows next to the value.
 
-    @param   icon  A Material Design Icons name, as an F() literal.
+    @param   icon  A Material Design Icons name.
     @return  The same handle, for chaining.
 
     @code
       device.addSignal(F("Output"), &Output).withIcon(F("mdi:sine-wave"));
     @endcode
   */
-  TYPE &withIcon(const __FlashStringHelper *icon)
+  TYPE &withIcon(BlaeckString icon)
   {
     _setFlash(icon, BLAECK_SIG_HAS_ICON);
     return _self();
@@ -1831,14 +1839,14 @@ public:
     Useful when the name carries extra detail for logging, like "Output [V]". The
     signal is still identified by its name, so adding a label later moves nothing.
 
-    @param   displayName  The label, as an F() literal.
+    @param   displayName  The label.
     @return  The same handle, for chaining.
 
     @code
       device.addSignal(F("Output [V]"), &Output).withUnit(F("V")).withDisplayName(F("Output"));
     @endcode
   */
-  TYPE &withDisplayName(const __FlashStringHelper *displayName)
+  TYPE &withDisplayName(BlaeckString displayName)
   {
     _setFlash(displayName, BLAECK_SIG_HAS_DISPLAY_NAME);
     return _self();
@@ -1932,14 +1940,14 @@ public:
     A host that logs may keep only the signal name, so put the unit in the name as
     well if the log should show it.
 
-    @param   unit  An F() literal. Non-ASCII characters must be UTF-8.
+    @param   unit  The unit. Non-ASCII characters must be UTF-8.
     @return  The same handle, for chaining.
 
     @code
       device.addSignal(F("Frequency"), &Frequency).withUnit(F("Hz"));
     @endcode
   */
-  BlaeckNumericSignalRef &withUnit(const __FlashStringHelper *unit)
+  BlaeckNumericSignalRef &withUnit(BlaeckString unit)
   {
     _setFlash(unit, BLAECK_SIG_HAS_UNIT);
     return *this;
@@ -2004,7 +2012,7 @@ public:
   /*!
     @brief   Sets the fixed list of values the signal can report.
 
-    @param   optionsCsv  Comma-separated values, as an F() literal.
+    @param   optionsCsv  Comma-separated values.
     @return  The same handle, for chaining.
 
     @note    A host may also need withDeviceClass(F("enum")), and may reject a value
@@ -2019,7 +2027,7 @@ public:
           .withOptions(F("idle,running,fault"));
     @endcode
   */
-  BlaeckTextSignalRef &withOptions(const __FlashStringHelper *optionsCsv)
+  BlaeckTextSignalRef &withOptions(BlaeckString optionsCsv)
   {
     _setOptions(optionsCsv);
     return *this;
@@ -2105,6 +2113,8 @@ protected:
 #endif
   }
 
+  bool _storeString(detail::StoredString &slot, BlaeckString value);
+
   Blaeck *_owner;
   int16_t _index;
 };
@@ -2117,14 +2127,14 @@ public:
   /*!
     @brief   Sets the icon a host shows next to the channel.
 
-    @param   icon  A Material Design Icons name, as an F() literal.
+    @param   icon  A Material Design Icons name.
     @return  The same handle, for chaining.
 
     @code
       device.addStateChannel(F("Status"), BlaeckText).withIcon(F("mdi:pulse"));
     @endcode
   */
-  TYPE &withIcon(const __FlashStringHelper *icon)
+  TYPE &withIcon(BlaeckString icon)
   {
     if (blaeck_detail::flashStrEmpty(icon))
       icon = nullptr;
@@ -2132,7 +2142,8 @@ public:
     {
       if (e->icon != icon)
       {
-        e->icon = icon;
+        if (!_storeString(e->icon, icon))
+          return _self();
         _markDirty();
       }
     }
@@ -2167,7 +2178,7 @@ public:
   /*!
     @brief   Sets what kind of value the channel carries, such as "timestamp".
 
-    @param   deviceClass  The device class, as an F() literal.
+    @param   deviceClass  The device class.
     @return  The same handle, for chaining.
 
     @warning Use a class that fits the channel's type: "timestamp" or "date" for
@@ -2178,7 +2189,7 @@ public:
       device.addStateChannel(F("LastSeen"), BlaeckText).withDeviceClass(F("timestamp"));
     @endcode
   */
-  TYPE &withDeviceClass(const __FlashStringHelper *deviceClass)
+  TYPE &withDeviceClass(BlaeckString deviceClass)
   {
     if (blaeck_detail::flashStrEmpty(deviceClass))
       deviceClass = nullptr;
@@ -2186,7 +2197,8 @@ public:
     {
       if (e->deviceClass != deviceClass)
       {
-        e->deviceClass = deviceClass;
+        if (!_storeString(e->deviceClass, deviceClass))
+          return _self();
         _markDirty();
       }
     }
@@ -2261,14 +2273,14 @@ public:
   /*!
     @brief   Sets the unit a host shows after the value.
 
-    @param   unit  An F() literal. Non-ASCII characters must be UTF-8.
+    @param   unit  The unit. Non-ASCII characters must be UTF-8.
     @return  The same handle, for chaining.
 
     @code
       device.addStateChannel(F("Amplitude"), &Amplitude).withUnit(F("V"));
     @endcode
   */
-  BlaeckNumericStateRef &withUnit(const __FlashStringHelper *unit)
+  BlaeckNumericStateRef &withUnit(BlaeckString unit)
   {
     if (blaeck_detail::flashStrEmpty(unit))
       unit = nullptr;
@@ -2279,7 +2291,8 @@ public:
                                                : (uint16_t)(e->metaFlags & ~BLAECK_SCH_HAS_UNIT);
       if (e->unit != unit || e->metaFlags != flags)
       {
-        e->unit = unit;
+        if (!_storeString(e->unit, unit))
+          return *this;
         e->metaFlags = flags;
         _markDirty();
       }
@@ -2551,7 +2564,7 @@ public:
   /*!
     @brief   Sets the fixed list of values the channel can report.
 
-    @param   optionsCsv  Comma-separated values, as an F() literal.
+    @param   optionsCsv  Comma-separated values.
     @return  The same handle, for chaining.
 
     @note    A host may also need withDeviceClass(F("enum")), and may reject a value
@@ -2566,7 +2579,7 @@ public:
           .withOptions(F("idle,running,fault"));
     @endcode
   */
-  BlaeckTextStateRef &withOptions(const __FlashStringHelper *optionsCsv)
+  BlaeckTextStateRef &withOptions(BlaeckString optionsCsv)
   {
     if (auto *e = _entry())
     {
@@ -2574,7 +2587,8 @@ public:
         return *this;
       if (e->options != optionsCsv)
       {
-        e->options = optionsCsv;
+        if (!_storeString(e->options, optionsCsv))
+          return *this;
         _markDirty();
       }
     }
@@ -2629,14 +2643,14 @@ public:
   /*!
     @brief   Sets the icon a host shows next to the channel.
 
-    @param   icon  A Material Design Icons name, as an F() literal.
+    @param   icon  A Material Design Icons name.
     @return  The same handle, for chaining.
 
     @code
       device.addEventChannel(F("Activity"), F("idle,resumed")).withIcon(F("mdi:pulse"));
     @endcode
   */
-  BlaeckEventChannelRef withIcon(const __FlashStringHelper *icon);
+  BlaeckEventChannelRef withIcon(BlaeckString icon);
 
   /*!
     @brief   Marks the channel as diagnostic.
@@ -2665,7 +2679,7 @@ public:
       device.addEventChannel(F("Doorbell"), F("ring")).withDeviceClass(F("doorbell"));
     @endcode
   */
-  BlaeckEventChannelRef withDeviceClass(const __FlashStringHelper *deviceClass);
+  BlaeckEventChannelRef withDeviceClass(BlaeckString deviceClass);
 
   /*!
     @brief   Asks a host to create the channel disabled, until someone enables it.
@@ -3195,8 +3209,7 @@ public:
     @brief   Adds an event channel, for reporting things that happen.
 
     @param   channelName  The name a host shows. It is copied.
-    @param   eventTypes   The events the channel can report, comma-separated, as an
-                          F() literal.
+    @param   eventTypes   The events the channel can report, comma-separated.
     @return  A handle for describing how a host shows the channel.
 
     @warning A channel with no event types, or with a blank one, is refused.
@@ -3206,10 +3219,10 @@ public:
           .withIcon(F("mdi:pulse"));
     @endcode
   */
-  BlaeckEventChannelRef addEventChannel(const char *channelName, const __FlashStringHelper *eventTypes);
+  BlaeckEventChannelRef addEventChannel(const char *channelName, BlaeckString eventTypes);
 
   // The same, with an F() name.
-  BlaeckEventChannelRef addEventChannel(const __FlashStringHelper *channelName, const __FlashStringHelper *eventTypes);
+  BlaeckEventChannelRef addEventChannel(const __FlashStringHelper *channelName, BlaeckString eventTypes);
 
   /*!
     @brief   Adds one more event type to an existing event channel.
@@ -3217,7 +3230,7 @@ public:
     For types that depend on the hardware fitted.
 
     @param   channelName  A channel added with addEventChannel().
-    @param   eventType    The new type, as an F() literal.
+    @param   eventType    The new type.
     @return  False if the type is blank or a duplicate, the channel doesn't exist, or
              the type table is full. Each is reported on the debug stream.
 
@@ -3227,8 +3240,8 @@ public:
         device.addEventType(F("Activity"), F("low_battery"));
     @endcode
   */
-  bool addEventType(const char *channelName, const __FlashStringHelper *eventType);
-  bool addEventType(const __FlashStringHelper *channelName, const __FlashStringHelper *eventType);
+  bool addEventType(const char *channelName, BlaeckString eventType);
+  bool addEventType(const __FlashStringHelper *channelName, BlaeckString eventType);
   /*!
     @brief   Removes every event channel and event type, so a new set can be added.
 
@@ -3268,10 +3281,10 @@ public:
       device.writeEvent(F("Activity"), F("idle_warning"));
     @endcode
   */
-  void writeEvent(const char *channelName, const __FlashStringHelper *eventType);
+  void writeEvent(const char *channelName, BlaeckString eventType);
 
   // The same, with an F() name.
-  void writeEvent(const __FlashStringHelper *channelName, const __FlashStringHelper *eventType);
+  void writeEvent(const __FlashStringHelper *channelName, BlaeckString eventType);
 
   // ----- Data Write -----
 
@@ -3839,10 +3852,10 @@ public:
   }
 
   /*!
-    @brief   Reports rejected declarations and signal-reporting failures.
+    @brief   Reports rejected declarations, configuration and signal-reporting failures.
 
     @return  True if a declaration was dropped, a reporting policy was rejected,
-             or a change-tracking snapshot could not be allocated.
+             or configuration text or a change-tracking snapshot could not be allocated.
 
     @code
       if (device.hasRejections())
@@ -3855,7 +3868,7 @@ public:
 
     Prints nothing when there were no rejections. A rejection can mean a full table,
     an invalid declaration or insufficient memory; increasing capacity may not help.
-    Also includes signal-reporting configuration and snapshot allocation failures.
+    Also includes configuration text and signal snapshot allocation failures.
     Enable withDebugStream() for details when a failure occurs.
 
     @param   out  Where to print. The data port is fine when called from setup().
@@ -3874,8 +3887,7 @@ public:
   //       .withRange(0.0f, 2.0f, 0.01f)
   //       .withUnit(F("Hz"));
   //
-  // Values are checked against what is declared before the handler runs. Description strings
-  // must be F() literals; only the pointers are stored.
+  // Values are checked against what is declared before the handler runs.
 
   /*!
     @brief   Registers a command that takes a number.
@@ -4380,38 +4392,43 @@ protected:
   void _writeStateCurrent(const char *name, bool nameInFlash);
   void _writeStateNumber(const char *channelName, long s, unsigned long u, double d, bool nameInFlash = false);
   // As _registerStateChannel(). A redeclared event channel keeps its types.
-  int _registerEventChannel(const char *channelName, const __FlashStringHelper *flashName, const __FlashStringHelper *eventTypes);
+  int _registerEventChannel(const char *channelName, const __FlashStringHelper *flashName, BlaeckString eventTypes);
   // Adds one event type per comma-separated field, in order.
-  void _addEventTypesCsv(uint16_t channelIndex, const __FlashStringHelper *eventTypes);
+  void _addEventTypesCsv(uint16_t channelIndex, const detail::StoredString &eventTypes);
 #if BLAECK_ENABLE_COMMAND_META
   void writeCommandsFrame(unsigned long MessageID);
   byte _validateTypedCommand(uint16_t handlerIndex);
   // Adds the channel a command's withOwnState() uses. addStateChannel() refuses such names.
-  bool _addOwnedStateChannel(const __FlashStringHelper *channelName, BlaeckStateTextGetter getStateText,
+  bool _addOwnedStateChannel(BlaeckString channelName, BlaeckStateTextGetter getStateText,
                              dataType valueType = Blaeck_string, const void *value = nullptr);
   // Adds the withOwnState() channel and marks the catalogs for sending. False if the channel
   // couldn't be added, and the command then reports no state.
-  bool _declareOwnState(uint16_t handlerIndex, const __FlashStringHelper *channelName,
+  bool _declareOwnState(uint16_t handlerIndex, BlaeckString channelName,
                         BlaeckStateTextGetter getStateText, dataType valueType, const void *value,
                         bool selectIndex = false);
-  bool _declareOwnState(uint16_t handlerIndex, const __FlashStringHelper *channelName,
+  bool _declareOwnState(uint16_t handlerIndex, BlaeckString channelName,
                         BlaeckStateTextGetter getStateText);
 
   static void _percentDecodeInPlace(char *s);
-  static long _flashCsvIndexOf(const __FlashStringHelper *csv, const char *value);
+  static long _flashCsvIndexOf(BlaeckString csv, const char *value);
 #endif
-  // Number of fields in a comma-separated flash string. Outside the command-metadata guard
+  // Number of fields in a comma-separated string. Outside the command-metadata guard
   // because event channels use it too.
-  static uint16_t _flashCsvOptionCount(const __FlashStringHelper *csv);
+  static uint16_t _flashCsvOptionCount(BlaeckString csv);
 
   // True if any field is empty or only spaces. Such a list is refused, because dropping the
   // field would shift every later field's index.
-  static bool _flashCsvHasBlankField(const __FlashStringHelper *csv);
+  static bool _flashCsvHasBlankField(BlaeckString csv);
 #if BLAECK_ENABLE_STATE_CHANNELS
   void writeStateChannelsFrame(unsigned long MessageID);
   // Index of a declared channel, or -1 when the name was never declared.
   int _findStateChannel(const char *channelName) const;
   int _findStateChannel(const __FlashStringHelper *channelName) const;
+  int _findStateChannel(BlaeckString channelName) const
+  {
+    return channelName.inFlash() ? _findStateChannel(reinterpret_cast<const __FlashStringHelper *>(channelName.data()))
+                                 : _findStateChannel(channelName.data());
+  }
 #endif
 #if BLAECK_ENABLE_EVENTS
   void writeEventChannelsFrame(unsigned long MessageID);
@@ -4420,7 +4437,7 @@ protected:
   int _findEventChannel(const __FlashStringHelper *channelName) const;
   // Position of an event type within its own channel's list, or -1 when that
   // channel never declared it.
-  int _findEventType(uint16_t channelIndex, const __FlashStringHelper *eventType) const;
+  int _findEventType(uint16_t channelIndex, BlaeckString eventType) const;
   // Compares two flash strings. strcmp_P() can't, because it reads its first argument from RAM.
   static bool _flashStringEquals(const __FlashStringHelper *a, const __FlashStringHelper *b);
 #endif
@@ -4433,6 +4450,8 @@ protected:
   static void validatePlatformSizes();
 
   Print *_debugStream = nullptr;
+  bool _storeString(detail::StoredString &slot, BlaeckString value);
+  uint16_t _rejectedStringCount = 0;
   Signal *Signals = nullptr;
   // Allocates the signal table on first use.
   bool _ensureSignalTable();
@@ -4720,6 +4739,13 @@ protected:
     _emitFlashStr(s);
     _emitByte(0);
   }
+  void _emitFlashStr0(BlaeckString s)
+  {
+    if (s != nullptr)
+      for (size_t i = 0; s.read(i) != 0; ++i)
+        _emitByte(s.read(i));
+    _emitByte(0);
+  }
   bool _bufSend()
   {
     if (_bufOverflow)
@@ -4811,10 +4837,10 @@ protected:
   typedef blaeck_detail::EventTypeEntry EventTypeEntry;
   static const byte WHOLE_STRING = blaeck_detail::WHOLE_STRING;
 
-  // Where the entry's name starts in its flash string, and its length.
+  // Where the entry's name starts in its stored string, and its length.
   static void _eventTypeExtent(const EventTypeEntry &e, unsigned int &start, unsigned int &len);
-  // Compares the entry's name with eventType, both in flash.
-  static bool _eventTypeEquals(const EventTypeEntry &e, const __FlashStringHelper *eventType);
+  // Compares the entry's name with eventType.
+  static bool _eventTypeEquals(const EventTypeEntry &e, BlaeckString eventType);
   // Emits the entry's name with a terminator.
   void _emitEventType0(const EventTypeEntry &e);
   EventTypeEntry *_eventTypes = nullptr;
@@ -4911,7 +4937,7 @@ protected:
   } dblCvt;
 
   friend class BlaeckSignalRefBase;
-  friend bool blaeck_detail::optionsAccepted(const __FlashStringHelper *, Print *,
+  friend bool blaeck_detail::optionsAccepted(BlaeckString, Print *,
                                              const char *, bool);
   friend class BlaeckCommandRefBase;
   friend class BlaeckStateRefBase;
@@ -5149,7 +5175,7 @@ inline void BlaeckCommandRefBase::_warnMaxLengthTooLong(unsigned int maxLength) 
 #endif
 }
 
-inline bool BlaeckCommandRefBase::_optionsAccepted(const __FlashStringHelper *optionsCsv) const
+inline bool BlaeckCommandRefBase::_optionsAccepted(BlaeckString optionsCsv) const
 {
 #if BLAECK_ENABLE_COMMAND_META
   auto *e = _entry();
@@ -5162,17 +5188,23 @@ inline bool BlaeckCommandRefBase::_optionsAccepted(const __FlashStringHelper *op
 #endif
 }
 
-inline void BlaeckCommandRefBase::_setOwnState(const __FlashStringHelper *channelName,
+inline void BlaeckCommandRefBase::_setOwnState(BlaeckString channelName,
                                                dataType valueType, const void *value,
                                                bool selectIndex)
 {
-#if BLAECK_ENABLE_COMMAND_META
+#if BLAECK_ENABLE_COMMAND_META && BLAECK_ENABLE_STATE_CHANNELS
   if (auto *e = _entry())
   {
-    if (_owner->_declareOwnState((uint16_t)_index, channelName, nullptr, valueType, value, selectIndex))
+    detail::StoredString name = e->stateSignal;
+    if (!_storeString(name, channelName))
+      return;
+    if (_owner->_declareOwnState((uint16_t)_index, name, nullptr, valueType, value, selectIndex))
     {
-      e->stateSignal = channelName;
+      const bool changed = e->stateSignal != BlaeckString(name) || e->stateSource != BLAECK_STATE_CHANNEL;
+      e->stateSignal = name;
       e->stateSource = BLAECK_STATE_CHANNEL;
+      if (changed)
+        _markDirty();
     }
   }
 #else
@@ -5183,16 +5215,22 @@ inline void BlaeckCommandRefBase::_setOwnState(const __FlashStringHelper *channe
 #endif
 }
 
-inline void BlaeckCommandRefBase::_setOwnState(const __FlashStringHelper *channelName, BlaeckStateTextGetter getStateText)
+inline void BlaeckCommandRefBase::_setOwnState(BlaeckString channelName, BlaeckStateTextGetter getStateText)
 {
-#if BLAECK_ENABLE_COMMAND_META
+#if BLAECK_ENABLE_COMMAND_META && BLAECK_ENABLE_STATE_CHANNELS
   if (auto *e = _entry())
   {
+    detail::StoredString name = e->stateSignal;
+    if (!_storeString(name, channelName))
+      return;
     // Link the state only if the channel was added; otherwise the command reports none.
-    if (_owner->_declareOwnState((uint16_t)_index, channelName, getStateText))
+    if (_owner->_declareOwnState((uint16_t)_index, name, getStateText))
     {
-      e->stateSignal = channelName;
+      const bool changed = e->stateSignal != BlaeckString(name) || e->stateSource != BLAECK_STATE_CHANNEL;
+      e->stateSignal = name;
       e->stateSource = BLAECK_STATE_CHANNEL;
+      if (changed)
+        _markDirty();
     }
   }
 #else
@@ -5207,6 +5245,16 @@ inline void BlaeckSignalRefBase::_setInterval(BlaeckIntervalMode mode, double de
     _owner->_setSignalInterval(_index, mode, delta);
 }
 
+inline bool BlaeckCommandRefBase::_storeString(detail::StoredString &slot, BlaeckString value)
+{
+  return _owner != nullptr && _owner->_storeString(slot, value);
+}
+
+inline bool BlaeckStateRefBase::_storeString(detail::StoredString &slot, BlaeckString value)
+{
+  return _owner != nullptr && _owner->_storeString(slot, value);
+}
+
 inline void BlaeckSignalRefBase::_setOnChange(double delta, uint32_t minIntervalMs)
 {
   if (_owner != nullptr)
@@ -5219,7 +5267,7 @@ inline void BlaeckSignalRefBase::_setOnChange(BlaeckIntervalMode mode)
     _owner->_setSignalOnChange(_index, mode);
 }
 
-inline void BlaeckSignalRefBase::_setFlash(const __FlashStringHelper *value, uint16_t bit)
+inline void BlaeckSignalRefBase::_setFlash(BlaeckString value, uint16_t bit)
 {
 #if BLAECK_ENABLE_SIGNAL_META
   // An empty string counts as not set.
@@ -5227,7 +5275,7 @@ inline void BlaeckSignalRefBase::_setFlash(const __FlashStringHelper *value, uin
     value = nullptr;
   if (SignalMeta *m = _owner != nullptr ? _owner->_ensureSignalMeta(_index) : nullptr)
   {
-    const __FlashStringHelper **slot;
+    detail::StoredString *slot;
     switch (bit)
     {
     case BLAECK_SIG_HAS_UNIT:         slot = &m->Unit; break;
@@ -5241,7 +5289,8 @@ inline void BlaeckSignalRefBase::_setFlash(const __FlashStringHelper *value, uin
     // Only a real change marks the catalog, since this may run on every loop() pass.
     if (*slot != value || m->MetaFlags != flags)
     {
-      *slot = value;
+      if (!_owner->_storeString(*slot, value))
+        return;
       m->MetaFlags = flags;
       _owner->_signalConfigDirty = true;
     }
@@ -5291,7 +5340,7 @@ inline void BlaeckSignalRefBase::_setStateClass(BlaeckStateClass stateClass)
 #endif
 }
 
-inline void BlaeckSignalRefBase::_setOptions(const __FlashStringHelper *optionsCsv)
+inline void BlaeckSignalRefBase::_setOptions(BlaeckString optionsCsv)
 {
 #if BLAECK_ENABLE_SIGNAL_META
   // A refused list leaves the signal as it was.
@@ -5307,7 +5356,8 @@ inline void BlaeckSignalRefBase::_setOptions(const __FlashStringHelper *optionsC
                                : (uint16_t)(m->MetaFlags & ~BLAECK_SIG_HAS_OPTIONS);
     if (m->Options != optionsCsv || m->MetaFlags != flags)
     {
-      m->Options = optionsCsv;
+      if (!_owner->_storeString(m->Options, optionsCsv))
+        return;
       m->MetaFlags = flags;
       _owner->_signalConfigDirty = true;
     }
@@ -5369,14 +5419,15 @@ inline Print *BlaeckStateRefBase::_debugStream() const
   return _owner != nullptr ? _owner->_debugStream : nullptr;
 }
 
-inline BlaeckEventChannelRef BlaeckEventChannelRef::withIcon(const __FlashStringHelper *icon)
+inline BlaeckEventChannelRef BlaeckEventChannelRef::withIcon(BlaeckString icon)
 {
 #if BLAECK_ENABLE_EVENTS
   if (_index >= 0 && _owner != nullptr)
     // Only a real change marks the catalog.
     if (_owner->_eventChannels[_index].icon != icon)
     {
-      _owner->_eventChannels[_index].icon = icon;
+      if (!_owner->_storeString(_owner->_eventChannels[_index].icon, icon))
+        return *this;
       _owner->_eventCatalogDirty = true;
     }
 #else
@@ -5403,13 +5454,14 @@ inline BlaeckEventChannelRef BlaeckEventChannelRef::diagnostic(bool on)
   return *this;
 }
 
-inline BlaeckEventChannelRef BlaeckEventChannelRef::withDeviceClass(const __FlashStringHelper *deviceClass)
+inline BlaeckEventChannelRef BlaeckEventChannelRef::withDeviceClass(BlaeckString deviceClass)
 {
 #if BLAECK_ENABLE_EVENTS
   if (_index >= 0 && _owner != nullptr)
     if (_owner->_eventChannels[_index].deviceClass != deviceClass)
     {
-      _owner->_eventChannels[_index].deviceClass = deviceClass;
+      if (!_owner->_storeString(_owner->_eventChannels[_index].deviceClass, deviceClass))
+        return *this;
       _owner->_eventCatalogDirty = true;
     }
 #else

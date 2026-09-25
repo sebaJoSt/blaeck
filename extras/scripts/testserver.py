@@ -27,6 +27,10 @@ def main():
             (["-DBLAECK_TEST_SEPARATE_FLASH=1", "-Werror", "-DBLAECK_ENABLE_STATE_CHANNELS=0",
               "-DBLAECK_ENABLE_COMMAND_META=0", "-DBLAECK_ENABLE_EVENTS=0",
               "-DBLAECK_TEST_REPORTING_ONLY=1"], "flash-features-off"),
+            (["-DBLAECK_TEST_SEPARATE_FLASH=1", "-Werror", "-DBLAECK_ENABLE_COMMAND_META=0",
+              "-DBLAECK_TEST_REPORTING_ONLY=1"], "flash-command-meta-off"),
+            (["-DBLAECK_TEST_SEPARATE_FLASH=1", "-Werror", "-DBLAECK_ENABLE_STATE_CHANNELS=0",
+              "-DBLAECK_TEST_REPORTING_ONLY=1"], "flash-state-channels-off"),
         ):
             flash_command = command[:]
             flash_command[1:1] = defines

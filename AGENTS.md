@@ -17,6 +17,10 @@ Version 7.0.0 is in development; setting its metadata does not publish a release
   Keep flash reads explicit, preserve RAM lifetime rules, and compare text contents rather
   than pointers. Text getters still return RAM strings. Native tests simulate separate
   flash storage; this supplements but does not replace AVR hardware validation.
+- Stored configuration accepts ordinary strings and F() literals. Copy ordinary text, retain
+  flash text without copying, and share owned backing for command options and event CSV fields.
+  Preserve existing settings on allocation failure and report it through the rejection API.
+  Release copied text on replacement, clearing and destruction; signal value ownership is unchanged.
 - One `BlaeckBeginRef` handle configures table sizes, client count and debug output.
 - TCP takes an already-started server via `begin(server)`. TelnetPrint is an optional
   user-supplied server, never an implicit dependency. Require `accept()`; do not substitute
