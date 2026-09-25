@@ -34,7 +34,11 @@ jobs:
           - {fqbn: "esp32:esp32:esp32c6", core: "esp32:esp32", transport: spi-ethernet}
     steps:
       - uses: actions/checkout@v6
-      - uses: arduino/setup-arduino-cli@v2
+      # The install script needs no Node runtime; arduino/setup-arduino-cli@v2 still targets Node 20.
+      - name: Install Arduino CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR="$HOME/.local/bin" sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install board core and libraries
         env:
           CORE: ${{ matrix.core }}
