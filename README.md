@@ -177,6 +177,27 @@ Start with **Basic**, then **Signals** and **Commands**. Follow with **StateChan
 | [more / ESP32C6BugBoard](examples/more/ESP32C6BugBoard) | An ESP32-C6 board-specific example |
 | [more / BridgeESP32PoE](examples/more/BridgeESP32PoE) | A bridge between a UART and TCP |
 
+## Coming from BlaeckSerial or BlaeckTCP
+
+blaeck replaces BlaeckSerial and BlaeckTCP, which end at 6.0.1. It continues their version
+numbering, but its API is new, so a sketch needs changes rather than a plain upgrade. The main
+ones:
+
+| BlaeckSerial / BlaeckTCP 6.0.1 | blaeck |
+|---|---|
+| `#include <BlaeckSerial.h>` and `BlaeckSerial BlaeckSerial;` | `#include <Blaeck.h>` and `Blaeck device;` |
+| `BlaeckSerial.begin(&Serial, 2)` | `device.begin(Serial).withSignals(2)` |
+| `BlaeckTCP.begin(clients, &Serial, 2, port)` | Start the server yourself, then `device.begin(server).withClients(clients).withSignals(2)`. Add `.withDebugStream(&Serial)` for debug output |
+| `update()`, `markSignalUpdated()`, `writeUpdatedData()`, `timedWrite…()` | `write()` sends a value at once; `writeAtInterval()` and `writeOnChange()` choose when each signal is sent. See [Sending data](docs/sending-data.md) |
+| `setIntervalMs()` | Removed. The host sets the interval with `BLAECK.ACTIVATE` |
+| `deleteSignals()` | `clearAllSignals()` |
+| `setCommandCallback()` | `onCommand()` or `onAnyCommand()` |
+| Names as `String` | `const char *` or `F()`; add `.c_str()` to a `String` |
+| `BlaeckSerialConfig.h`, `BlaeckTCPConfig.h` | One `BlaeckConfig.h`. The old files stop the build with a message |
+
+BlaeckSerial's I2C master/slave mode has no replacement. A sketch that uses `beginMaster()` or
+`beginSlave()` should stay on BlaeckSerial 6.0.1.
+
 ## Reference
 
 Public API documentation is in `src/Blaeck.h`. Your editor shows it when you hover over a call.
