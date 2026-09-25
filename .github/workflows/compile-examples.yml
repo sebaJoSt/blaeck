@@ -37,6 +37,7 @@ jobs:
       # The install script needs no Node runtime; arduino/setup-arduino-cli@v2 still targets Node 20.
       - name: Install Arduino CLI
         run: |
+          mkdir -p "$HOME/.local/bin"
           curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | BINDIR="$HOME/.local/bin" sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install board core and libraries
