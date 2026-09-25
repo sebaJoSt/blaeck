@@ -176,7 +176,7 @@ slot, starting at 0. They are for the sketch's own use, such as a status LED.
 
 ## Boards
 
-`Basic` and the topic examples run on these boards through a shared `NetworkSetup.h` tab:
+The main examples run on these boards through a shared `NetworkSetup.h` tab:
 
 | Board | Network |
 |---|---|
@@ -185,7 +185,7 @@ slot, starting at 0. They are for the sketch's own use, such as a status LED.
 | Olimex ESP32-PoE | built-in Ethernet |
 | WT32-ETH01 | built-in Ethernet |
 
-Each topic sketch shows both Serial and TCP setup. Set `USE_TCP` to `1` in the main sketch
+Each main example shows both Serial and TCP setup. Set `USE_TCP` to `1` in the main sketch
 to include the board-specific NetworkSetup tab. It defines `NetworkSetup::Server` as an
 alias for the board's actual server class, not a Blaeck-specific server implementation.
 The sketch starts the server and calls `device.begin(server)`; the other branch calls
@@ -218,7 +218,7 @@ BlaeckSerial library); the bridge does not instantiate Blaeck or interpret its f
 
 ## Updates over the network
 
-Topic examples default to Serial with services off. Set `USE_TCP` to `1` and uncomment
+The main examples default to Serial with services off. Set `USE_TCP` to `1` and uncomment
 `#define NETWORK_WITH_SERVICES` before including NetworkSetup.h for OTA/Bonjour.
 Each board needs a one-time setup
 first; see the

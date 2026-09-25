@@ -1,8 +1,8 @@
 /*
   NetworkSetup.h
 
-  Gets the board online, for Basic and every Blaeck topic example. The same file is in
-  each of them, and CI fails if the copies differ. Edit examples/Basic/NetworkSetup.h,
+  Gets the board online, for the main Blaeck examples and more/TimestampsNTP. The same
+  file is in each of them, and CI fails if the copies differ. Edit examples/Basic/NetworkSetup.h,
   then run extras/scripts/syncnetwork.py to update the other copies.
 
   In the sketch, before the other includes:

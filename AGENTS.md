@@ -40,7 +40,7 @@ Version 7.0.0 is in development; setting its metadata does not publish a release
 - Examples start with `Blaeck.h` to select this package while the old libraries coexist.
 - `src/detail/BlaeckDefaults.h` loads the optional user `BlaeckConfig.h`.
   Shared layout settings must reach every translation unit. Buffering defaults are per transport.
-- There is one topic example set, not Serial/TCP trees. Each main sketch shows
+- There is one set of main examples, not Serial/TCP trees. Each main sketch shows
   device.begin(Serial) and device.begin(server) in explicit USE_TCP branches.
   Do not hide the choice or begin call in a connection setup wrapper.
 - NetworkSetup.h exposes the board's concrete server alias as NetworkSetup::Server.

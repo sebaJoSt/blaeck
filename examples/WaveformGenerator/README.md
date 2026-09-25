@@ -2,7 +2,7 @@
 
 WaveformGenerator defaults to Serial with network services off. In the main sketch, set
 `USE_TCP` to `1` and uncomment `#define NETWORK_WITH_SERVICES` to enable OTA and Bonjour;
-any other topic example can do the same. Before that works, each board needs a one-time setup.
+any other main example can do the same. Before that works, each board needs a one-time setup.
 After it, the sketch can be replaced over the network, and nothing here has to be done again.
 
 The board listens for an upload on port 65280, with the password `password`, and announces
@@ -101,4 +101,4 @@ that pushes to port 65280.
 ## Arduino UNO R4
 
 Needs none of this for Serial mode. For WiFi, use the specialized `more/WiFi` example;
-the topic examples' network setup does not cover UNO R4.
+the main examples' network setup does not cover UNO R4.
