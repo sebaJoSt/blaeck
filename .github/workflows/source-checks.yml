@@ -2,9 +2,9 @@ name: Source Checks
 
 on:
   push:
-    paths: ["src/**", "examples/**", "extras/scripts/checkpackage.py", "extras/scripts/syncnetwork.py", "library.*", ".github/workflows/copies.yml"]
+    paths: ["src/**", "examples/**", "extras/scripts/checkpackage.py", "extras/scripts/syncnetwork.py", "library.*", ".github/workflows/source-checks.yml"]
   pull_request:
-    paths: ["src/**", "examples/**", "extras/scripts/checkpackage.py", "extras/scripts/syncnetwork.py", "library.*", ".github/workflows/copies.yml"]
+    paths: ["src/**", "examples/**", "extras/scripts/checkpackage.py", "extras/scripts/syncnetwork.py", "library.*", ".github/workflows/source-checks.yml"]
   workflow_dispatch:
 
 permissions:

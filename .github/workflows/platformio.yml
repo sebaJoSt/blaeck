@@ -2,9 +2,9 @@ name: PlatformIO
 
 on:
   push:
-    paths: ["src/**", "examples/**", "extras/tests/**", "extras/scripts/runhosttests.py", "library.*", ".github/workflows/platformio.yml"]
+    paths: ["src/**", "examples/**", "extras/tests/**", "library.*", ".github/workflows/platformio.yml"]
   pull_request:
-    paths: ["src/**", "examples/**", "extras/tests/**", "extras/scripts/runhosttests.py", "library.*", ".github/workflows/platformio.yml"]
+    paths: ["src/**", "examples/**", "extras/tests/**", "library.*", ".github/workflows/platformio.yml"]
   workflow_dispatch:
 
 permissions:
@@ -45,7 +45,7 @@ jobs:
             pio ci --board=megaatmega2560 --lib="." extras/tests/SerialOnly
           else
             pio ci --board=megaatmega2560 --lib="." \
-              --project-option="lib_deps=arduino-libraries/Ethernet@^2.0.2" extras/tests/Combined
+              --project-option="lib_deps=arduino-libraries/Ethernet@^2.0.2" extras/tests/TwoDevices
             pio ci --board=megaatmega2560 --lib="." \
               --project-option="lib_deps=arduino-libraries/Ethernet@^2.0.2, jandrassy/TelnetStream@^1.3.0" \
               --project-option="lib_ldf_mode=deep" extras/tests/TelnetServer
@@ -66,13 +66,3 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/blaeck-package"
           pio pkg pack --output "$RUNNER_TEMP/blaeck-package"
-
-  host:
-    name: Native protocol and transport suite
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.x"
-      - run: python extras/scripts/runhosttests.py

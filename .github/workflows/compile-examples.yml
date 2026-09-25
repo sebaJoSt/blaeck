@@ -86,7 +86,7 @@ jobs:
           else
             case "$FQBN" in
               arduino:avr:mega|arduino:mbed_giga:giga)
-                compile extras/tests/Combined
+                compile extras/tests/TwoDevices
                 compile extras/tests/TelnetServer ;;
               esp32:esp32:esp32-poe)
                 compile examples/more/TimestampsNTP

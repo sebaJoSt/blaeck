@@ -1,7 +1,7 @@
 #include <Ethernet.h>
 #include <Blaeck.h>
 
-bool tcpHeaderFirstCheck()
+bool networkHeaderFirstCheck()
 {
   EthernetServer server(24);
   Blaeck serialDevice;

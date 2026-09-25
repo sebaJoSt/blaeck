@@ -1,0 +1,22 @@
+name: Host Tests
+
+on:
+  push:
+    paths: ["src/**", "extras/tests/host/**", "extras/scripts/runhosttests.py", ".github/workflows/host-tests.yml"]
+  pull_request:
+    paths: ["src/**", "extras/tests/host/**", "extras/scripts/runhosttests.py", ".github/workflows/host-tests.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    name: Native protocol and transport suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - run: python extras/scripts/runhosttests.py

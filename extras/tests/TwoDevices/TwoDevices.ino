@@ -6,7 +6,7 @@ EthernetServer server(23);
 Blaeck NetworkDevice;
 unsigned long Uptime = 0;
 
-bool tcpHeaderFirstCheck();
+bool networkHeaderFirstCheck();
 
 void require(bool condition, const __FlashStringHelper *message)
 {
@@ -23,7 +23,7 @@ void setup()
   Serial.begin(115200);
   require(SerialDevice.isBufferedWrites() == BLAECK_SERIAL_BUFFERED_WRITES_DEFAULT,
           F("Serial buffering default"));
-  require(tcpHeaderFirstCheck(), F("TCP-first includes in another translation unit"));
+  require(networkHeaderFirstCheck(), F("Ethernet.h before Blaeck.h in another translation unit"));
 
   byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
   Ethernet.begin(mac, IPAddress(192, 168, 10, 177));
