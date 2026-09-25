@@ -149,6 +149,35 @@ public:
   void setNoDelay(bool) = delete;
 };
 
+class NoAddressClient : public FakeClient
+{
+public:
+  using FakeClient::FakeClient;
+  void remoteIP() = delete;
+};
+
+class NoPortClient : public FakeClient
+{
+public:
+  using FakeClient::FakeClient;
+  void remotePort() = delete;
+};
+
+class NoPeerClient : public NoAddressClient
+{
+public:
+  using NoAddressClient::NoAddressClient;
+  void remotePort() = delete;
+};
+
+class UnprintablePeerClient : public FakeClient
+{
+public:
+  using FakeClient::FakeClient;
+  struct Address {};
+  Address remoteIP() { return {}; }
+};
+
 class Capture : public Print
 {
 public:
@@ -326,6 +355,33 @@ static void sessionBehavior(bool buffered)
   size_t accepts = server.accepts;
   device.read();
   assert(server.accepts == accepts);
+}
+
+template<class Socket>
+static void optionalPeerDiagnostics(const std::string &expected)
+{
+  for (bool buffered : {false, true})
+  {
+    FakeServer<Socket> server;
+    SocketState client;
+    Capture debug;
+    Blaeck device;
+    device.begin(server).withClients(1).withDebugStream(&debug);
+    device.setBufferedWrites(buffered);
+    server.pending.push_back(&client);
+    device.read();
+    assert(debug.text == expected);
+    assert(device.transportError() == Blaeck::TransportError::None);
+    device.Terminal.print("terminal");
+    assert(client.output == "terminal");
+    client.output.clear();
+    client.input = "<BLAECK.GET_DEVICES>";
+    device.read();
+    assertLibraryIdentity(client.output);
+    assert(debug.text.find("Client #0 is the host\r\n") != std::string::npos);
+    device.end();
+    assert(!client.open);
+  }
 }
 
 static void lifecycleAndErrors()
@@ -1780,6 +1836,11 @@ int main()
     crc32Behavior();
     sessionBehavior(false);
     sessionBehavior(true);
+    optionalPeerDiagnostics<FakeClient>("Client #0 connected: 192.0.2.1:1234\r\n");
+    optionalPeerDiagnostics<NoAddressClient>("Client #0 connected\r\n");
+    optionalPeerDiagnostics<NoPortClient>("Client #0 connected\r\n");
+    optionalPeerDiagnostics<NoPeerClient>("Client #0 connected\r\n");
+    optionalPeerDiagnostics<UnprintablePeerClient>("Client #0 connected\r\n");
     lifecycleAndErrors();
     detachFromCallbacks();
     unifiedConnections();

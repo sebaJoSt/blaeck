@@ -76,6 +76,12 @@ if (temperature > 40.0)
 device.write("Temperature", readSensor());
 ```
 
+For text signals, `write()` stores the caller's pointer, not a copy of the text.
+The buffer must remain valid until another text write replaces it or the signal is
+removed, because later reports read it again. Use a global/static buffer or a string
+literal; do not pass a local array or a temporary `String`'s `c_str()`. This applies
+to both name/index forms, with or without an explicit timestamp.
+
 Send both edges of a short-lived value, and the logged data says how long it lasted. Leave the
 end of it to a host's timeout and that duration exists nowhere:
 

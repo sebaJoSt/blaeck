@@ -3248,6 +3248,22 @@ public:
   void write(const char *signalName, unsigned long value);
   void write(const char *signalName, float value);
   void write(const char *signalName, double value);
+
+  /*!
+    @brief   Points a text signal at a value and sends it right away.
+
+    @param   signalName  The registered text signal's name.
+    @param   value       Null-terminated text.
+    @warning The text is not copied. Keep its buffer valid until replaced by another
+             text write or the signal is removed. Later reports read the same memory.
+             Use a global/static buffer or a string literal, not a local array or
+             a temporary String's c_str().
+
+    @code
+      device.addSignal(F("Status"), "Idle");
+      device.write("Status", "Running");
+    @endcode
+  */
   void write(const char *signalName, const char *value);
 
   void write(const char *signalName, bool value, unsigned long long timestamp);
@@ -3260,6 +3276,23 @@ public:
   void write(const char *signalName, unsigned long value, unsigned long long timestamp);
   void write(const char *signalName, float value, unsigned long long timestamp);
   void write(const char *signalName, double value, unsigned long long timestamp);
+
+  /*!
+    @brief   Points a text signal at a value and sends it with a supplied timestamp.
+
+    @param   signalName  The registered text signal's name.
+    @param   value       Null-terminated text.
+    @param   timestamp   Sample time in microseconds in the configured time base.
+    @warning The text is not copied. Keep its buffer valid until replaced by another
+             text write or the signal is removed. Later reports read the same memory.
+             Use a global/static buffer or a string literal, not a local array or
+             a temporary String's c_str().
+
+    @code
+      device.addSignal(F("Status"), "Idle");
+      device.write("Status", "Running", 123456ULL);
+    @endcode
+  */
   void write(const char *signalName, const char *value, unsigned long long timestamp);
 
   /*!
@@ -3289,6 +3322,23 @@ public:
   void write(int signalIndex, unsigned long value);
   void write(int signalIndex, float value);
   void write(int signalIndex, double value);
+
+  /*!
+    @brief   Points a text signal at a value and sends it, looking it up by index.
+
+    @param   signalIndex  The registered text signal's index.
+    @param   value        Null-terminated text.
+    @warning The text is not copied. Keep its buffer valid until replaced by another
+             text write or the signal is removed. Later reports read the same memory.
+             Use a global/static buffer or a string literal, not a local array or
+             a temporary String's c_str().
+
+    @code
+      device.addSignal(F("Status"), "Idle");
+      int statusIndex = device.findSignalIndex("Status");
+      device.write(statusIndex, "Running");
+    @endcode
+  */
   void write(int signalIndex, const char *value);
 
   void write(int signalIndex, bool value, unsigned long long timestamp);
@@ -3301,6 +3351,24 @@ public:
   void write(int signalIndex, unsigned long value, unsigned long long timestamp);
   void write(int signalIndex, float value, unsigned long long timestamp);
   void write(int signalIndex, double value, unsigned long long timestamp);
+
+  /*!
+    @brief   Points a text signal at a value and sends it by index with a timestamp.
+
+    @param   signalIndex  The registered text signal's index.
+    @param   value        Null-terminated text.
+    @param   timestamp    Sample time in microseconds in the configured time base.
+    @warning The text is not copied. Keep its buffer valid until replaced by another
+             text write or the signal is removed. Later reports read the same memory.
+             Use a global/static buffer or a string literal, not a local array or
+             a temporary String's c_str().
+
+    @code
+      device.addSignal(F("Status"), "Idle");
+      int statusIndex = device.findSignalIndex("Status");
+      device.write(statusIndex, "Running", 123456ULL);
+    @endcode
+  */
   void write(int signalIndex, const char *value, unsigned long long timestamp);
 
   // ----- Data Write All -----
@@ -4493,7 +4561,7 @@ protected:
     {
       if (!_bufOverflowWarned && _debugStream != nullptr)
       {
-        _debugStream->println("Buffered frame exceeds available memory; frame dropped.");
+        _debugStream->println(F("Buffered frame exceeds available memory; frame dropped."));
         _bufOverflowWarned = true;
       }
       return false;

@@ -41,6 +41,20 @@ auto setStopTimeout(T &socket, uint16_t ms, int)
 template<class T>
 void setStopTimeout(T &, uint16_t, long) {}
 
+// Peer addresses are diagnostic-only; clients without printable endpoints still work.
+template<class T>
+auto printPeerAddress(T &socket, Print &out, int)
+    -> decltype(out.print(socket.remoteIP()), out.print(socket.remotePort()), void())
+{
+  out.print(F(": "));
+  out.print(socket.remoteIP());
+  out.print(':');
+  out.print(socket.remotePort());
+}
+
+template<class T>
+void printPeerAddress(T &, Print &, long) {}
+
 template<class Server>
 class TypedServerAdapter : public ServerAdapter
 {
@@ -95,9 +109,7 @@ public:
 
   void printPeer(byte slot, Print &out) override
   {
-    out.print(_clients[slot].remoteIP());
-    out.print(':');
-    out.print(_clients[slot].remotePort());
+    printPeerAddress(_clients[slot], out, 0);
   }
 
 private:

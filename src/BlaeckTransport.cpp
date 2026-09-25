@@ -169,8 +169,8 @@ void Blaeck::_writeDirect(const byte *data, size_t len)
     _frameWriteFailed = true;
 }
 
-// Nothing to do: a TCP client has no send buffer to push out, and on older ESP32 cores
-// flush() threw away received data instead.
+// Flush the supplied Stream. TCP writes need no explicit flush, and some older ESP32
+// cores used Client::flush() to discard received data instead.
 void Blaeck::_flushDirect()
 {
   if (_stream != nullptr)
@@ -223,7 +223,7 @@ void Blaeck::_acceptConnection()
     {
       _debugStream->print(F("Client #"));
       _debugStream->print(i);
-      _debugStream->print(F(" connected: "));
+      _debugStream->print(F(" connected"));
       _adapter->printPeer(i, *_debugStream);
       _debugStream->println();
     }

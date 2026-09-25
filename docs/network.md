@@ -69,14 +69,18 @@ For a different port, configure TelnetPrint using its concrete server's API befo
 it. Never reassign or restart a server while Blaeck is using it.
 
 The supplied server must have `accept()` returning a default-constructible, assignable
-client value derived from Arduino's `Client`, with `remoteIP()` and `remotePort()` for
-diagnostics. Each new connection must be returned only once, even before it sends data.
+client value derived from Arduino's `Client`. Each new connection must be returned only
+once, even before it sends data.
 There is no `available()` fallback. A server lacking `accept()` fails to compile; use a
 compatible server or a verified wrapper. Passing TelnetPrint retains its existing selected
 type, not a guarantee that every possible TelnetStream platform satisfies this contract.
 
 `BLAECK_TCP_NO_DELAY_DEFAULT` defaults to `true` and is applied wherever the server or client
 supports `setNoDelay()`. Servers and clients without that tuning method need no wrapper.
+
+`remoteIP()` and `remotePort()` are optional. When both return printable values, connection
+diagnostics include the peer address, such as `Client #0 connected: 192.0.2.1:1234`.
+Otherwise the message is simply `Client #0 connected`; protocol operation is unchanged.
 
 ### Storage and errors
 

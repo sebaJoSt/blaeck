@@ -1176,9 +1176,9 @@ void Blaeck::read()
       _builtinCommandReceived();
     if (_debugStream != nullptr)
     {
-      _debugStream->print("<");
+      _debugStream->print(F("<"));
       _debugStream->print(_receiver.chars);
-      _debugStream->println(">");
+      _debugStream->println(F(">"));
     }
 
     // A command that didn't arrive whole must not run, built-in or not.
@@ -1296,7 +1296,7 @@ int Blaeck::_registerCommand(const char *command, BlaeckCommandHandler handler, 
   {
     if (_debugStream != nullptr)
     {
-      _debugStream->print("Command name too long for handler table: ");
+      _debugStream->print(F("Command name too long for handler table: "));
       _debugStream->println(command);
     }
     _rejectedCommandCount++;
@@ -1308,7 +1308,7 @@ int Blaeck::_registerCommand(const char *command, BlaeckCommandHandler handler, 
   {
     if (_debugStream != nullptr)
     {
-      _debugStream->print("Command name starts with a reserved prefix character: ");
+      _debugStream->print(F("Command name starts with a reserved prefix character: "));
       _debugStream->println(command);
     }
     _rejectedCommandCount++;
@@ -1319,7 +1319,7 @@ int Blaeck::_registerCommand(const char *command, BlaeckCommandHandler handler, 
   {
     if (_debugStream != nullptr)
     {
-      _debugStream->print("Command name uses the reserved BLAECK. namespace: ");
+      _debugStream->print(F("Command name uses the reserved BLAECK. namespace: "));
       _debugStream->println(command);
     }
     _rejectedCommandCount++;
