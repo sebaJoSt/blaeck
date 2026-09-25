@@ -16,7 +16,9 @@ permissions:
 
 jobs:
   documentation:
-    runs-on: ubuntu-latest
+    # Pinned: pip's libclang (18.x) must match the runner clang whose builtin headers it borrows;
+    # ubuntu-latest moves to Ubuntu 26 and a newer clang from October 2026.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
