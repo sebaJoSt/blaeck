@@ -128,27 +128,28 @@ payload:
     optional fields: one \0-terminated string per set DeviceFlags bit, in bit order
 ```
 
-  DeviceFlags: bit 0 DisplayName (a changeable label). Bits 1-15 reserved, sent as 0, for
-  later optional fields such as manufacturer, model or area. Every optional field is a
-  \0-terminated string in bit order, so a host that finds an unknown bit can still skip the
-  right number of strings: new fields do not break older hosts.
+  DeviceFlags: all 16 bits reserved and sent as 0 for now, so no optional fields follow. They
+  are there for later fields such as manufacturer or model for Home Assistant. Every optional
+  field will be a \0-terminated string in bit order, so a host that finds an unknown bit can
+  still skip the right number of strings: new fields do not break older hosts.
 
   DeviceState: bit 0 NotResponding (missing right now), bit 1 Restarted (a restart not yet
   reported to any host). Bits 2-7 reserved, sent as 0. No "unknown" state: sub-devices start
   as responding; a sketch that is unsure calls `markMissing()` in setup().
 
-  Example: board "Greenhouse" restarted and not yet reported; sub-device "pump1" missing, with
-  display name "Water pump":
+  Example: board "Greenhouse" restarted and not yet reported; sub-device "Pump controller"
+  missing:
 
 ```
 "blaeck\0" "7.0.0\0" 02
 00 00 0000 02 "Greenhouse\0" "Arduino Mega 2560\0" "1.0\0"
-01 00 0100 01 "pump1\0" "Arduino Uno\0" "1.2\0" "Water pump\0"
+01 00 0000 01 "Pump controller\0" "Arduino Uno\0" "1.2\0"
 ```
 
-  API: `pump.withDisplayName(...)` for a sub-device, and a new `DeviceDisplayName` member next to
-  `DeviceName` for the board (DeviceName stays the identity). blaecktcpy is out of scope for
-  now; the reserved bits leave room for a hub's "local" device type and auto-reconnect flag.
+  No display name: the name is both identity and label. Renaming a board or sub-device makes it
+  a new device to hosts; users who want a different label rename it in Home Assistant, which
+  keeps its own name for a device. blaecktcpy is out of scope for now; the reserved bits leave
+  room for a hub's "local" device type and auto-reconnect flag.
 
 - C1 (next key in the C0-C3 block), replaces C0:
 
