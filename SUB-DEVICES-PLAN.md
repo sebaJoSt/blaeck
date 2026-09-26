@@ -24,8 +24,8 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   changed-only signals are sent again.
 - `writeRestarted()` on the handle sends a C0 for that sub-device only.
 - `@<slaveID>:` command routing, as Loggbok sends it for a sub-device's command
-  (`<@1:#12:SET_PUMP_SPEED,40>`). Runs only if the command belongs to that sub-device; an unknown
-  ID stays in the name and is answered unknown. Ack hashes cover the command after all prefixes.
+  (`<@1:#12:SET_PUMP_SPEED,40>`). Dropped (see Decided): remove the parsing, its tests and the
+  driver checks, and the paragraph in docs/devices.md.
 - Tests: native tests (frames byte by byte, rejections, missing/present, routing; both checked
   with deliberate mutations). `extras/tests/harness/DeviceTreeTest` for a Mega with a simulated
   second board and `drive_device_tree.py` (19 checks).
@@ -51,6 +51,11 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   name path (`MqttTopics.ResolveDevicePath`), not from slave IDs, so IDs may follow
   registration order. Renaming a device makes it a new device in Home Assistant.
 - Transport is always the sketch's job (UART, CAN, I2C, RF, or none for local parts).
+- No `@` routing prefix. blaecktcpy's hub mode is being removed (its server mode stays), and
+  names are unique per board, so a command's name alone says which sub-device it belongs to.
+  Loggbok sends sub-device commands without a prefix, like the board's; blaeck does not parse
+  `@`. Hub-related items (0x80/0x81, the hub's auto-reconnect flag, hub device types, the hub
+  decoder) are out of this plan.
 - Names stay unique per board, not per sub-device, and keeping them unique is the sketch's
   job (`withNameSuffix()` for repeated sensors). Considered and rejected on 2026-09-26: ESPHome
   first enforced unique names across sub-devices (PR #9276), users hit it at once (issue
@@ -75,13 +80,13 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   repeating an old value with a new timestamp every interval. Uses the existing D2 frame.
 
 - Commands from Home Assistant reach a sub-device like this: HA publishes to the sub-device's
-  command topic; Loggbok maps the topic path to the sub-device and sends
-  `<@1:#12:SET_PUMP_SPEED,40>`; blaeck checks routing, range and type, calls the handler and
-  acknowledges; the handler forwards the value over the sketch's own link (the user's task).
+  command topic; Loggbok maps the topic path to the sub-device, checks the command against
+  its catalog and sends `<#12:SET_PUMP_SPEED,40>`; blaeck finds the command by name, checks
+  range and type, calls the handler and acknowledges; the handler forwards the value over the sketch's own link (the user's task).
   The actual value returns through the command's `withOwnState()` channel once the sketch
   updates the variable and reports it.
-- A command that belongs to a sub-device marked missing is rejected automatically, routed or
-  typed by hand, with a new ack reason (for example `BLAECK_ACK_DEVICE_NOT_RESPONDING`); the
+- A command that belongs to a sub-device marked missing is rejected automatically, with a new
+  ack reason (for example `BLAECK_ACK_DEVICE_NOT_RESPONDING`); the
   handler does not run. Home Assistant already blocks commands to unavailable entities, but
   other hosts and scripts do not. Loggbok maps the reason to a readable message.
 - Explicit writes: `device.write("Flow", value)` (by name, index, or with a timestamp) already
@@ -100,7 +105,7 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   blaeck board, with or without sub-devices. Order of work:
   1. blaeck: B7, C1, the other decided items, and the switch to the registration base class
      (rewording the AGENTS.md rule about a core base class);
-  2. blaeck-protocol: B7, C1, `@` routing, and 0x01 as BlaeckSerial 6 legacy;
+  2. blaeck-protocol: B7, C1, 0x01 as BlaeckSerial 6 legacy, and `@` reserved;
   3. Loggbok (work machine, GitLab): B7 and C1 first, so blaeck boards keep working at all,
      then per-device availability, events 515/516 and the reconnect identity check;
   4. hardware tests (Mega harness, Loggbok end to end), then release blaeck 7.0 and Loggbok
@@ -186,8 +191,7 @@ payload:
 
   No display name: the name is both identity and label. Renaming a board or sub-device makes it
   a new device to hosts; users who want a different label rename it in Home Assistant, which
-  keeps its own name for a device. blaecktcpy is out of scope for now; the reserved bits leave
-  room for a hub's "local" device type and auto-reconnect flag.
+  keeps its own name for a device.
 
 - C1 (next key in the C0-C3 block), replaces C0:
 
@@ -247,9 +251,10 @@ sensors and parts of the board. Drop the "master" sentence from the addDevice() 
 ## To redo or do elsewhere
 
 - blaeck-protocol (spec changes were discarded, redo with the final design): B7 and C1 frame
-  pages and message-keys.md; a "`@` - Routing" section in commands.md; status-codes.md keeps
-  0x01 only as BlaeckSerial 6's "I2C Slave Skipped" (values present but invalid), unused by
-  blaeck.
+  pages and message-keys.md; in commands.md, `@` becomes a reserved sigil with no meaning (today
+  it says "for routing a command through a hub"); status-codes.md keeps 0x01 only as
+  BlaeckSerial 6's "I2C Slave Skipped" (values present but invalid), unused by blaeck, and
+  0x80/0x81 as hub legacy once hub mode is gone.
 - Loggbok, before blaeck 7.0 ships: parse B7 and C1 (its restart handling, including the
   interval recovery, currently reacts to C0 only); after a TCP reconnect, read the board's
   Restarted bit from the B7 answer where it reads B6's ServerRestarted today, now per device;
@@ -266,9 +271,10 @@ sensors and parts of the board. Drop the "master" sentence from the addDevice() 
   NotResponding at GET_DEVICES time). Do not restore the tracker: it inferred skipped slaves
   from signals absent in a data frame, which only worked because BlaeckSerial 6 always sent
   every signal; blaeck sends partial frames (writeOnChange, per-device writes), so a quiet
-  sub-device would look skipped. Later, the hub's 0x80/0x81 events (511/512) could share this
-  path if blaecktcpy switches to C1; C1 would then need a place for the hub's auto-reconnect
-  flag (today byte 0 of the 0x80 payload).
+  sub-device would look skipped.
+- Loggbok commands: stop sending the `@<slaveID>:` routing token for sub-devices
+  (`CommandBridge.ResolveTarget` and `LoggingSession.BuildWirePayload`); validate against the
+  sub-device's catalog as today and send the plain command.
 - Loggbok gap, independent of sub-devices: after a TCP reconnect it asks GET_DEVICES again but
   never compares the answer with the session. ProcessDevices replaces the list, and
   ValidateDevicesAfterReconnectAsync only checks that a device answered, ClientDataEnabled and
@@ -280,7 +286,6 @@ sensors and parts of the board. Drop the "master" sentence from the addDevice() 
   - versions may differ, with a warning (a firmware update during the outage is plausible);
   - DeviceState may differ and is left out of the comparison (a sub-device went missing, or
     the board restarted, during the outage).
-- blaecktcpy hub decoder: only if blaeck boards should run behind a hub with B7.
 
 ## Known limits
 
@@ -298,6 +303,6 @@ sensors and parts of the board. Drop the "master" sentence from the addDevice() 
 ## Tests still to run
 
 - Mega: `drive_device_tree.py` against DeviceTreeTest (see extras/tests/harness/README.md).
-- Loggbok on the work machine: device tree, MQTT/Home Assistant devices and controls (routed
-  `@` commands), database columns.
+- Loggbok on the work machine: device tree, MQTT/Home Assistant devices and controls,
+  availability, events, database columns.
 - Optional: two Megas with the SubDevices example (TX1-RX1 crossed, GND).
