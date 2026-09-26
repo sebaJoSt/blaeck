@@ -1,14 +1,20 @@
 /*
-  DeviceTreeTest.ino
+  SubDevicesTest.ino
 
-  Device checks, driven by drive_device_tree.py at 115200 baud. Needs only a Mega and USB:
+  Sub-device checks, driven by drive_sub_devices.py at 115200 baud. Needs only a Mega and USB:
   the "Pump controller" is simulated in this sketch, so there is no second board or wiring.
 
-  The driver controls the simulation with plain commands:
+  The simulation is controlled with commands:
     <POLL>              asks the simulated pump for a reading, then sends all data
-    <SIM_SILENT,1|0>    makes the pump stop or resume answering
-    <SIM_RESTART>       restarts the pump, so its uptime starts again
+    <SIM_SILENT,1|0>    makes the pump stop or resume answering ("Pump silent" switch)
+    <SIM_RESTART>       restarts the pump, so its uptime starts again ("Pump restart" button)
+    <SIM_AUTO,0|1>      stops or resumes polling the pump every second
   Each prints "DONE <command>" once it has finished.
+
+  On its own the sketch polls the pump every second, as a real main board would, so it can be
+  tried end to end with Loggbok and Home Assistant: the two controls make the pump go missing,
+  come back and restart. The driver turns the polling off first, so its checks decide when the
+  pump is asked.
 */
 
 #include <Blaeck.h>
@@ -43,6 +49,10 @@ bool readPump(PumpReading &reading)
 
 Blaeck device;
 BlaeckDeviceRef pump;
+
+const unsigned long AUTO_POLL_MS = 1000;
+bool autoPoll = true;
+unsigned long lastAutoPoll = 0;
 
 float boardValue = 1.5f;
 float pumpFlow = 0;
@@ -94,15 +104,22 @@ void onPoll(const char *command, const char *const *params, byte paramCount)
   done(command);
 }
 
+// A switch, so blaeck has checked the value is 0 or 1.
 void onSimSilent(const char *command, const char *const *params, byte paramCount)
 {
-  simSilent = paramCount > 0 && atoi(params[0]) != 0;
+  simSilent = atoi(params[0]) != 0;
   done(command);
 }
 
 void onSimRestart(const char *command, const char *const *params, byte paramCount)
 {
   simBootMs = millis();
+  done(command);
+}
+
+void onSimAuto(const char *command, const char *const *params, byte paramCount)
+{
+  autoPoll = paramCount > 0 && atoi(params[0]) != 0;
   done(command);
 }
 
@@ -118,13 +135,13 @@ void setup()
   Serial.begin(115200);
   device.begin(Serial)
       .withSignals(3)
-      .withCommands(4)
-      .withStateChannels(2)
+      .withCommands(5)
+      .withStateChannels(3)
       .withEventChannels(1)
       .withEventTypes(1)
       .withDevices(1);
 
-  device.DeviceName = "DeviceTreeTest";
+  device.DeviceName = "SubDevicesTest";
   device.DeviceHWVersion = "Arduino Mega 2560";
   device.DeviceFWVersion = "1.0";
 
@@ -140,8 +157,12 @@ void setup()
       .withRange(0.0f, 100.0f, 1.0f)
       .withOwnState(F("PumpSpeed"), &pumpSpeed);
   device.onCommand("POLL", onPoll);
-  device.onCommand("SIM_SILENT", onSimSilent);
-  device.onCommand("SIM_RESTART", onSimRestart);
+  device.onCommand("SIM_AUTO", onSimAuto);
+  device.onSwitchCommand("SIM_SILENT", onSimSilent)
+      .withDisplayName(F("Pump silent"))
+      .withOwnState(F("PumpSilent"), &simSilent);
+  device.onButtonCommand("SIM_RESTART", onSimRestart)
+      .withDisplayName(F("Pump restart"));
 
   pump.addStateChannel(F("PumpLink"), BlaeckText);
   pump.addEventChannel(F("PumpAlarms"), F("restarted"));
@@ -149,5 +170,11 @@ void setup()
 
 void loop()
 {
-  device.read();
+  if (autoPoll && millis() - lastAutoPoll >= AUTO_POLL_MS)
+  {
+    lastAutoPoll = millis();
+    pollPump();
+  }
+
+  device.tick();
 }

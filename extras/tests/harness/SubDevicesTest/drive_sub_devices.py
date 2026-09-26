@@ -1,6 +1,6 @@
-"""Check devices from addDevice() on real hardware: python drive_device_tree.py SERIAL_PORT.
+"""Check sub-devices from addDevice() on real hardware: python drive_sub_devices.py SERIAL_PORT.
 
-Upload DeviceTreeTest first and close Loggbok/serial monitors. Only a Mega and USB are
+Upload SubDevicesTest first and close Loggbok/serial monitors. Only a Mega and USB are
 needed: the pump controller is simulated in the sketch. Checks the device list (B7), which
 device each signal, command and channel belongs to, the pump's commands sent by name, the
 notices (C1), data frames and refused commands while the pump is missing and after it returns,
@@ -151,6 +151,8 @@ def run(port):
         check("board restart notice for device 0", restart == notice(0, 1), restart)
     except TimeoutError:
         print("NOTE no restart notice seen (the board did not reset on open); continuing")
+    # The sketch polls its pump every second on its own; the checks below decide when it is asked.
+    link.send("<SIM_AUTO,0>", done("SIM_AUTO"))
     time.sleep(0.5)
     port.reset_input_buffer()
     link.buffer.clear()
@@ -158,7 +160,7 @@ def run(port):
     items = link.send("<BLAECK.GET_DEVICES>", frame_with(0xB7))
     devices = frames(items, 0xB7)[-1][2]
     check("device list: the board, then the pump as device 1, both fine",
-          devices == device_list(device_record(0, 0, "DeviceTreeTest", "Arduino Mega 2560", "1.0"),
+          devices == device_list(device_record(0, 0, "SubDevicesTest", "Arduino Mega 2560", "1.0"),
                                  device_record(1, 0, "Pump controller", "Simulated", "1.0")), devices)
 
     symbols = frames(link.send("<BLAECK.WRITE_SYMBOLS>", frame_with(0xB0)), 0xB0)[-1][2]

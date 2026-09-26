@@ -20,25 +20,30 @@ with the required MQTT/Home Assistant or TimescaleDB outputs configured.
 | EventMetadataTest | `drive_event_metadata.py [seconds\|capture.json]`: discovery/registry and live HA event checks |
 | SignalTimingTest | `drive_signal_timing.py [table]`: issue HA commands and check recorded TimescaleDB rows |
 | SignalReportingTest | `drive_signal_reporting.py SERIAL_PORT`: Mega/AVR reporting policies, shared baselines, rate limits, numeric/text values and CRC32, with direct and buffered Serial writes |
-| DeviceTreeTest | `drive_device_tree.py SERIAL_PORT`: devices from addDevice() - device list, ownership of signals, commands and channels, missing devices and device restarts, with a simulated second board |
+| SubDevicesTest | `drive_sub_devices.py SERIAL_PORT`: devices from addDevice() - device list, ownership of signals, commands and channels, missing devices and device restarts, with a simulated second board |
 
 Run each Python driver from its sketch directory, or pass its full path.
 The scripts' module docstrings describe their individual expectations.
 
-## Mega device checks
+## Mega sub-device checks
 
-`DeviceTreeTest` needs only a Mega and USB: the second board is simulated in the sketch, so
+`SubDevicesTest` needs only a Mega and USB: the second board is simulated in the sketch, so
 there is no wiring. The driver needs pyserial (`pip install pyserial`). Close Loggbok and serial
 monitors first, and substitute the actual Mega port for `COMxx`:
 
 ```powershell
-arduino-cli compile --fqbn arduino:avr:mega extras\tests\harness\DeviceTreeTest
-arduino-cli upload --fqbn arduino:avr:mega --port COMxx extras\tests\harness\DeviceTreeTest
-python extras\tests\harness\DeviceTreeTest\drive_device_tree.py COMxx
+arduino-cli compile --fqbn arduino:avr:mega extras\tests\harness\SubDevicesTest
+arduino-cli upload --fqbn arduino:avr:mega --port COMxx extras\tests\harness\SubDevicesTest
+python extras\tests\harness\SubDevicesTest\drive_sub_devices.py COMxx
 ```
 
-Each check prints PASS or FAIL. Afterwards, connect Loggbok to see the Pump controller listed
-below DeviceTreeTest.
+Each check prints PASS or FAIL.
+
+For an end-to-end test, reset the board and connect Loggbok instead of the driver. The sketch then
+polls the simulated pump every second, and Loggbok lists the Pump controller below
+SubDevicesTest. Two controls on SubDevicesTest drive the simulation from Loggbok or Home
+Assistant: "Pump silent" makes the pump stop answering (the pump goes unavailable, its signals
+leave the data, events 515/516 follow), and "Pump restart" restarts it (event 510).
 
 ## Mega signal-reporting checks
 
