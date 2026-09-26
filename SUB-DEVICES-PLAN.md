@@ -134,6 +134,16 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   ack reason (for example `BLAECK_ACK_DEVICE_NOT_RESPONDING`); the
   handler does not run. Home Assistant already blocks commands to unavailable entities, but
   other hosts and scripts do not. Loggbok maps the reason to a readable message.
+- Catalogs and current values of a sub-device are the sketch's job. blaeck fetches nothing from
+  the sub-device: the sketch declares its signals, commands, state and event channels on the
+  board in setup() (from its own knowledge, or from whatever the sub-device reports over the
+  sketch's link), and keeps the values current at runtime: signals via their variables,
+  a control's actual value via `withOwnState()` plus `writeCommandState()`, state channels via
+  `pump.writeState()`, events via `pump.writeEvent()`. After `markPresent()` and after a
+  sub-device restart the sketch should fetch the current values and send them again, since
+  they may have changed or gone back to defaults. blaeck does not resend them automatically
+  (after a restart the variables are often not updated yet); document the pattern in the
+  sub-device docs.
 - Explicit writes of a sub-device's signal go through its handle, `pump.write("Flow", value)`
   (by name, index, or with a timestamp), since names are unique only within a sub-device; the
   host files the value under the sub-device. By index, `device.write(index, value)` works as
