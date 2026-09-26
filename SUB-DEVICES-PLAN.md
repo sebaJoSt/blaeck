@@ -69,6 +69,25 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
     `writeEvent`, `writeCommandState` and `findSignalIndex` live in the registration base class
     next to `addSignal`, so both have them without extra code.
   - Registration rejects a duplicate name within the same sub-device (or the board).
+  - Everything set through a handle (signal metadata such as withUnit, withIcon,
+    withOptions, withDisplayName, withNameSuffix; writeAtInterval/writeOnChange; state, event
+    and command metadata) names its entry by number and is unaffected. Only blaeck's internal
+    name lookups change; on the branch they are:
+
+    | Where | Looks up | New rule |
+    |---|---|---|
+    | `write(name, ...)`, `findSignalIndex` | signal | within the handle's sub-device |
+    | `writeState(name, ...)` | state channel | within the handle's sub-device |
+    | `writeEvent(name, ...)` | event channel | within the handle's sub-device |
+    | `addEventType(channelName, ...)` | event channel | within the handle's sub-device; so `addEventType` also moves into the base class |
+    | registering a state or event channel | duplicate check | only within the same sub-device |
+    | `withOwnState()` | a same-named channel to take over | only within the command's sub-device |
+    | `writeCommandState(command)` | the command's own state channel | within the command's sub-device |
+    | moving a command to another sub-device | its own state channel | the channel moves along, found in the old sub-device |
+
+    Commands themselves (incoming commands, `getSelectOptionIndexOf`, `writeCommandState` by
+    command name) are unaffected, since command names stay unique per board. Debug messages
+    should name the sub-device next to an entry's name, e.g. "Dropped 'Temperature' (Zone A)".
   - A0's StateSignal field names the signal or state channel a command reports through
     (`withOwnState()`, `withStateSignal()`); it is resolved within the command's own sub-device,
     by blaeck and by hosts.
@@ -145,7 +164,9 @@ The code on this branch still sends B3, C0 and status 0x01; it has to follow thi
 ### 1. Registration API
 
 Proposed: a shared base class with all registration functions (`addSignal`, `addStateChannel`,
-`addEventChannel`, `onCommand`, `onNumberCommand` ... `onTextCommand`), inherited by `Blaeck`
+`addEventChannel`, `addEventType`, `onCommand`, `onNumberCommand` ... `onTextCommand`) and the
+name lookups (`write`, `writeState`, `writeEvent`, `writeCommandState`, `findSignalIndex`),
+inherited by `Blaeck`
 and by the sub-device handle, so a sub-device registers directly:
 
 ```cpp
