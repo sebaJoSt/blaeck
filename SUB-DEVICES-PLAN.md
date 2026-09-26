@@ -56,6 +56,34 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   Loggbok sends sub-device commands without a prefix, like the board's; blaeck does not parse
   `@`. Hub-related items (0x80/0x81, the hub's auto-reconnect flag, hub device types, the hub
   decoder) are out of this plan.
+- Names are unique per sub-device (decided 2026-09-26, replacing "unique per board"). Signals,
+  state channels and event channels may repeat across the board and its sub-devices, but not
+  within one of them; commands stay unique per board, because an incoming command is found by
+  its name alone (no `@`), and they have display names for Home Assistant. A prefix only to
+  avoid duplicates would also show twice in Home Assistant ("Zone A ZoneA_Temp"), since it
+  puts the device name before the entity name. ESPHome took the same path (PR #9276 enforced
+  global names, issue #10159, PR #9355 made them per device in 2025.8).
+  - Name lookups are per handle: `device.write("Temperature", v)` finds only the board's own
+    entries, `zoneA.write("Temperature", v)` only zone A's. `write`, `writeState`,
+    `writeEvent`, `writeCommandState` and `findSignalIndex` live in the registration base class
+    next to `addSignal`, so both have them without extra code.
+  - Registration rejects a duplicate name within the same sub-device (or the board).
+  - A0's StateSignal field names the signal or state channel a command reports through
+    (`withOwnState()`, `withStateSignal()`); it is resolved within the command's own sub-device,
+    by blaeck and by hosts.
+  - The schema hash in D2 includes each signal's owner, so moving a signal to another
+    sub-device (and so another database column) is noticed.
+  - The wire needs nothing else: every B0, 90 and 80 record carries its owner; F0, 95 and 85
+    refer by number.
+  - Loggbok: database columns of sub-device signals are qualified by device, for example
+    `Zone A/Temperature`, and its duplicate check uses the qualified name; the board's own
+    signals keep plain names, so existing tables are unchanged. MQTT topics and Home Assistant
+    identities are already per device path.
+- No `@` routing prefix. blaecktcpy's hub mode is being removed (its server mode stays), and
+  names are unique per board, so a command's name alone says which sub-device it belongs to.
+  Loggbok sends sub-device commands without a prefix, like the board's; blaeck does not parse
+  `@`. Hub-related items (0x80/0x81, the hub's auto-reconnect flag, hub device types, the hub
+  decoder) are out of this plan.
 - Names stay unique per board, not per sub-device, and keeping them unique is the sketch's
   job (`withNameSuffix()` for repeated sensors). Considered and rejected on 2026-09-26: ESPHome
   first enforced unique names across sub-devices (PR #9276), users hit it at once (issue
@@ -289,8 +317,8 @@ sensors and parts of the board. Drop the "master" sentence from the addDevice() 
 
 ## Known limits
 
-- Signal names must be unique across the whole board (Loggbok rejects duplicates); use
-  `withNameSuffix()` for repeated sensors, derived from something stable like the bus address.
+- Names must be unique within the board and within each sub-device; command names across the
+  whole board.
 - Set up in setup(): sub-devices or assignments added after a host connected are not announced;
   sub-devices cannot be removed. A scan at startup works.
 - A frame whose signals all belong to missing sub-devices is not sent, so WRITE_DATA for only
