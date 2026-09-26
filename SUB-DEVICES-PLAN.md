@@ -185,7 +185,8 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
      on its own if it did not change meanwhile);
   3. after a pump restart, send its (reset) speed and "Pump link" at once.
   A small `reportPumpState()` in the sketch, called on return, after a restart and when the
-  speed changes, covers 1-3 and shows the pattern the docs recommend. Also switch the example
+  speed changes, covers 1-3 and shows the pattern the docs recommend (done; the first reading
+  after boot counts as a return, so the host gets the speed and link state at once). Also switch the example
   to `pump.addSignal(...)` and friends once the base class exists. Per-device `writeAll()`
   is not needed here (the pump is polled at a fixed rate) and stays in the docs.
 - Scope and timing (2026-09-26): everything in this plan goes into blaeck 7.0, including the
@@ -199,7 +200,7 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   4. hardware tests (Mega harness, Loggbok end to end), then release blaeck 7.0 and Loggbok
      together.
 
-Step 1 in blaeck is done except the example's `reportPumpState()`. Until Loggbok reads B7
+Step 1 in blaeck is done, including the example's `reportPumpState()`. Until Loggbok reads B7
 and C1, this branch does not work with any released Loggbok, so it is merged only together
 with Loggbok's side.
 

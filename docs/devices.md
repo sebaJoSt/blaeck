@@ -63,7 +63,8 @@ Greenhouse
 ```
 
 [SubDevices](../examples/more/SubDevices) is the complete version: a main board and a pump board
-talking over a UART, with a checksum, a tolerance for missed replies and restart detection.
+talking over a UART, with a checksum, a tolerance for missed replies, restart detection, and a
+`reportPumpState()` that sends the pump's speed and link state again after a gap or a restart.
 
 ## Registering on a device
 

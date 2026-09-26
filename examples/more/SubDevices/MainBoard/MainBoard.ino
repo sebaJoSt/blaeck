@@ -6,7 +6,8 @@
   the pump's values and control under a device "Pump controller" below this board.
 
   blaeck only reports the device. This sketch talks to PumpBoard, decides when it counts as
-  missing, and forwards the SET_PUMP_SPEED command.
+  missing or restarted, forwards the SET_PUMP_SPEED command, and sends the pump's values again
+  when they may have changed without the host noticing.
 
   The circuit:
     - This board: an Arduino Mega, or another board with a second hardware serial port.
@@ -40,6 +41,8 @@ byte pumpSpeed;
 
 unsigned long lastPumpUptime = 0;
 byte missedReplies = 0;
+// False until the first reading, which is reported like a return.
+bool pumpReported = false;
 
 uint32_t readLE(const byte *bytes, byte count)
 {
@@ -50,7 +53,8 @@ uint32_t readLE(const byte *bytes, byte count)
 }
 
 // Asks PumpBoard for a reading. False if it did not answer in time or the reply was garbled.
-bool requestReading()
+// restarted is set when the pump's uptime went backwards since the last reading.
+bool requestReading(bool &restarted)
 {
   while (pumpLink.available() > 0) // drop anything left from an earlier, late reply
     pumpLink.read();
@@ -68,11 +72,7 @@ bool requestReading()
     return false;
 
   const uint32_t uptimeMs = readLE(reply, 4);
-  if (uptimeMs < lastPumpUptime)
-  {
-    pump.writeRestarted();
-    pump.writeEvent(F("Alarms"), F("restarted"));
-  }
+  restarted = uptimeMs < lastPumpUptime;
   lastPumpUptime = uptimeMs;
 
   pumpSpeed = reply[4];
@@ -81,15 +81,35 @@ bool requestReading()
   return true;
 }
 
+// Sends what blaeck does not resend by itself: the speed the pump actually runs at, shown by
+// the SET_PUMP_SPEED control, and the link state. The signals need nothing, since they are
+// read from their variables for every data frame.
+void reportPumpState()
+{
+  pump.writeCommandState("SET_PUMP_SPEED");
+  pump.writeState(F("Link"), "ok");
+}
+
 void pollPump()
 {
-  if (requestReading())
+  const byte previousSpeed = pumpSpeed;
+  bool restarted = false;
+  if (requestReading(restarted))
   {
     missedReplies = 0;
-    if (pump.isMissing())
+    const bool cameBack = pump.isMissing() || !pumpReported;
+    pump.markPresent();
+    if (restarted)
     {
-      pump.markPresent();
-      pump.writeState(F("Link"), "ok");
+      pump.writeRestarted();
+      pump.writeEvent(F("Alarms"), F("restarted"));
+    }
+    // After a gap or a restart the host's view may be out of date, so send both; otherwise
+    // only a new speed.
+    if (cameBack || restarted || pumpSpeed != previousSpeed)
+    {
+      reportPumpState();
+      pumpReported = true;
     }
     return;
   }
