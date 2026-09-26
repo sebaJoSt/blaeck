@@ -72,8 +72,16 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   - A0's StateSignal field names the signal or state channel a command reports through
     (`withOwnState()`, `withStateSignal()`); it is resolved within the command's own sub-device,
     by blaeck and by hosts.
-  - The schema hash in D2 includes each signal's owner, so moving a signal to another
-    sub-device (and so another database column) is noticed.
+  - Schema hash: for every signal of a sub-device, the hash also covers that sub-device's name,
+    fed before the signal name. The board's own signals are hashed exactly as today, so boards
+    without sub-devices keep today's hash. The device name rather than its ID, because the
+    database column depends on the name and the ID only follows registration order.
+    Why: the hash (CRC16 over names and type codes, in signal-list order; blaeck
+    `_computeSchemaHash`, Loggbok `ParsingService.ComputeSchemaHash`, compared with every D2,
+    stopping logging on a mismatch) only covers names and types. With names per sub-device, a
+    reflash that registers zone B's "Temperature" before zone A's gives the same sequence and
+    the same hash, and Loggbok would write zone B's values into zone A's column unnoticed.
+    Loggbok computes it the same way, from B0's owners and B7's names.
   - The wire needs nothing else: every B0, 90 and 80 record carries its owner; F0, 95 and 85
     refer by number.
   - Loggbok: database columns of sub-device signals are qualified by device, for example
