@@ -108,22 +108,47 @@ entity; C++ `Device` class, `EntityBase::set_device_()`; the parent is the "main
   sure a restart is reported only once. B6's flaw with several clients (only the first to ask
   saw "1") no longer applies: blaeck has one host at a time.
 
-- B7 (next key in the B2-B7 block), chosen:
+- B7 (next key in the B2-B7 block), final:
 
 ```
-B7 Devices
-  LibName\0 LibVersion\0         once per frame
-  DeviceCount (1)
-  per device:
-    DeviceID (1)                 0 = board; equals the SlaveID in catalogs      identity
-    ParentID (1)                 board: 0; allows deeper trees later            identity
-    DeviceFlags (2)              which optional fields follow                   identity
-    DeviceState (1)              bit 0 NotResponding, bit 1 Restarted           snapshot
-    Name\0                       identity
-    HWVersion\0 FWVersion\0      versions (may change between sessions)
-    [DisplayName\0]              changeable label
-    [further optional fields]
+<BLAECK: B7 : MessageID(4) : payload /BLAECK>\r\n      no CRC, like the other catalogs
+
+payload:
+  LibName\0                    e.g. "blaeck"                       once per frame
+  LibVersion\0                 e.g. "7.0.0"
+  DeviceCount (1)              1..256: the board plus its sub-devices
+  per device, board first:
+    DeviceID (1)               0 = board; 1..255 = sub-devices, as in the catalogs   identity
+    ParentID (1)               board: 0; sub-devices: 0 (the board) for now         identity
+    DeviceFlags (2, LE)        which optional fields follow                          identity
+    DeviceState (1)            bit 0 NotResponding, bit 1 Restarted                  snapshot
+    Name\0                     stable identity                                       identity
+    HWVersion\0                                                                      version
+    FWVersion\0                                                                      version
+    optional fields: one \0-terminated string per set DeviceFlags bit, in bit order
 ```
+
+  DeviceFlags: bit 0 DisplayName (a changeable label). Bits 1-15 reserved, sent as 0, for
+  later optional fields such as manufacturer, model or area. Every optional field is a
+  \0-terminated string in bit order, so a host that finds an unknown bit can still skip the
+  right number of strings: new fields do not break older hosts.
+
+  DeviceState: bit 0 NotResponding (missing right now), bit 1 Restarted (a restart not yet
+  reported to any host). Bits 2-7 reserved, sent as 0. No "unknown" state: sub-devices start
+  as responding; a sketch that is unsure calls `markMissing()` in setup().
+
+  Example: board "Greenhouse" restarted and not yet reported; sub-device "pump1" missing, with
+  display name "Water pump":
+
+```
+"blaeck\0" "7.0.0\0" 02
+00 00 0000 02 "Greenhouse\0" "Arduino Mega 2560\0" "1.0\0"
+01 00 0100 01 "pump1\0" "Arduino Uno\0" "1.2\0" "Water pump\0"
+```
+
+  API: `pump.withDisplayName(...)` for a sub-device, and a new `DeviceDisplayName` member next to
+  `DeviceName` for the board (DeviceName stays the identity). blaecktcpy is out of scope for
+  now; the reserved bits leave room for a hub's "local" device type and auto-reconnect flag.
 
 - C1 (next key in the C0-C3 block), replaces C0:
 
@@ -152,14 +177,6 @@ C1 Device Notification
      logging session, except DeviceState. blaeck never sends it on its own, not at startup and
      not when a name or version changes (visible from the next session). The catalogs blaeck
      resends on change (state channels, events, commands, signal config) stay as they are.
-
-Still open for B7/C1:
-- Optional fields now: DisplayName only, or also manufacturer, model, serial number,
-  suggested area, configuration URL (Home Assistant device info).
-- A display name for the board too (`DeviceDisplayName` next to `DeviceName`)?
-- blaeck only (reserve a flag bit), or designed for blaecktcpy's hub and "local" devices too?
-- A third state "unknown" until the sketch first reports, or start as responding (sketches
-  that are unsure call `markMissing()` in setup())?
 
 Loggbok's use of B6 fields today: LibraryName/Version (feature gating), ParentSlaveID (tree),
 HW/FW (display); DeviceType only for "local"; ClientDataEnabled warns on "0"; the rest display.
