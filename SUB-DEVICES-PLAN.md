@@ -68,6 +68,20 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   every 60 s), use `writeAtInterval(BLAECK_OFF)` and write when data arrives, instead of
   repeating an old value with a new timestamp every interval. Uses the existing D2 frame.
 
+- Commands from Home Assistant reach a sub-device like this: HA publishes to the sub-device's
+  command topic; Loggbok maps the topic path to the sub-device and sends
+  `<@1:#12:SET_PUMP_SPEED,40>`; blaeck checks routing, range and type, calls the handler and
+  acknowledges; the handler forwards the value over the sketch's own link (the user's task).
+  The actual value returns through the command's `withOwnState()` channel once the sketch
+  updates the variable and reports it.
+- A command that belongs to a sub-device marked missing is rejected automatically, routed or
+  typed by hand, with a new ack reason (for example `BLAECK_ACK_DEVICE_NOT_RESPONDING`); the
+  handler does not run. Home Assistant already blocks commands to unavailable entities, but
+  other hosts and scripts do not. Loggbok maps the reason to a readable message.
+- Example fix: MainBoard updates `pumpSpeed` from each reading but never reports it, so the
+  slider shows the requested value, not the one the pump runs at. Call
+  `device.writeCommandState("SET_PUMP_SPEED")` when the reported speed changes.
+
 The code on this branch still sends B3, C0 and status 0x01; it has to follow this plan.
 
 ## Open questions
