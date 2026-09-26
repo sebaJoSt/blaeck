@@ -89,6 +89,17 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   slider shows the requested value, not the one the pump runs at. Call
   `device.writeCommandState("SET_PUMP_SPEED")` when the reported speed changes.
 
+- Scope and timing (2026-09-26): everything in this plan goes into blaeck 7.0, including the
+  registration base class; time is not a constraint. B7 and C1 replace B3 and C0 for every
+  blaeck board, with or without sub-devices. Order of work:
+  1. blaeck: B7, C1, the other decided items, and the switch to the registration base class
+     (rewording the AGENTS.md rule about a core base class);
+  2. blaeck-protocol: B7, C1, `@` routing, and 0x01 as BlaeckSerial 6 legacy;
+  3. Loggbok (work machine, GitLab): B7 and C1 first, so blaeck boards keep working at all,
+     then per-device availability, events 515/516 and the reconnect identity check;
+  4. hardware tests (Mega harness, Loggbok end to end), then release blaeck 7.0 and Loggbok
+     together.
+
 The code on this branch still sends B3, C0 and status 0x01; it has to follow this plan.
 
 ## Open questions
