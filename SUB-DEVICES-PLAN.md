@@ -54,11 +54,12 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
 - Not a full `Blaeck` per sub-device: `sizeof(Blaeck)` is 506 bytes on a Mega, 346 on an Uno.
 - Device list: a new B7 (see below), sent always. No capability negotiation: Loggbok asks
   GET_DEVICES first and must understand B7 and C1 before blaeck 7.0 is released.
-- Availability ("not responding") reaches hosts as state, not as data-frame status:
-  - B7 carries a NotResponding bit per device, so every host gets the current state with the
-    GET_DEVICES it sends anyway;
-  - a reworked restart notice, C1 "Device Notification", carries changes: restarted, not
-    responding, responding again. Also sent always, for the board's own restart too.
+- Device state reaches hosts in two ways, never as data-frame status:
+  - B7 carries a DeviceState byte per device, a snapshot at GET_DEVICES time: NotResponding,
+    and Restarted (a restart not yet reported). DeviceState is not part of the identity.
+  - a reworked restart notice, C1 "Device Notification", carries every change after that:
+    restarted, not responding, responding again. Sent always, for the board's own restart too.
+  - Each restart is reported exactly once, in B7 or C1, whichever reaches a host first.
   - Missing sub-devices' signals are still left out of data frames (a gap in the database),
     and data-frame status 0x01 is dropped. Home Assistant needs availability, because an MQTT
     sensor keeps showing its last value through a gap.
@@ -99,23 +100,32 @@ entity; C++ `Device` class, `EntityBase::set_device_()`; the parent is the "main
 - B6 (BlaeckTCP 4-6, blaecktcpy): parent field, but carries TCP multi-client fields
   (ClientNo, ClientDataEnabled, ClientName, ClientType, ServerRestarted, DeviceType). The spec
   lists a 2-field client trailer; BlaeckTCP, blaecktcpy and Loggbok use 4.
-- B7 draft (next key in the B2-B7 block), chosen:
+- Why restart state belongs in the device list: BlaeckSerial announced a restart with C0 on
+  its first pass, because the serial port stays open through a reboot. BlaeckTCP had no C0: a
+  reboot drops every TCP connection, so a notice at boot reaches nobody; the host always
+  reconnects and asks GET_DEVICES, and B6's ServerRestarted ("true until the first device
+  list after boot") told it. blaeck serves both transports, so it keeps both paths and makes
+  sure a restart is reported only once. B6's flaw with several clients (only the first to ask
+  saw "1") no longer applies: blaeck has one host at a time.
+
+- B7 (next key in the B2-B7 block), chosen:
 
 ```
 B7 Devices
   LibName\0 LibVersion\0         once per frame
   DeviceCount (1)
   per device:
-    DeviceID (1)                 0 = board; equals the SlaveID in catalogs
-    ParentID (1)                 board: 0; allows deeper trees later
-    DeviceFlags (2)              NotResponding, and which optional fields follow
+    DeviceID (1)                 0 = board; equals the SlaveID in catalogs      identity
+    ParentID (1)                 board: 0; allows deeper trees later            identity
+    DeviceFlags (2)              which optional fields follow                   identity
+    DeviceState (1)              bit 0 NotResponding, bit 1 Restarted           snapshot
     Name\0                       identity
-    HWVersion\0 FWVersion\0
+    HWVersion\0 FWVersion\0      versions (may change between sessions)
     [DisplayName\0]              changeable label
     [further optional fields]
 ```
 
-- C1 draft (next key in the C0-C3 block), replaces C0:
+- C1 (next key in the C0-C3 block), replaces C0:
 
 ```
 C1 Device Notification
@@ -126,14 +136,22 @@ C1 Device Notification
 
   Message ID 0 (not an answer), no CRC, one event per frame. No name, versions or library
   info: the host looks them up in B7, and duplicating them would let the two disagree.
-  `markMissing()` / `markPresent()` send C1 on a real change; `writeRestarted()` and the board's
-  own startup notice send C1 "restarted".
 
-- B7 behaves like the signal list (B0): sent only in answer to GET_DEVICES and fixed for a
-  logging session. blaeck never sends it on its own, not at startup and not when a name or
-  version changes (visible from the next session). The current state reaches a host through
-  the NotResponding bit at GET_DEVICES time plus every C1 after it. The catalogs blaeck resends
-  on change (state channels, events, commands, signal config) stay as they are.
+- Rules:
+  1. Restarted means "a restart not yet reported to a host". It is set at boot for the board
+     and by `writeRestarted()` for a sub-device, and cleared as soon as it has gone out, in B7
+     or as C1 "restarted", whichever reaches a host first. On TCP that is practically always
+     B7, since a host's first command is GET_DEVICES; on Serial it is C1 at boot, since the
+     host is already listening. A C1 "restarted" is held back until a host can receive frames.
+  2. NotResponding is the state at GET_DEVICES time; every later change arrives as C1
+     (`markMissing()` / `markPresent()` send it only on a real change).
+  3. Missing sub-devices stay in B7 with the bit set: B7 lists everything the sketch declared,
+     and the catalogs still refer to their IDs. A sub-device is absent only if the sketch never
+     declares it (for example a scan at startup did not find it).
+  4. B7 behaves like the signal list (B0): sent only in answer to GET_DEVICES and fixed for a
+     logging session, except DeviceState. blaeck never sends it on its own, not at startup and
+     not when a name or version changes (visible from the next session). The catalogs blaeck
+     resends on change (state channels, events, commands, signal config) stay as they are.
 
 Still open for B7/C1:
 - Optional fields now: DisplayName only, or also manufacturer, model, serial number,
@@ -159,7 +177,9 @@ sensors and parts of the board. Drop the "master" sentence from the addDevice() 
   0x01 only as BlaeckSerial 6's "I2C Slave Skipped" (values present but invalid), unused by
   blaeck.
 - Loggbok, before blaeck 7.0 ships: parse B7 and C1 (its restart handling, including the
-  interval recovery, currently reacts to C0 only); per-device availability in Home Assistant
+  interval recovery, currently reacts to C0 only); after a TCP reconnect, read the board's
+  Restarted bit from the B7 answer where it reads B6's ServerRestarted today, now per device;
+  per-device availability in Home Assistant
   (today there is one availability topic for the whole bridge); keep the device tree when a
   B7 arrives during logging (ProcessDevices currently replaces the whole list).
   `MqttBridge.BuildDeviceId` is unused dead code.
@@ -172,7 +192,8 @@ sensors and parts of the board. Drop the "master" sentence from the addDevice() 
     name and library name, the same sub-devices by ID, name and parent, and the same signal
     list (schema hash);
   - versions may differ, with a warning (a firmware update during the outage is plausible);
-  - availability may differ (a sub-device went missing meanwhile; B7's NotResponding bit).
+  - DeviceState may differ and is left out of the comparison (a sub-device went missing, or
+    the board restarted, during the outage).
 - blaecktcpy hub decoder: only if blaeck boards should run behind a hub with B7.
 
 ## Known limits
