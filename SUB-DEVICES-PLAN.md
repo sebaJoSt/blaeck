@@ -183,6 +183,18 @@ sensors and parts of the board. Drop the "master" sentence from the addDevice() 
   (today there is one availability topic for the whole bridge); keep the device tree when a
   B7 arrives during logging (ProcessDevices currently replaces the whole list).
   `MqttBridge.BuildDeviceId` is unused dead code.
+- Loggbok notifications: bring back events 515/516, generalised, fed by C1. Loggbok commit
+  55970bca (2026-08-25, "Drop the I2C skip events, which no device can raise any more")
+  removed them: `I2CSkipTracker`, events 515 "I2C Warning" / 516 "I2C Recovered" with device
+  name resolution, their two settings entries in `SettingsViewModel`, and
+  `SkippedSlaveCount` / `FirstSkippedSlaveID`. Restore the event IDs, settings entries and name
+  resolution as "Device not responding" / "Device responding again", driven by C1 (and B7's
+  NotResponding at GET_DEVICES time). Do not restore the tracker: it inferred skipped slaves
+  from signals absent in a data frame, which only worked because BlaeckSerial 6 always sent
+  every signal; blaeck sends partial frames (writeOnChange, per-device writes), so a quiet
+  sub-device would look skipped. Later, the hub's 0x80/0x81 events (511/512) could share this
+  path if blaecktcpy switches to C1; C1 would then need a place for the hub's auto-reconnect
+  flag (today byte 0 of the 0x80 payload).
 - Loggbok gap, independent of sub-devices: after a TCP reconnect it asks GET_DEVICES again but
   never compares the answer with the session. ProcessDevices replaces the list, and
   ValidateDevicesAfterReconnectAsync only checks that a device answered, ClientDataEnabled and
