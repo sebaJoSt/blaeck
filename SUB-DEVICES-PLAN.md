@@ -52,7 +52,8 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   registration order. Renaming a device makes it a new device in Home Assistant.
 - Transport is always the sketch's job (UART, CAN, I2C, RF, or none for local parts).
 - No `@` routing prefix. blaecktcpy's hub mode is being removed (its server mode stays), and
-  names are unique per board, so a command's name alone says which sub-device it belongs to.
+  command names are unique per board, so a command's name alone says which sub-device it
+  belongs to.
   Loggbok sends sub-device commands without a prefix, like the board's; blaeck does not parse
   `@`. Hub-related items (0x80/0x81, the hub's auto-reconnect flag, hub device types, the hub
   decoder) are out of this plan.
@@ -79,17 +80,6 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
     `Zone A/Temperature`, and its duplicate check uses the qualified name; the board's own
     signals keep plain names, so existing tables are unchanged. MQTT topics and Home Assistant
     identities are already per device path.
-- No `@` routing prefix. blaecktcpy's hub mode is being removed (its server mode stays), and
-  names are unique per board, so a command's name alone says which sub-device it belongs to.
-  Loggbok sends sub-device commands without a prefix, like the board's; blaeck does not parse
-  `@`. Hub-related items (0x80/0x81, the hub's auto-reconnect flag, hub device types, the hub
-  decoder) are out of this plan.
-- Names stay unique per board, not per sub-device, and keeping them unique is the sketch's
-  job (`withNameSuffix()` for repeated sensors). Considered and rejected on 2026-09-26: ESPHome
-  first enforced unique names across sub-devices (PR #9276), users hit it at once (issue
-  #10159, a "Battery" sensor on two UPS sub-devices), and 2025.8 made names unique per device
-  (PR #9355). For blaeck that would mean per-device name lookups and device-qualified
-  database columns in Loggbok; not worth it.
 - Not a full `Blaeck` per sub-device: `sizeof(Blaeck)` is 506 bytes on a Mega, 346 on an Uno.
 - Device list: a new B7 (see below), sent always. No capability negotiation: Loggbok asks
   GET_DEVICES first and must understand B7 and C1 before blaeck 7.0 is released.
@@ -117,9 +107,10 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   ack reason (for example `BLAECK_ACK_DEVICE_NOT_RESPONDING`); the
   handler does not run. Home Assistant already blocks commands to unavailable entities, but
   other hosts and scripts do not. Loggbok maps the reason to a readable message.
-- Explicit writes: `device.write("Flow", value)` (by name, index, or with a timestamp) already
-  works for a sub-device's signal; the host files it under the sub-device, and signal names are
-  unique across the board, so no sub-device reference is needed. While the sub-device is marked
+- Explicit writes of a sub-device's signal go through its handle, `pump.write("Flow", value)`
+  (by name, index, or with a timestamp), since names are unique only within a sub-device; the
+  host files the value under the sub-device. By index, `device.write(index, value)` works as
+  well, since signal numbers are unique across the board. While the sub-device is marked
   missing, the write is dropped. Add a debug-stream note for that, printed only if
   `withDebugStream()` is set, once per missing phase (reset by `markPresent()`), before any
   frame opens, and not counted in `hasRejections()`. For example:
