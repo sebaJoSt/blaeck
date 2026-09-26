@@ -195,7 +195,7 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   1. blaeck: B7, C1, the other decided items, and the switch to the registration base class
      (rewording the AGENTS.md rule about a core base class);
   2. blaeck-protocol: B7, C1, 0x01 as BlaeckSerial 6 legacy, and `@` reserved;
-  3. Loggbok (work machine, GitLab): B7 and C1 first, so blaeck boards keep working at all,
+  3. Loggbok (~/source/Loggbok, GitHub, branch master): B7 and C1 first, so blaeck boards keep working at all,
      then per-device availability, events 515/516 and the reconnect identity check;
   4. hardware tests (Mega harness, Loggbok end to end), then release blaeck 7.0 and Loggbok
      together.
@@ -399,6 +399,6 @@ sensors and parts of the board. Drop the "master" sentence from the addDevice() 
 ## Tests still to run
 
 - Mega: `drive_device_tree.py` against DeviceTreeTest (see extras/tests/harness/README.md).
-- Loggbok on the work machine: device tree, MQTT/Home Assistant devices and controls,
+- Loggbok end to end: device tree, MQTT/Home Assistant devices and controls,
   availability, events, database columns.
 - Optional: two Megas with the SubDevices example (TX1-RX1 crossed, GND).
