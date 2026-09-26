@@ -130,7 +130,7 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   - Missing sub-devices' signals are still left out of data frames (a gap in the database),
     and data-frame status 0x01 is dropped. Home Assistant needs availability, because an MQTT
     sensor keeps showing its last value through a gap.
-- Per-device writes: `pump.writeAllData()` / `writeAllData(timestamp)` send only that
+- Per-device writes: `pump.writeAll()` / `writeAll(timestamp)` send only that
   sub-device's signals, with the time of the actual reading. For slow sources (an RF sensor
   every 60 s), use `writeAtInterval(BLAECK_OFF)` and write when data arrives, instead of
   repeating an old value with a new timestamp every interval. Uses the existing D2 frame.
@@ -174,7 +174,7 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   3. after a pump restart, send its (reset) speed and "Pump link" at once.
   A small `reportPumpState()` in the sketch, called on return, after a restart and when the
   speed changes, covers 1-3 and shows the pattern the docs recommend. Also switch the example
-  to `pump.addSignal(...)` and friends once the base class exists. Per-device `writeAllData()`
+  to `pump.addSignal(...)` and friends once the base class exists. Per-device `writeAll()`
   is not needed here (the pump is polled at a fixed rate) and stays in the docs.
 - Scope and timing (2026-09-26): everything in this plan goes into blaeck 7.0, including the
   registration base class; time is not a constraint. B7 and C1 replace B3 and C0 for every
@@ -373,7 +373,7 @@ sensors and parts of the board. Drop the "master" sentence from the addDevice() 
   sub-devices cannot be removed. A scan at startup works.
 - A frame whose signals all belong to missing sub-devices is not sent, so WRITE_DATA for only
   those gets no data frame.
-- One timestamp per data frame; per-device `writeAllData()` (planned) gives each sub-device
+- One timestamp per data frame; per-device `writeAll()` (planned) gives each sub-device
   its own frame and reading time.
 - After a sub-device restart only a notification is sent; its state channel values are not
   resent.

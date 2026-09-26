@@ -63,11 +63,11 @@ cut.
 Explicit writes bypass the signal's automatic policies and change thresholds. They work
 without ACTIVATE but still honor pause/resume writes.
 
-`writeAllData()` sends every signal now:
+`writeAll()` sends every signal now:
 
 ```cpp
 if (temperature > 40.0)
-  device.writeAllData();
+  device.writeAll();
 ```
 
 `write()` sends one signal, and stores the value on the way:
@@ -198,7 +198,7 @@ device.addSignal(F("Temperature"), &temperature)
 ```
 
 There is **one last-sent baseline**, not one per policy. An automatic report, explicit
-`write()`, `writeAllData()`, or host-requested full snapshot updates that baseline and the
+`write()`, `writeAll()`, or host-requested full snapshot updates that baseline and the
 immediate rate-limit clock for every included signal. Explicit and immediate writes do not
 move the host's interval schedule. If both paths qualify together, the signal appears only
 once in one frame.
@@ -246,7 +246,7 @@ device.setBeforeWriteCallback(readAllSensors);
 ```
 
 The callback runs when a host interval is due, even if filtering leaves nothing to send.
-It also runs for explicit or host-requested `writeAllData()`. It does not run for single-signal
+It also runs for explicit or host-requested `writeAll()`. It does not run for single-signal
 `write()` or the every-tick immediate change check; refresh those variables in your sketch.
 It runs in normal `loop()` context, not an interrupt.
 
@@ -286,7 +286,7 @@ whether you have one.
 Set the mode once, in `setup()`. Timestamps from either side of a change are not comparable.
 
 An automatic frame timestamps the reporting pass, not each sensor's acquisition time.
-For a known acquisition time, pass it explicitly to `write()` or `writeAllData()`.
+For a known acquisition time, pass it explicitly to `write()` or `writeAll()`.
 `writeIfDue(timestamp)` also accepts a supplied timestamp; scheduling and rate limits still
 use `millis()`.
 

@@ -90,7 +90,7 @@ void pollPump()
 void onPoll(const char *command, const char *const *params, byte paramCount)
 {
   pollPump();
-  device.writeAllData();
+  device.writeAll();
   done(command);
 }
 
