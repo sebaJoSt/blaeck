@@ -119,15 +119,21 @@ B7 Devices
 
 ```
 C1 Device Notification
-  DeviceID (1)        0 = the board, 1..255 = sub-devices
+  DeviceID (1)        0 = the board, 1..255 = sub-devices; same ID as in B7 and the catalogs
   Event (1)           0x01 restarted, 0x02 not responding, 0x03 responding again
-  for "restarted" only:
-    Name\0 HWVersion\0 FWVersion\0    what runs now, e.g. after an update
+                      (0x00 and 0x04-0xFF reserved)
 ```
 
+  Message ID 0 (not an answer), no CRC, one event per frame. No name, versions or library
+  info: the host looks them up in B7, and duplicating them would let the two disagree.
   `markMissing()` / `markPresent()` send C1 on a real change; `writeRestarted()` and the board's
-  own startup notice send C1 "restarted". Whether the board's C1 also carries LibName/LibVersion
-  is open (they are in B7 anyway).
+  own startup notice send C1 "restarted".
+
+- B7 behaves like the signal list (B0): sent only in answer to GET_DEVICES and fixed for a
+  logging session. blaeck never sends it on its own, not at startup and not when a name or
+  version changes (visible from the next session). The current state reaches a host through
+  the NotResponding bit at GET_DEVICES time plus every C1 after it. The catalogs blaeck resends
+  on change (state channels, events, commands, signal config) stay as they are.
 
 Still open for B7/C1:
 - Optional fields now: DisplayName only, or also manufacturer, model, serial number,
