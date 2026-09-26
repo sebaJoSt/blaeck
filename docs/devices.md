@@ -83,11 +83,10 @@ host shows them under their own device. Don't repeat the device's name in its en
 already shows "Pump controller" in front of `Flow`. Command names are the exception - they are
 unique across the whole board, because an incoming command is found by its name.
 
-A host sends a device's command with the device's ID in front, such as
-`<@1:SET_PUMP_SPEED,40>`. blaeck runs it only if the command belongs to that device, so your
-handler is the same whether the command came from a dashboard or was typed without the prefix.
+A host sends a device's command like any other, `<SET_PUMP_SPEED,40>`: the name is enough.
+Your handler forwards the value over your link to the device.
 
-Add devices and assign entries in `setup()`: a host reads the device list and the catalogs when
+Add devices and register their entries in `setup()`: a host reads the device list and the catalogs when
 it connects, and does not ask again for a change made later.
 
 A host identifies a device by its name below the board's name, so keep device names unique and
@@ -103,13 +102,38 @@ pump.markMissing();   // it stopped answering
 pump.markPresent();   // it answers again
 ```
 
-While a device is missing, its signals are left out of every data frame, so a host sees a gap
-rather than old values presented as new. A frame that leaves a signal out carries status `0x01`,
-Device Not Responding, naming the first signal left out and its device. When the device is back,
-each signal of it that reports on change is sent again at the next chance.
+A host is told at once, or as soon as one can receive frames, so it can show the device as
+unavailable. The device list a host asks for says so too.
+
+While a device is missing:
+
+- its signals are left out of every data frame, so a host sees a gap rather than old values
+  presented as new;
+- `write()` for one of its signals is dropped. With `withDebugStream()`, the first drop is
+  noted there, once until `markPresent()`;
+- its commands are refused with the reason "device not responding", and their handlers don't
+  run.
+
+When the device is back, each signal of it that reports on change is sent again at the next
+chance. Values your sketch pushes itself, such as state channels, are not: fetch them from the
+device and send them again, since they may have changed meanwhile.
 
 Both calls may be made on every poll; a call that changes nothing does nothing. Decide in your
 sketch what counts as missing: one missed reply, or several in a row.
+
+## Sending a device's values when they arrive
+
+A device often answers at its own pace. `pump.writeAll()` sends only the pump's signals, right
+away, so the frame carries the time of that reading:
+
+```cpp
+if (readFlowFromPump(pumpFlow))
+  pump.writeAll();
+```
+
+For a slow device, such as a radio sensor that reports every minute, turn its signals' interval
+off with `writeAtInterval(BLAECK_OFF)` and send them this way, instead of repeating an old value
+with a new timestamp on every interval.
 
 ## When a device restarts
 
@@ -118,12 +142,13 @@ if (reading.uptimeMs < lastPumpUptime)
   pump.writeRestarted();
 ```
 
-Sends a restart notice with the device's name, so a host can report that the pump restarted
-while the board kept running. Your sketch has to notice the restart; an uptime the device
-reports is the simplest way.
+Sends a restart notice for the device, so a host can report that the pump restarted while the
+board kept running. Your sketch has to notice the restart; an uptime the device reports is the
+simplest way. Send the device's values again afterwards, since they may be back at their
+defaults.
 
 ## Table size and memory
 
 `withDevices()` on the `begin()` chain sets how many devices fit; the default depends on the
-board, 4 on a Mega. On AVR each device takes 10 bytes of SRAM plus the names it copies, and
-each signal, command and channel carries one byte for its device.
+board, 4 on a Mega, and at most 254. On AVR each device takes 13 bytes of SRAM plus the names it
+copies, and each signal, command and channel carries one byte for its device.

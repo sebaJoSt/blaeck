@@ -284,7 +284,7 @@ static void onPing(const char *, const char *const *params, byte count)
 
 static void assertLibraryIdentity(const std::string &frames)
 {
-  const std::string identity = std::string(BLAECK_VERSION) + '\0' + "blaeck" + '\0';
+  const std::string identity = std::string("blaeck") + '\0' + BLAECK_VERSION + '\0';
   assert(frames.find(identity) != std::string::npos);
   assert(frames.find("BlaeckSerial") == std::string::npos);
   assert(frames.find("BlaeckTCP") == std::string::npos);
@@ -1557,10 +1557,23 @@ static std::string owner(byte config, byte id)
   return std::string(1, static_cast<char>(config)) + static_cast<char>(id);
 }
 
-static std::string deviceRecord(byte config, byte id, const char *name, const char *hw, const char *fw)
+// One B7 record: DeviceID, ParentID 0, DeviceFlags 0, DeviceState, then the three names.
+static std::string deviceRecord(byte id, byte state, const char *name, const char *hw, const char *fw)
 {
-  return owner(config, id) + name + '\0' + hw + '\0' + fw + '\0' + BLAECK_VERSION + '\0' +
-         "blaeck" + '\0';
+  return std::string(1, static_cast<char>(id)) + '\0' + '\0' + '\0' + static_cast<char>(state) +
+         name + '\0' + hw + '\0' + fw + '\0';
+}
+
+// A B7 payload: library name and version, the record count, then the records.
+static std::string deviceList(byte count, const std::string &records)
+{
+  return std::string("blaeck") + '\0' + BLAECK_VERSION + '\0' + static_cast<char>(count) + records;
+}
+
+// A C1 payload.
+static std::string notice(byte id, byte event)
+{
+  return std::string(1, static_cast<char>(id)) + static_cast<char>(event);
 }
 
 static void noDeviceOwnership()
@@ -1575,9 +1588,9 @@ static void noDeviceOwnership()
   device.read();
   stream.data.output.clear();
   command(device, stream, "<BLAECK.GET_DEVICES>");
-  // Without devices the board is "single", as it always was.
-  assert(commandFramePayload(stream.data.output, 0xB3, 0) ==
-         deviceRecord(0x00, 0, "Solo", "Mega", "n/a"));
+  // Without devices the list holds the board alone; its restart went out as C1 in read().
+  assert(commandFramePayload(stream.data.output, 0xB7, 0) ==
+         deviceList(1, deviceRecord(0, 0, "Solo", "Mega", "n/a")));
   stream.data.output.clear();
   command(device, stream, "<BLAECK.WRITE_SYMBOLS>");
   assert(ownerOf(commandFramePayload(stream.data.output, 0xB0, 0), "Value") == owner(0x00, 0));
@@ -1641,17 +1654,16 @@ static void subDevices(bool buffered)
   pump.addStateChannel(F("PumpStatus"), BlaeckText);
   fan.addEventChannel(F("FanAlarm"), F("stall"));
 
-  // The board's restart notice calls it the master once devices exist.
+  // The board's restart notice is a C1 for device 0.
   device.read();
-  const std::string restart = commandFramePayload(stream.data.output, 0xC0, 0);
-  assert(restart == deviceRecord(0x01, 0, "Board", "Mega", "n/a"));
+  assert(commandFramePayload(stream.data.output, 0xC1, 0) == notice(0, 0x01));
   stream.data.output.clear();
 
   command(device, stream, "<BLAECK.GET_DEVICES>");
-  assert(commandFramePayload(stream.data.output, 0xB3, 0) ==
-         deviceRecord(0x01, 0, "Board", "Mega", "n/a") +
-         deviceRecord(0x02, 1, "Pump", "Nano", "1.2") +
-         deviceRecord(0x02, 2, "Fan", "n/a", "n/a"));
+  assert(commandFramePayload(stream.data.output, 0xB7, 0) ==
+         deviceList(3, deviceRecord(0, 0, "Board", "Mega", "n/a") +
+                       deviceRecord(1, 0, "Pump", "Nano", "1.2") +
+                       deviceRecord(2, 0, "Fan", "n/a", "n/a")));
   stream.data.output.clear();
 
   command(device, stream, "<BLAECK.WRITE_SYMBOLS>");
@@ -1693,7 +1705,7 @@ static void subDevices(bool buffered)
 
   // A device restart is reported for that device only.
   pump.writeRestarted();
-  assert(commandFramePayload(stream.data.output, 0xC0, 0) == deviceRecord(0x02, 1, "Pump", "Nano", "1.2"));
+  assert(commandFramePayload(stream.data.output, 0xC1, 0) == notice(1, 0x01));
   stream.data.output.clear();
 
   const std::vector<int> widths = {4, 4, 4, 4};
@@ -1704,27 +1716,66 @@ static void subDevices(bool buffered)
   assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 1, 2, 3}));
   assert(frames[0].status == 0 && frames[0].statusPayload == std::string(4, '\0'));
 
-  // A missing device's signals leave the frame, and the status names the first and its device.
+  // Going missing is a C1 at once, sent only on a real change; the device's signals leave the
+  // data frames, whose status stays normal.
   pump.markMissing();
+  assert(commandFramePayload(stream.data.output, 0xC1, 0) == notice(1, 0x02));
+  stream.data.output.clear();
   pump.markMissing();
+  assert(stream.data.output.empty());
   assert(pump.isMissing());
   device.writeIfDue();
   frames = takeData(stream.data.output, widths);
   assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 3}));
-  assert(frames[0].status == 0x01 && frames[0].statusPayload == std::string("\0\1\0\1", 4));
+  assert(frames[0].status == 0 && frames[0].statusPayload == std::string(4, '\0'));
   device.writeAll();
   frames = takeData(stream.data.output, widths);
-  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 3}) && frames[0].status == 0x01);
-  pump.write("Flow", 5.0f);
-  assert(takeData(stream.data.output, widths).empty()); // nothing left to send
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 3}) && frames[0].status == 0);
+  pump.writeAll();
+  assert(takeData(stream.data.output, widths).empty());
 
-  // A device without signals changes nothing when it goes missing.
+  // write() to a missing device's signal is dropped, noted on the debug stream once.
+  debug.text.clear();
+  pump.write("Flow", 5.0f);
+  pump.write("Flow", 6.0f);
+  assert(takeData(stream.data.output, widths).empty());
+  const std::string note = "write() dropped for 'Flow': 'Pump' is marked missing (once until markPresent()).";
+  assert(debug.text.find(note) != std::string::npos);
+  assert(debug.text.find(note) == debug.text.rfind(note));
+  assert(!device.hasRejectedSignals()); // a dropped write is no rejection
+
+  // The list reports the state too.
+  command(device, stream, "<BLAECK.GET_DEVICES>");
+  assert(commandFramePayload(stream.data.output, 0xB7, 0).find(deviceRecord(1, 0x01, "Pump", "Nano", "1.2")) !=
+         std::string::npos);
+  stream.data.output.clear();
+
+  // Back again: a C1, and the note may come once more in the next missing phase.
   pump.markPresent();
+  assert(commandFramePayload(stream.data.output, 0xC1, 0) == notice(1, 0x03));
+  stream.data.output.clear();
+  pump.markMissing();
+  stream.data.output.clear();
+  debug.text.clear();
+  pump.write("Flow", 7.0f);
+  assert(debug.text.find(note) != std::string::npos);
+  pump.markPresent();
+  stream.data.output.clear();
+
+  // pump.writeAll() sends the pump's signals only.
+  pump.writeAll();
+  frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{1, 2}));
+
+  // A device without signals changes nothing in the data when it goes missing.
   fan.markMissing();
+  assert(commandFramePayload(stream.data.output, 0xC1, 0) == notice(2, 0x02));
+  stream.data.output.clear();
   device.writeIfDue();
   frames = takeData(stream.data.output, widths);
   assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 1, 2, 3}) && frames[0].status == 0);
   fan.markPresent();
+  stream.data.output.clear();
 
   // After a gap, a changed-only signal is sent again even if its value did not change.
   command(device, stream, "<BLAECK.DEACTIVATE>");
@@ -1747,12 +1798,66 @@ static void subDevices(bool buffered)
   frames = takeData(changesStream.data.output, {4});
   assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0}));
 
-  // The device table holds at most 255: slave IDs are one byte and 0 is the board.
+  // The device table holds at most 254, so the list's count byte covers them and the board.
   Blaeck big;
   FakeStream bigStream;
   debug.text.clear();
   big.begin(bigStream).withDebugStream(&debug).withDevices(300);
-  assert(debug.text.find("withDevices(300): clamped to 255") != std::string::npos);
+  assert(debug.text.find("withDevices(300): clamped to 254") != std::string::npos);
+  char name[8];
+  for (int i = 0; i < 255; ++i)
+  {
+    snprintf(name, sizeof(name), "D%d", i);
+    big.addDevice(name);
+  }
+  assert(big.hasRejections()); // the 255th
+  big.read();
+  bigStream.data.output.clear();
+  command(big, bigStream, "<BLAECK.GET_DEVICES>");
+  const std::string list = commandFramePayload(bigStream.data.output, 0xB7, 0);
+  assert(static_cast<byte>(list[std::string("blaeck").size() + 1 + std::string(BLAECK_VERSION).size() + 1]) == 255);
+  assert(list.find(deviceRecord(254, 0, "D253", "n/a", "n/a")) != std::string::npos);
+}
+
+// Over TCP a host can receive frames only once it sent a BLAECK. command, normally
+// GET_DEVICES. Notices held back until then are answered by the list itself.
+static void deviceNoticesBeforeHost()
+{
+  FakeServer<> server;
+  SocketState host;
+  Blaeck device;
+  device.begin(server).withDevices(2);
+  device.DeviceName = "Board";
+  device.DeviceHWVersion = "Mega";
+  BlaeckDeviceRef pump = device.addDevice(F("Pump"));
+  BlaeckDeviceRef fan = device.addDevice(F("Fan"));
+  pump.markMissing();
+  pump.writeRestarted();
+  fan.markMissing();
+  fan.markPresent(); // back before anyone heard: no change to report
+  device.read();
+  server.pending = {&host};
+  device.read();
+  assert(host.output.empty());
+
+  host.input = "<BLAECK.GET_DEVICES>";
+  device.read();
+  assert(host.output.find(std::string("<BLAECK:") + char(0xC1)) == std::string::npos);
+  assert(commandFramePayload(host.output, 0xB7, 0) ==
+         deviceList(3, deviceRecord(0, 0x02, "Board", "Mega", "n/a") +
+                       deviceRecord(1, 0x03, "Pump", "n/a", "n/a") +
+                       deviceRecord(2, 0, "Fan", "n/a", "n/a")));
+  host.output.clear();
+
+  // Everything was reported: no C1 follows, and the next list shows no restart.
+  device.read();
+  assert(host.output.empty());
+  host.input = "<BLAECK.GET_DEVICES>";
+  device.read();
+  assert(commandFramePayload(host.output, 0xB7, 0) ==
+         deviceList(3, deviceRecord(0, 0, "Board", "Mega", "n/a") +
+                       deviceRecord(1, 0x01, "Pump", "n/a", "n/a") +
+                       deviceRecord(2, 0, "Fan", "n/a", "n/a")));
 }
 
 // CRC16-CCITT (init 0, poly 0x1021), as a host computes the schema hash.
@@ -1921,7 +2026,7 @@ static void ackResult(const std::string &output, uint32_t messageId, const char 
   assert(static_cast<byte>(ack[8]) == status);
 }
 
-static void routedDeviceCommands()
+static void deviceCommands()
 {
   pings.clear();
   FakeStream stream;
@@ -1934,38 +2039,34 @@ static void routedDeviceCommands()
   device.read();
   stream.data.output.clear();
 
-  // How Loggbok sends a device's command: '@' names the device, '#' carries the message id,
-  // and the ack hashes the command after both, as the host wrote it.
-  command(device, stream, "<@1:#7:SET_PUMP_SPEED,40>");
+  // A device's command is sent like the board's: its name alone finds it.
+  command(device, stream, "<#7:SET_PUMP_SPEED,40>");
   assert((pings == std::vector<std::string>{"40"}));
   ackResult(stream.data.output, 7, "SET_PUMP_SPEED,40", 0);
   stream.data.output.clear();
 
-  // Prefix order carries no meaning.
-  command(device, stream, "<#8:@1:SET_PUMP_SPEED,41>");
-  assert(pings.back() == "41");
-  ackResult(stream.data.output, 8, "SET_PUMP_SPEED,41", 0);
-  stream.data.output.clear();
-
-  // Routed to the wrong device, or a board command routed to a device: unknown, not run.
-  command(device, stream, "<@2:#9:SET_PUMP_SPEED,42>");
-  ackResult(stream.data.output, 9, "SET_PUMP_SPEED,42", 1);
-  stream.data.output.clear();
-  command(device, stream, "<@1:#10:BOARD_PING,1>");
-  ackResult(stream.data.output, 10, "BOARD_PING,1", 1);
-  stream.data.output.clear();
-  assert(pings.size() == 2);
-
-  // A device the board does not have: the item stays in the name, as the spec requires.
-  command(device, stream, "<@9:#11:SET_PUMP_SPEED,43>");
-  assert(pings.size() == 2);
+  // '@' is no prefix: the command is unknown and nothing runs.
+  command(device, stream, "<@1:#8:SET_PUMP_SPEED,41>");
+  assert(pings.size() == 1);
   const std::string ack = commandFramePayload(stream.data.output, 0xA5, 0);
-  assert(static_cast<byte>(ack[8]) == 1);
+  assert(static_cast<byte>(ack[8]) == 1 && static_cast<byte>(ack[9]) == BLAECK_ACK_UNKNOWN);
   stream.data.output.clear();
 
-  // Typed by hand, without routing, a device's command still runs.
-  command(device, stream, "<SET_PUMP_SPEED,44>");
-  assert(pings.back() == "44");
+  // While the pump is missing its command is refused and the handler doesn't run.
+  pump.markMissing();
+  stream.data.output.clear();
+  command(device, stream, "<#9:SET_PUMP_SPEED,42>");
+  assert(pings.size() == 1);
+  const std::string refused = commandFramePayload(stream.data.output, 0xA5, 9);
+  assert(static_cast<byte>(refused[8]) == 1 && static_cast<byte>(refused[9]) == BLAECK_ACK_DEVICE_NOT_RESPONDING);
+  stream.data.output.clear();
+  command(device, stream, "<#10:BOARD_PING,1>"); // the board's own commands still run
+  ackResult(stream.data.output, 10, "BOARD_PING,1", 0);
+  stream.data.output.clear();
+  pump.markPresent();
+  stream.data.output.clear();
+  command(device, stream, "<SET_PUMP_SPEED,43>");
+  assert(pings.back() == "43");
 }
 
 static void reportingPolicies(bool buffered)
@@ -2862,7 +2963,8 @@ int main()
     noDeviceOwnership();
     subDevices(false);
     subDevices(true);
-    routedDeviceCommands();
+    deviceCommands();
+    deviceNoticesBeforeHost();
     sameNamesAcrossDevices();
   }
   reportingPolicies(false);

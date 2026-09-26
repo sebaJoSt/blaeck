@@ -521,22 +521,92 @@ void Blaeck::_setDeviceMissing(byte id, bool missing)
   if (d == nullptr || d->missing == missing)
     return;
   d->missing = missing;
-  if (missing)
-    return;
-  // The host got none of its values meanwhile, so each signal that reports on change is
-  // due again rather than compared with a value from before the gap.
-  for (int i = 0; i < _signalIndex; ++i)
-    if (Signals[i].DeviceId == id && Signals[i].Reporting != nullptr)
-      Signals[i].Reporting->valid = false;
+  if (!missing)
+  {
+    d->dropNoted = false;
+    // The host got none of its values meanwhile, so each signal that reports on change is
+    // due again rather than compared with a value from before the gap.
+    for (int i = 0; i < _signalIndex; ++i)
+      if (Signals[i].DeviceId == id && Signals[i].Reporting != nullptr)
+        Signals[i].Reporting->valid = false;
+  }
+  _writeDeviceNotices();
 }
 
 void Blaeck::_writeDeviceRestarted(byte id)
 {
-  const DeviceEntry *d = _deviceEntry(id);
-  if (d == nullptr || !_frameOpen(0xC0, 0))
+  DeviceEntry *d = _deviceEntry(id);
+  if (d == nullptr)
     return;
-  _emitDevice(id, d->name, _orNotAvailable(d->hwVersion), _orNotAvailable(d->fwVersion));
-  _frameClose();
+  d->restartPending = true;
+  _writeDeviceNotices();
+}
+
+void Blaeck::_writeDeviceNotices()
+{
+  // Like the board's restart notice: held back until a host can receive frames.
+  if (!_mayWriteFrame())
+    return;
+  for (byte i = 0; i < _deviceCount; ++i)
+  {
+    DeviceEntry &d = _devices[i];
+    if (d.restartPending)
+    {
+      if (!_writeDeviceNotice(i + 1, DEVICE_EVENT_RESTARTED))
+        return;
+      d.restartPending = false;
+    }
+    // Only the latest state counts: missing and back again before a host could hear of it
+    // is no change.
+    if (d.missing != d.reportedMissing)
+    {
+      if (!_writeDeviceNotice(i + 1, d.missing ? DEVICE_EVENT_NOT_RESPONDING : DEVICE_EVENT_RESPONDING))
+        return;
+      d.reportedMissing = d.missing;
+    }
+  }
+}
+
+bool Blaeck::_writeDeviceNotice(byte deviceId, byte event)
+{
+  // Layout: Device Notification (0xC1) in the protocol spec.
+  if (!_frameOpen(0xC1, 0))
+    return false;
+  _emitByte(deviceId);
+  _emitByte(event);
+  return _frameClose();
+}
+
+void Blaeck::_writeSignalNow(int signalIndex, unsigned long long timestamp)
+{
+  if (signalIndex >= 0 && signalIndex < _signalIndex)
+  {
+    DeviceEntry *d = _deviceEntry(Signals[signalIndex].DeviceId);
+    if (d != nullptr && d->missing)
+    {
+      // Said once per missing phase, so a sketch that keeps writing doesn't flood the stream.
+      if (!d->dropNoted && _debugStream != nullptr)
+      {
+        _debugStream->print(F("write() dropped for '"));
+        _emitSignalName(Signals[signalIndex], NAME_SINK_DEBUG);
+        _debugStream->print(F("': '"));
+        BlaeckString(d->name).printTo(*_debugStream);
+        _debugStream->println(F("' is marked missing (once until markPresent())."));
+      }
+      d->dropNoted = true;
+      return;
+    }
+  }
+  this->writeDataFrame(0, signalIndex, signalIndex, false, timestamp);
+}
+
+void Blaeck::_writeDeviceSignals(byte deviceId, unsigned long long timestamp)
+{
+  if (_signalIndex == 0)
+    return;
+  for (int i = 0; i < _signalIndex; ++i)
+    Signals[i].Selected = Signals[i].DeviceId == deviceId;
+  this->writeDataFrame(0, 0, _signalIndex - 1, true, timestamp);
 }
 
 BlaeckDeviceRef &BlaeckDeviceRef::withHWVersion(BlaeckString hwVersion)
@@ -576,6 +646,18 @@ void BlaeckDeviceRef::writeRestarted()
 {
   if (_core != nullptr)
     _core->_writeDeviceRestarted(_deviceId);
+}
+
+void BlaeckDeviceRef::writeAll()
+{
+  if (_core != nullptr)
+    _core->_writeDeviceSignals(_deviceId, _core->getTimeStamp());
+}
+
+void BlaeckDeviceRef::writeAll(unsigned long long timestamp)
+{
+  if (_core != nullptr)
+    _core->_writeDeviceSignals(_deviceId, timestamp);
 }
 
 #if BLAECK_ENABLE_STATE_CHANNELS
@@ -1238,6 +1320,10 @@ void Blaeck::_emitNameByte(byte c, NameSink sink)
   case NAME_SINK_FRAME:
     _emitByte(c);
     break;
+  case NAME_SINK_DEBUG:
+    if (_debugStream != nullptr)
+      _debugStream->write(c);
+    break;
   default:
     _schemaHashFeedByte(c);
     break;
@@ -1373,6 +1459,7 @@ int Blaeck::_findSignalIndex(byte deviceId, const __FlashStringHelper *signalNam
 void Blaeck::read()
 {
   this->writeRestarted();
+  _writeDeviceNotices();
 
   if (_receiveCommand())
   {
@@ -1509,8 +1596,8 @@ int Blaeck::_registerCommand(byte deviceId, const char *command, BlaeckCommandHa
     _rejectedCommandCount++;
     return -1;
   }
-  // '#' and '@' start a received command's prefix, so a name starting with one could never be
-  // matched.
+  // '#' starts a received command's message-id prefix, and '@' is reserved for a prefix, so a
+  // name starting with one could never be matched.
   if (command[0] == '#' || command[0] == '@')
   {
     if (_debugStream != nullptr)
@@ -2254,7 +2341,6 @@ void Blaeck::_parseCommandTokens(const char *raw)
   _parsedCommand[0] = '\0';
   _parsedParamCount = 0;
   _parsedPrefixMsgId = 0;
-  _parsedRoutingDevice = 0;
   _parsedPrefixLen = 0;
   // Characters were lost while receiving, so this is a fragment. Reset here, before the
   // empty-command check, so an empty command doesn't keep the previous verdict.
@@ -2275,14 +2361,10 @@ void Blaeck::_parseCommandTokens(const char *raw)
   // Split on commas by hand, so empty fields between commas are kept.
   char *p = _parsedTokenBuffer;
 
-  // The prefix: zero or more items before the command name, each starting with a sigil and
-  // ending with ':', in any order. '#' is the message id; '@' routes the command to a device
-  // from addDevice(), by its slave ID. Anything else, including a malformed item or an '@' for
-  // a device this board does not have, stays part of the name, so the command doesn't match
-  // and is answered as unknown.
-  while (*p == '#' || *p == '@')
+  // The prefix: the message id, "#<id>:". A malformed one stays part of the name, so the
+  // command doesn't match and is answered as unknown.
+  while (*p == '#')
   {
-    const bool routing = (*p == '@');
     const char *scan = p + 1;
     uint32_t id = 0;
     byte digits = 0;
@@ -2294,19 +2376,10 @@ void Blaeck::_parseCommandTokens(const char *raw)
     }
     if (digits == 0 || *scan != ':')
       break;
-    if (routing)
-    {
-      if (id > 255UL || _deviceEntry((byte)id) == nullptr)
-        break;
-      _parsedRoutingDevice = (byte)id;
-    }
-    else
-    {
-      // 0 means no id, so "#0:" is malformed.
-      if (id == 0 || id > 65535UL)
-        break;
-      _parsedPrefixMsgId = (uint16_t)id;
-    }
+    // 0 means no id, so "#0:" is malformed.
+    if (id == 0 || id > 65535UL)
+      break;
+    _parsedPrefixMsgId = (uint16_t)id;
     p = (char *)scan + 1;
   }
   // The ack hashes the command after the prefix, as its sender wrote it.
@@ -2374,15 +2447,17 @@ void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
   {
     if (_commandHandlers[i].inUse &&
         _commandHandlers[i].handler != nullptr &&
-        strcmp(_commandHandlers[i].command, _parsedCommand) == 0 &&
-        // A command routed with '@' runs only if it belongs to that device.
-        (_parsedRoutingDevice == 0 || _commandHandlers[i].deviceId == _parsedRoutingDevice))
+        strcmp(_commandHandlers[i].command, _parsedCommand) == 0)
     {
       matched = true;
+      // Refused for a missing device, so its handler doesn't forward to nothing.
+      if (_deviceMissing(_commandHandlers[i].deviceId))
+        ackReason = BLAECK_ACK_DEVICE_NOT_RESPONDING;
+      else
 #if BLAECK_ENABLE_COMMAND_META
-      ackReason = _validateTypedCommand(i);
+        ackReason = _validateTypedCommand(i);
 #else
-      ackReason = BLAECK_ACK_OK;
+        ackReason = BLAECK_ACK_OK;
 #endif
       if (ackReason == BLAECK_ACK_OK)
       {
@@ -4249,52 +4324,52 @@ void BlaeckDeviceBase::write(int signalIndex, double value)
 void BlaeckDeviceBase::write(int signalIndex, bool value, unsigned long long timestamp)
 {
   if (_core != nullptr && _core->_storeSigned(signalIndex, value))
-    _core->writeDataFrame(0, signalIndex, signalIndex, false, timestamp);
+    _core->_writeSignalNow(signalIndex, timestamp);
 }
 void BlaeckDeviceBase::write(int signalIndex, byte value, unsigned long long timestamp)
 {
   if (_core != nullptr && _core->_storeUnsigned(signalIndex, value))
-    _core->writeDataFrame(0, signalIndex, signalIndex, false, timestamp);
+    _core->_writeSignalNow(signalIndex, timestamp);
 }
 void BlaeckDeviceBase::write(int signalIndex, short value, unsigned long long timestamp)
 {
   if (_core != nullptr && _core->_storeSigned(signalIndex, value))
-    _core->writeDataFrame(0, signalIndex, signalIndex, false, timestamp);
+    _core->_writeSignalNow(signalIndex, timestamp);
 }
 void BlaeckDeviceBase::write(int signalIndex, unsigned short value, unsigned long long timestamp)
 {
   if (_core != nullptr && _core->_storeUnsigned(signalIndex, value))
-    _core->writeDataFrame(0, signalIndex, signalIndex, false, timestamp);
+    _core->_writeSignalNow(signalIndex, timestamp);
 }
 void BlaeckDeviceBase::write(int signalIndex, int value, unsigned long long timestamp)
 {
   if (_core != nullptr && _core->_storeSigned(signalIndex, value))
-    _core->writeDataFrame(0, signalIndex, signalIndex, false, timestamp);
+    _core->_writeSignalNow(signalIndex, timestamp);
 }
 void BlaeckDeviceBase::write(int signalIndex, unsigned int value, unsigned long long timestamp)
 {
   if (_core != nullptr && _core->_storeUnsigned(signalIndex, value))
-    _core->writeDataFrame(0, signalIndex, signalIndex, false, timestamp);
+    _core->_writeSignalNow(signalIndex, timestamp);
 }
 void BlaeckDeviceBase::write(int signalIndex, long value, unsigned long long timestamp)
 {
   if (_core != nullptr && _core->_storeSigned(signalIndex, value))
-    _core->writeDataFrame(0, signalIndex, signalIndex, false, timestamp);
+    _core->_writeSignalNow(signalIndex, timestamp);
 }
 void BlaeckDeviceBase::write(int signalIndex, unsigned long value, unsigned long long timestamp)
 {
   if (_core != nullptr && _core->_storeUnsigned(signalIndex, value))
-    _core->writeDataFrame(0, signalIndex, signalIndex, false, timestamp);
+    _core->_writeSignalNow(signalIndex, timestamp);
 }
 void BlaeckDeviceBase::write(int signalIndex, float value, unsigned long long timestamp)
 {
   if (_core != nullptr && _core->_storeFloating(signalIndex, value))
-    _core->writeDataFrame(0, signalIndex, signalIndex, false, timestamp);
+    _core->_writeSignalNow(signalIndex, timestamp);
 }
 void BlaeckDeviceBase::write(int signalIndex, double value, unsigned long long timestamp)
 {
   if (_core != nullptr && _core->_storeFloating(signalIndex, value))
-    _core->writeDataFrame(0, signalIndex, signalIndex, false, timestamp);
+    _core->_writeSignalNow(signalIndex, timestamp);
 }
 
 void BlaeckDeviceBase::write(const char *signalName, const char *value)
@@ -4348,7 +4423,7 @@ void Blaeck::_writeSignalText(int signalIndex, const void *value, bool inFlash, 
     {
       Signals[signalIndex].Address = const_cast<void *>(value);
       Signals[signalIndex].TextInFlash = inFlash;
-      this->writeDataFrame(0, signalIndex, signalIndex, false, timestamp);
+      _writeSignalNow(signalIndex, timestamp);
     }
   }
 }
@@ -4573,14 +4648,18 @@ bool Blaeck::_frameClose()
   return complete;
 }
 
-void Blaeck::_emitDevice(byte deviceId, BlaeckString name, BlaeckString hw, BlaeckString fw)
+void Blaeck::_emitDeviceRecord(byte deviceId, byte state, BlaeckString name, BlaeckString hw, BlaeckString fw)
 {
-  _emitOwner(deviceId);
+  _emitByte(deviceId);
+  // Parent: the board, for the board itself and for every device (one level only).
+  _emitByte(0);
+  // DeviceFlags: no optional fields yet.
+  _emitByte(0);
+  _emitByte(0);
+  _emitByte(state);
   _emitFlashStr0(name);
   _emitFlashStr0(hw);
   _emitFlashStr0(fw);
-  _emitStr0(_libraryVersion());
-  _emitStr0(_libraryName());
 }
 
 // ----- Frame writers -----
@@ -4600,9 +4679,10 @@ void Blaeck::writeRestarted(unsigned long msg_id)
   {
     _writeRestartedAlreadyDone = true;
 
-    if (!_frameOpen(0xC0, msg_id))
+    if (!_frameOpen(0xC1, msg_id))
       return;
-    _emitDevice(0, _deviceName(), DeviceHWVersion, DeviceFWVersion);
+    _emitByte(0);
+    _emitByte(DEVICE_EVENT_RESTARTED);
     _frameClose();
 
     // Send every catalog after the notice, so a host that stayed connected sees what this run
@@ -4634,15 +4714,31 @@ void Blaeck::writeDevices(unsigned long msg_id)
 
 void Blaeck::writeDevicesFrame(unsigned long msg_id)
 {
-  if (!_frameOpen(0xB3, msg_id))
+  // Layout: Device List (0xB7) in the protocol spec.
+  if (!_frameOpen(0xB7, msg_id))
     return;
-  _emitDevice(0, _deviceName(), DeviceHWVersion, DeviceFWVersion);
+  _emitStr0(_libraryName());
+  _emitStr0(_libraryVersion());
+  _emitByte((byte)(_deviceCount + 1));
+  _emitDeviceRecord(0, _writeRestartedAlreadyDone ? 0 : DEVICE_STATE_RESTARTED, _deviceName(),
+                    DeviceHWVersion, DeviceFWVersion);
   for (byte i = 0; i < _deviceCount; ++i)
   {
     const DeviceEntry &d = _devices[i];
-    _emitDevice(i + 1, d.name, _orNotAvailable(d.hwVersion), _orNotAvailable(d.fwVersion));
+    const byte state = (byte)((d.missing ? DEVICE_STATE_NOT_RESPONDING : 0) |
+                              (d.restartPending ? DEVICE_STATE_RESTARTED : 0));
+    _emitDeviceRecord(i + 1, state, d.name, _orNotAvailable(d.hwVersion), _orNotAvailable(d.fwVersion));
   }
-  _frameClose();
+  if (!_frameClose())
+    return;
+  // The list told the host every state, so no notice for it is still due. The board's
+  // restart counts as reported too; a host that asked for the list has no catalogs to drop.
+  _writeRestartedAlreadyDone = true;
+  for (byte i = 0; i < _deviceCount; ++i)
+  {
+    _devices[i].restartPending = false;
+    _devices[i].reportedMissing = _devices[i].missing;
+  }
 }
 
 void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int signalIndex_end, bool selectedOnly, unsigned long long timestamp, bool intervalReport)
@@ -4659,18 +4755,15 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
     return; // No valid range
 
   bool any = false;
-  // The first signal left out because its device is missing, reported in the status.
-  int skippedIndex = -1;
   for (int i = signalIndex_start; i <= signalIndex_end; ++i)
   {
     Signal &s = Signals[i];
     if (!selectedOnly)
       s.Selected = true;
+    // A missing device's signals are left out; the host learned of it from C1 or B7.
     if (s.Selected && _deviceMissing(s.DeviceId))
     {
       s.Selected = false;
-      if (skippedIndex < 0)
-        skippedIndex = i;
       continue;
     }
     if (s.Selected)
@@ -4751,18 +4844,9 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
 
   }
 
-  // Status 0x01, Device Not Responding: the first skipped signal and its device's slave ID.
-  byte statusByte = 0;
-  byte statusPayload[4] = {0, 0, 0, 0};
-  if (skippedIndex >= 0)
-  {
-    statusByte = 0x01;
-    statusPayload[1] = (byte)(skippedIndex & 0xFF);
-    statusPayload[2] = (byte)((skippedIndex >> 8) & 0xFF);
-    statusPayload[3] = Signals[skippedIndex].DeviceId;
-  }
-  _emitByte(statusByte);
-  _emitBytes(statusPayload, 4);
+  // Status byte and payload: always normal (0) from blaeck.
+  const byte status[5] = {0, 0, 0, 0, 0};
+  _emitBytes(status, 5);
 
   uint32_t crc_value = _frameCrcEnd();
   _emitBytes((byte *)&crc_value, 4);

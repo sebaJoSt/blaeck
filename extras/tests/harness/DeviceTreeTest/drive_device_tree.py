@@ -1,10 +1,10 @@
 """Check devices from addDevice() on real hardware: python drive_device_tree.py SERIAL_PORT.
 
 Upload DeviceTreeTest first and close Loggbok/serial monitors. Only a Mega and USB are
-needed: the pump controller is simulated in the sketch. Checks the device list, which
-device each signal, command and channel belongs to, commands routed to the pump with
-'@' as Loggbok sends them, the data frames while the pump is
-missing and after it returns, and the restart notice and event for a pump restart.
+needed: the pump controller is simulated in the sketch. Checks the device list (B7), which
+device each signal, command and channel belongs to, the pump's commands sent by name, the
+notices (C1), data frames and refused commands while the pump is missing and after it returns,
+and the restart notice and event for a pump restart.
 Failures exit nonzero.
 """
 import argparse
@@ -86,8 +86,18 @@ def frames(items, key):
     return [item for item in items if item[0] == "frame" and item[1] == key]
 
 
-def device_record(owner, name, hw, fw):
-    return owner + b"\0".join(s.encode() for s in (name, hw, fw, VERSION, "blaeck")) + b"\0"
+def device_record(device_id, state, name, hw, fw):
+    """One B7 record: ID, parent 0, flags 0, state, then the three names."""
+    return bytes([device_id, 0, 0, 0, state]) + b"\0".join(s.encode() for s in (name, hw, fw)) + b"\0"
+
+
+def device_list(*records):
+    return b"blaeck\0" + VERSION.encode() + b"\0" + bytes([len(records)]) + b"".join(records)
+
+
+def notice(device_id, event):
+    """A C1 payload: 1 restarted, 2 not responding, 3 responding again."""
+    return bytes([device_id, event])
 
 
 def owner_before(payload, name, gap=0):
@@ -136,21 +146,20 @@ def run(port):
 
     # Opening the port resets a Mega; the board then announces itself.
     try:
-        items = link.collect(frame_with(0xC0), timeout=8)
-        restart = frames(items, 0xC0)[-1][2]
-        check("board restart notice names the master",
-              restart == device_record(BOARD, "DeviceTreeTest", "Arduino Mega 2560", "1.0"), restart)
+        items = link.collect(frame_with(0xC1), timeout=8)
+        restart = frames(items, 0xC1)[-1][2]
+        check("board restart notice for device 0", restart == notice(0, 1), restart)
     except TimeoutError:
         print("NOTE no restart notice seen (the board did not reset on open); continuing")
     time.sleep(0.5)
     port.reset_input_buffer()
     link.buffer.clear()
 
-    items = link.send("<BLAECK.GET_DEVICES>", frame_with(0xB3))
-    devices = frames(items, 0xB3)[-1][2]
-    check("device list: board as master, then the pump as slave 1",
-          devices == device_record(BOARD, "DeviceTreeTest", "Arduino Mega 2560", "1.0")
-          + device_record(PUMP, "Pump controller", "Simulated", "1.0"), devices)
+    items = link.send("<BLAECK.GET_DEVICES>", frame_with(0xB7))
+    devices = frames(items, 0xB7)[-1][2]
+    check("device list: the board, then the pump as device 1, both fine",
+          devices == device_list(device_record(0, 0, "DeviceTreeTest", "Arduino Mega 2560", "1.0"),
+                                 device_record(1, 0, "Pump controller", "Simulated", "1.0")), devices)
 
     symbols = frames(link.send("<BLAECK.WRITE_SYMBOLS>", frame_with(0xB0)), 0xB0)[-1][2]
     check("BoardValue belongs to the board", owner_before(symbols, "BoardValue") == BOARD)
@@ -175,31 +184,39 @@ def run(port):
           sorted(values) == [0, 1, 2] and status == 0 and payload == bytes(4), (values, status, payload))
     check("the forwarded speed reached the pump", abs(values.get(1, -1) - 4.0) < 1e-6, values)
 
-    # How Loggbok sends a command of the pump: routed with '@' and the pump's slave ID.
-    items = link.send("<@1:#5:SET_PUMP_SPEED,30>", ack_for(5))
+    # How Loggbok sends a command of the pump: by name, like the board's.
+    items = link.send("<#5:SET_PUMP_SPEED,30>", ack_for(5))
     ack = items[-1][2]
-    check("a routed pump command runs and is acknowledged",
+    check("a pump command runs and is acknowledged",
           ("text", "DONE SET_PUMP_SPEED") in items and ack[8] == 0, ack[8:10])
-    items = link.send("<@1:#6:POLL>", ack_for(6))
-    check("a board command routed to the pump is refused",
-          ("text", "DONE POLL") not in items and items[-1][2][8] == 1, items[-1][2][8:10])
+    items = link.send("<@1:POLL>", ack_for(0))
+    check("'@' is no prefix: the command is unknown",
+          ("text", "DONE POLL") not in items and items[-1][2][8:10] == bytes([1, 1]), items[-1][2][8:10])
     items = link.send("<POLL>", done("POLL"))
     values, _, _ = decode_data(frames(items, 0xD2)[-1][3])
-    check("the routed speed reached the pump", abs(values.get(1, -1) - 3.0) < 1e-6, values)
+    check("the speed reached the pump", abs(values.get(1, -1) - 3.0) < 1e-6, values)
 
     link.send("<SIM_SILENT,1>", done("SIM_SILENT"))
     items = link.send("<POLL>", done("POLL"))
     values, status, payload = decode_data(frames(items, 0xD2)[-1][3])
-    check("pump missing: only BoardValue is sent", sorted(values) == [0], values)
-    check("pump missing: status 0x01 names Flow and slave 1",
-          status == 0x01 and payload == bytes([0, 1, 0, 1]), (status, payload))
+    check("pump missing: a notice for device 1", notice(1, 2) in [f[2] for f in frames(items, 0xC1)])
+    check("pump missing: only BoardValue is sent, status normal",
+          sorted(values) == [0] and status == 0 and payload == bytes(4), (values, status, payload))
     link_states = frames(items, 0x95)
     check("pump missing: PumpLink says so, for the pump",
           bool(link_states) and link_states[-1][2][:2] == PUMP and b"no answer" in link_states[-1][2])
+    items = link.send("<#7:SET_PUMP_SPEED,20>", ack_for(7))
+    check("pump missing: its command is refused, reason 8",
+          ("text", "DONE SET_PUMP_SPEED") not in items and items[-1][2][8:10] == bytes([1, 8]),
+          items[-1][2][8:10])
+    devices = frames(link.send("<BLAECK.GET_DEVICES>", frame_with(0xB7)), 0xB7)[-1][2]
+    check("pump missing: the device list says so",
+          device_record(1, 1, "Pump controller", "Simulated", "1.0") in devices, devices)
 
     link.send("<SIM_SILENT,0>", done("SIM_SILENT"))
     items = link.send("<POLL>", done("POLL"))
     values, status, _ = decode_data(frames(items, 0xD2)[-1][3])
+    check("pump back: a notice for device 1", notice(1, 3) in [f[2] for f in frames(items, 0xC1)])
     check("pump back: all three signals, status 0", sorted(values) == [0, 1, 2] and status == 0,
           (values, status))
     link_states = frames(items, 0x95)
@@ -207,10 +224,9 @@ def run(port):
 
     link.send("<SIM_RESTART>", done("SIM_RESTART"))
     items = link.send("<POLL>", done("POLL"))
-    restarts = frames(items, 0xC0)
+    restarts = frames(items, 0xC1)
     check("pump restart: a restart notice for the pump only",
-          len(restarts) == 1 and restarts[0][2] == device_record(PUMP, "Pump controller", "Simulated", "1.0"),
-          [r[2] for r in restarts])
+          [r[2] for r in restarts] == [notice(1, 1)], [r[2] for r in restarts])
     alarms = frames(items, 0x85)
     check("pump restart: the event comes from the pump", bool(alarms) and alarms[-1][2][:2] == PUMP)
 

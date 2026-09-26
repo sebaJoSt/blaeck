@@ -169,7 +169,9 @@ a laptop going to sleep - is noticed only when the network stack gives up on it.
 A host that reconnects starts as a terminal again, and receives nothing until it sends a
 `BLAECK.` command. Loggbok does that as soon as it reconnects, so data continues, and the
 device's interval and pause are unchanged. If the board restarted while the connection was
-down, the restart notice goes to the first host that connects afterwards.
+down, the first host that connects afterwards learns of it once, from the device list it asks
+for or from a restart notice. Devices from `addDevice()` that went missing, came back or
+restarted meanwhile are reported the same way.
 
 `setClientConnectedCallback()` and `setClientDisconnectedCallback()` receive the connection's
 slot, starting at 0. They are for the sketch's own use, such as a status LED.

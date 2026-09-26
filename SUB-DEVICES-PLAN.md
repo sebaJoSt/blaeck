@@ -11,7 +11,7 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
 ## What the branch has
 
 - `device.addDevice(name)` returns a `BlaeckDeviceRef`, with `withHWVersion()` and
-  `withFWVersion()` (default "n/a"). Slave IDs are assigned in order, 1-255. An empty or
+  `withFWVersion()` (default "n/a"). Device IDs are assigned in order, 1-254. An empty or
   duplicate name, or a full table, is rejected. `withDevices(n)` on the begin() chain.
 - `BlaeckDeviceBase` (steps 1 and 2 done): `Blaeck` and `BlaeckDeviceRef` both inherit the
   registration calls (`addSignal`, `addStateChannel`, `addEventChannel`, `addEventType`,
@@ -19,23 +19,27 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   `writeCommandState`, `findSignalIndex`). A sub-device registers through its handle,
   `pump.addSignal(...)`; `inDevice()` is gone. Names are per device (see Decided). A default
   or rejected handle has no board and ignores every call; it counts nothing as rejected.
-- Frames: B3 device list and C0 restart report the board as master (single without devices) and
-  each sub-device as a slave. B0, A0, 90, 95, 80 and 85 carry the owner's ownership bytes.
-  Without sub-devices every frame is byte-identical to before.
-- `markMissing()` / `markPresent()`: a missing sub-device's signals are left out of data frames,
-  with status 0x01 and payload `[0, first skipped index lo, hi, slave ID]`. On return, its
-  changed-only signals are sent again.
-- `writeRestarted()` on the handle sends a C0 for that sub-device only.
-- `@<slaveID>:` command routing, as Loggbok sends it for a sub-device's command
-  (`<@1:#12:SET_PUMP_SPEED,40>`). Dropped (see Decided): remove the parsing, its tests and the
-  driver checks, and the paragraph in docs/devices.md.
-- Tests: native tests (frames byte by byte, rejections, missing/present, routing; both checked
-  with deliberate mutations). `extras/tests/harness/DeviceTreeTest` for a Mega with a simulated
-  second board and `drive_device_tree.py` (19 checks).
+- Frames (step 3 done): B7 device list (section 2) answers GET_DEVICES, and C1 notices replace
+  C0, for the board's restart (DeviceID 0) and for each sub-device's restart and state changes.
+  B3 and C0 are gone. B0, A0, 90, 95, 80 and 85 still carry the owner's ownership bytes
+  (single/master/slave plus ID).
+- `markMissing()` / `markPresent()`: a C1 on a real change, at once or once a host can
+  receive frames (only the latest state counts). A missing sub-device's signals are left out
+  of data frames; the status stays 0. On return, its changed-only signals are sent again.
+  While missing, `write()` for its signals is dropped with one debug note per missing phase,
+  and its commands are refused with `BLAECK_ACK_DEVICE_NOT_RESPONDING` (8).
+- `writeRestarted()` on the handle sends a C1 "restarted" for that sub-device only; `pump.writeAll()`
+  sends that sub-device's signals only (no before-write callback).
+- No `@` parsing: a command is found by its name; `@` stays refused as a command name's first
+  character.
+- Tests: native tests (B7 and C1 byte by byte, notices held back until a TCP host sends its
+  first command, rejections, missing/present, refused commands, dropped-write note,
+  per-device writeAll, 254-device limit). `extras/tests/harness/DeviceTreeTest` for a Mega with
+  a simulated second board and `drive_device_tree.py` (23 checks).
 - `examples/more/SubDevices/MainBoard` and `PumpBoard`: UART, byte-based message with checksum,
   3 missed replies = missing, restart detection by uptime.
 - `docs/devices.md`, README rows, measured AVR sizes (signal 12, command 66, state channel 35,
-  event channel 13, device 10 bytes).
+  event channel 13, device 13 bytes; sizeof(Blaeck) 508 on a Mega, 348 on an Uno).
 
 ## How it was verified
 
@@ -43,8 +47,8 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
 - The real DeviceTreeTest sketch compiled natively with Serial on a pseudo-terminal, driven by
   the real Python driver: all checks pass, and a broken build makes the driver fail.
 - The two example sketches run natively as two processes linked by a pseudo-terminal, with a
-  Python host: device list, routed speed command, "unplugged" pump (signals gone, 0x01, "no
-  answer"), plugged back in (one restart notice for the pump, values back).
+  Python host: B7 device list, speed command by name, "unplugged" pump (C1 not responding,
+  signals gone, "no answer"), plugged back in (C1 restarted and responding again, values back).
 - Not yet: a real Mega, and Loggbok end to end (tree, MQTT/Home Assistant, database columns).
 
 ## Decided
@@ -195,7 +199,9 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   4. hardware tests (Mega harness, Loggbok end to end), then release blaeck 7.0 and Loggbok
      together.
 
-The code on this branch still sends B3, C0 and status 0x01; it has to follow this plan.
+Step 1 in blaeck is done except the example's `reportPumpState()`. Until Loggbok reads B7
+and C1, this branch does not work with any released Loggbok, so it is merged only together
+with Loggbok's side.
 
 ## Open questions
 
@@ -248,9 +254,9 @@ entity; C++ `Device` class, `EntityBase::set_device_()`; the parent is the "main
 payload:
   LibName\0                    e.g. "blaeck"                       once per frame
   LibVersion\0                 e.g. "7.0.0"
-  DeviceCount (1)              1..256: the board plus its sub-devices
+  DeviceCount (1)              1..255: the board plus its sub-devices
   per device, board first:
-    DeviceID (1)               0 = board; 1..255 = sub-devices, as in the catalogs   identity
+    DeviceID (1)               0 = board; 1..254 = sub-devices, as in the catalogs   identity
     ParentID (1)               board: 0; sub-devices: 0 (the board) for now         identity
     DeviceFlags (2, LE)        which optional fields follow                          identity
     DeviceState (1)            bit 0 NotResponding, bit 1 Restarted                  snapshot
@@ -286,7 +292,7 @@ payload:
 
 ```
 C1 Device Notification
-  DeviceID (1)        0 = the board, 1..255 = sub-devices; same ID as in B7 and the catalogs
+  DeviceID (1)        0 = the board, 1..254 = sub-devices; same ID as in B7 and the catalogs
   Event (1)           0x01 restarted, 0x02 not responding, 0x03 responding again
                       (0x00 and 0x04-0xFF reserved)
 ```

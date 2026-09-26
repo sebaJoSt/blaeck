@@ -83,6 +83,8 @@ bool ledState = false;
 BlaeckDeviceRef pump;
 float pumpFlow = 0.0f;
 bool pumpAnswered = true;
+// Asks the pump for its flow over the sketch's link; false when it did not answer.
+inline bool readFlowFromPump(float &flow) { flow = 1.0f; return true; }
 unsigned long lastPumpUptime = 0;
 // What the sketch last read from the pump, for the writeRestarted() block.
 struct

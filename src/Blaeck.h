@@ -427,7 +427,8 @@ enum BlaeckCommandAckReason
   BLAECK_ACK_BAD_SELECT = 4,    // not one of the select's options
   BLAECK_ACK_TOO_LONG = 5,      // text longer than its declared maximum
   BLAECK_ACK_MISSING_VALUE = 6, // a typed command without its value
-  BLAECK_ACK_TRUNCATED = 7      // too long or too many parameters to receive whole
+  BLAECK_ACK_TRUNCATED = 7,     // too long or too many parameters to receive whole
+  BLAECK_ACK_DEVICE_NOT_RESPONDING = 8 // its device from addDevice() is marked missing
 };
 
 // Warns when a call's return value is ignored. onNumberCommand() and onSelectCommand() use it,
@@ -572,9 +573,9 @@ public:
   /*!
     @brief   Sets how many devices addDevice() can add.
 
-    Each device takes 10 bytes of SRAM on AVR, plus any RAM strings it copies.
+    Each device takes 13 bytes of SRAM on AVR, plus any RAM strings it copies.
 
-    @param   count  Up to 255.
+    @param   count  Up to 254.
     @return  The same handle, for chaining.
 
     @code
@@ -784,6 +785,12 @@ struct DeviceEntry
   detail::StoredString hwVersion;
   detail::StoredString fwVersion;
   bool missing = false;
+  // What a host was last told, in C1 or B7; a difference is sent as C1.
+  bool reportedMissing = false;
+  // Set by writeRestarted(), cleared once C1 or B7 has told a host.
+  bool restartPending = false;
+  // A write() dropped while missing was reported on the debug stream; markPresent() resets it.
+  bool dropNoted = false;
 };
 
 struct EventTypeEntry
@@ -3492,9 +3499,10 @@ public:
   /*!
     @brief   Reports that the device stopped answering.
 
-    Until markPresent(), its signals are left out of data frames, and each data frame
-    that leaves one out says so in its status. The sketch decides when a device counts
-    as missing; calling it again changes nothing.
+    A host is told at once, or as soon as one can receive frames, so it can show the
+    device as unavailable. Until markPresent(), the device's signals are left out of
+    data frames, write() calls for them are dropped, and its commands are refused. The
+    sketch decides when a device counts as missing; calling it again changes nothing.
 
     @code
       if (!pumpAnswered)
@@ -3506,9 +3514,11 @@ public:
   /*!
     @brief   Reports that the device answers again.
 
-    Its signals return to data frames. Each signal that reports on change is sent again
-    at the next chance, since the host lost track of it. Calling it on a device that
-    was not missing changes nothing.
+    A host is told, and the device's signals return to data frames. Each signal that
+    reports on change is sent again at the next chance, since the host lost track of it.
+    Values the sketch pushes itself, such as state channels, are not resent; send them
+    again if they may have changed. Calling it on a device that was not missing changes
+    nothing.
 
     @code
       if (pumpAnswered)
@@ -3532,9 +3542,10 @@ public:
   /*!
     @brief   Tells a host that the device has restarted.
 
-    Sends a restart notice with the device's name, so a host can report it. The board
-    itself is unaffected. The sketch has to notice the restart, for example from an
-    uptime counter the device reports.
+    Sends a restart notice for the device, at once or as soon as a host can receive
+    frames, so a host can report it. The board itself is unaffected. The sketch has to
+    notice the restart, for example from an uptime counter the device reports, and send
+    the device's current values again, since they may be back at their defaults.
 
     @code
       if (reading.uptimeMs < lastPumpUptime)
@@ -3542,6 +3553,31 @@ public:
     @endcode
   */
   void writeRestarted();
+
+  /*!
+    @brief   Sends every signal of this device now, regardless of the interval.
+
+    Use it when a reading from the device arrives, so the frame carries the time of that
+    reading and only the device's signals. Nothing is sent while the device is marked
+    missing. The before-write callback does not run.
+
+    @code
+      if (readFlowFromPump(pumpFlow))
+        pump.writeAll();
+    @endcode
+  */
+  void writeAll();
+
+  /*!
+    @brief   Sends every signal of this device now, with a timestamp from the caller.
+
+    @param   timestamp  In microseconds, in the epoch of the timestamp mode.
+
+    @code
+      pump.writeAll(1723600000000000ULL);
+    @endcode
+  */
+  void writeAll(unsigned long long timestamp);
 
 private:
   BlaeckDeviceRef(Blaeck *owner, byte id) : BlaeckDeviceBase(owner, id) {}
@@ -3707,7 +3743,8 @@ public:
     @brief   Tells a host that the device has just started.
 
     Sent once per boot, so a host knows to drop what it held from before. read()
-    sends it on its first call; call this only to send it earlier.
+    sends it on its first call; call this only to send it earlier. If a host asks for
+    the device list first, the list reports the restart instead, and this sends nothing.
 
     The state channels, event channels, commands and signal descriptions follow it,
     so a host that stayed connected gets them without asking.
@@ -3723,7 +3760,8 @@ public:
   /*!
     @brief   Sends the device's name and versions, followed by each device from addDevice().
 
-    The device sends this when a host sends <BLAECK.GET_DEVICES>.
+    Each entry also says whether the device is marked missing and whether a restart has
+    not been reported yet. The device sends this when a host sends <BLAECK.GET_DEVICES>.
 
     @code
       device.writeDevices();
@@ -4509,11 +4547,12 @@ protected:
 #endif
   // Signal names are read only through these helpers, which handle flash and RAM names.
   bool _signalNameEquals(const Signal &s, const char *name, bool nameInFlash = false) const;
-  // Where _emitSignalName() sends the bytes: into the frame or into the schema hash.
+  // Where _emitSignalName() sends the bytes: into the frame, the schema hash or the debug stream.
   enum NameSink : uint8_t
   {
     NAME_SINK_FRAME,
-    NAME_SINK_HASH
+    NAME_SINK_HASH,
+    NAME_SINK_DEBUG
   };
   void _emitSignalName(const Signal &s, NameSink sink);
   void _emitNameByte(byte c, NameSink sink);
@@ -4756,7 +4795,15 @@ protected:
   static const byte DEFAULT_DEVICES = 8;
 #endif
   // Slave IDs are one byte and 0 is the board itself.
-  static const byte MAX_DEVICES = 255;
+  // Device IDs 1-254: the device list counts the board and its devices in one byte.
+  static const byte MAX_DEVICES = 254;
+  // C1 Device Notification events.
+  static const byte DEVICE_EVENT_RESTARTED = 0x01;
+  static const byte DEVICE_EVENT_NOT_RESPONDING = 0x02;
+  static const byte DEVICE_EVENT_RESPONDING = 0x03;
+  // B7 DeviceState bits.
+  static const byte DEVICE_STATE_NOT_RESPONDING = 0x01;
+  static const byte DEVICE_STATE_RESTARTED = 0x02;
 
   // Fixed name and buffer lengths. They set the layout of each entry, so they can't change at
   // runtime.
@@ -4980,9 +5027,16 @@ protected:
     _sendBuffered();
     return !_frameWriteFailed;
   }
-  // One device record of a B3 or C0 frame: ownership bytes, names, then this library's
-  // version and name, which also stand for a device from addDevice().
-  void _emitDevice(byte deviceId, BlaeckString name, BlaeckString hw, BlaeckString fw);
+  // One device record of the B7 device list.
+  void _emitDeviceRecord(byte deviceId, byte state, BlaeckString name, BlaeckString hw, BlaeckString fw);
+  // Sends each device's pending C1 notices; stops at the first that can't be sent.
+  void _writeDeviceNotices();
+  // One C1 frame; false if it could not be sent.
+  bool _writeDeviceNotice(byte deviceId, byte event);
+  // write() of one signal: dropped, with a debug note, while its device is missing.
+  void _writeSignalNow(int signalIndex, unsigned long long timestamp);
+  // writeAll() for one device from addDevice().
+  void _writeDeviceSignals(byte deviceId, unsigned long long timestamp);
   // The master/slave and slave ID bytes for an entry of the given device. The board is
   // "single" without devices and "master" with them; a device is a "slave" with its ID.
   void _emitOwner(byte deviceId)
@@ -5107,8 +5161,6 @@ protected:
   bool _parsedTruncated = false;
   // The message id from the command's '#' prefix, echoed in its ack and reply. 0 if none.
   uint16_t _parsedPrefixMsgId = 0;
-  // The device an '@' prefix routed the command to, or 0 for the board itself.
-  byte _parsedRoutingDevice = 0;
   // Length of the prefix. The ack's hash covers what follows it.
   uint16_t _parsedPrefixLen = 0;
 #if BLAECK_ENABLE_STATE_CHANNELS
