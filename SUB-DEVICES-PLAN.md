@@ -51,6 +51,12 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   name path (`MqttTopics.ResolveDevicePath`), not from slave IDs, so IDs may follow
   registration order. Renaming a device makes it a new device in Home Assistant.
 - Transport is always the sketch's job (UART, CAN, I2C, RF, or none for local parts).
+- Names stay unique per board, not per sub-device, and keeping them unique is the sketch's
+  job (`withNameSuffix()` for repeated sensors). Considered and rejected on 2026-09-26: ESPHome
+  first enforced unique names across sub-devices (PR #9276), users hit it at once (issue
+  #10159, a "Battery" sensor on two UPS sub-devices), and 2025.8 made names unique per device
+  (PR #9355). For blaeck that would mean per-device name lookups and device-qualified
+  database columns in Loggbok; not worth it.
 - Not a full `Blaeck` per sub-device: `sizeof(Blaeck)` is 506 bytes on a Mega, 346 on an Uno.
 - Device list: a new B7 (see below), sent always. No capability negotiation: Loggbok asks
   GET_DEVICES first and must understand B7 and C1 before blaeck 7.0 is released.
