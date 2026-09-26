@@ -193,6 +193,9 @@ The code on this branch still sends B3, C0 and status 0x01; it has to follow thi
 
 ### 1. Registration API
 
+Decided and started: `BlaeckDeviceBase` (step 1 done: `Blaeck` inherits it, no behaviour
+change; the sub-device handle follows in step 2). Background:
+
 Proposed: a shared base class with all registration functions (`addSignal`, `addStateChannel`,
 `addEventChannel`, `addEventType`, `onCommand`, `onNumberCommand` ... `onTextCommand`) and the
 name lookups (`write`, `writeState`, `writeEvent`, `writeCommandState`, `findSignalIndex`),

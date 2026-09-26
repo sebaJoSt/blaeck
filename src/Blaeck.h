@@ -2072,6 +2072,7 @@ private:
   // Private, so only addSignal() can make a handle that names a signal.
   BlaeckNumericSignalRef(Blaeck *owner, int16_t index) : BlaeckSignalRefShared<BlaeckNumericSignalRef>(owner, index) {}
   friend class Blaeck;
+  friend class BlaeckDeviceBase;
 };
 
 // The handle for a text signal. It has no unit, state class or display precision, because a
@@ -2114,6 +2115,7 @@ public:
 private:
   BlaeckTextSignalRef(Blaeck *owner, int16_t index) : BlaeckSignalRefShared<BlaeckTextSignalRef>(owner, index) {}
   friend class Blaeck;
+  friend class BlaeckDeviceBase;
 };
 
 // The handle for a bool signal, which a host shows as an on/off sensor. Its device classes come
@@ -2132,6 +2134,7 @@ public:
 private:
   BlaeckBoolSignalRef(Blaeck *owner, int16_t index) : BlaeckSignalRefShared<BlaeckBoolSignalRef>(owner, index) {}
   friend class Blaeck;
+  friend class BlaeckDeviceBase;
 };
 
 // The shared part of the handles addStateChannel() returns. As with signals there is one per
@@ -2733,7 +2736,6 @@ public:
   }
 };
 
-
 class BlaeckEventChannelRef
 {
 public:
@@ -2815,199 +2817,11 @@ private:
   int16_t _index;
 };
 
-// The handle for a device from addDevice(): another board, or a part of this one, that a host
-// shows as its own device. The sketch fetches its values itself, over any link it likes, and
-// blaeck reports them under the device. A default or rejected handle ignores every call.
-class BlaeckDeviceRef
+// What the board declares and reports through: signals, commands, state channels and
+// events, and the writes that find them by name. Blaeck inherits it for the board.
+class BlaeckDeviceBase
 {
 public:
-  BlaeckDeviceRef() : _owner(nullptr), _id(0) {}
-
-  /*!
-    @brief   Sets the device's hardware name or revision. Defaults to "n/a".
-
-    @param   hwVersion  The name. RAM text is copied; an F() literal stays in flash.
-    @return  The same handle, for chaining.
-
-    @code
-      pump = device.addDevice(F("Pump controller")).withHWVersion(F("Arduino Nano"));
-    @endcode
-  */
-  BlaeckDeviceRef &withHWVersion(BlaeckString hwVersion);
-
-  /*!
-    @brief   Sets the device's firmware version. Defaults to "n/a".
-
-    @param   fwVersion  The version. RAM text is copied; an F() literal stays in flash.
-    @return  The same handle, for chaining.
-
-    @code
-      pump = device.addDevice(F("Pump controller")).withFWVersion(F("1.2"));
-    @endcode
-  */
-  BlaeckDeviceRef &withFWVersion(BlaeckString fwVersion);
-
-  /*!
-    @brief   Reports that the device stopped answering.
-
-    Until markPresent(), its signals are left out of data frames, and each data frame
-    that leaves one out says so in its status. The sketch decides when a device counts
-    as missing; calling it again changes nothing.
-
-    @code
-      if (!pumpAnswered)
-        pump.markMissing();
-    @endcode
-  */
-  void markMissing();
-
-  /*!
-    @brief   Reports that the device answers again.
-
-    Its signals return to data frames. Each signal that reports on change is sent again
-    at the next chance, since the host lost track of it. Calling it on a device that
-    was not missing changes nothing.
-
-    @code
-      if (pumpAnswered)
-        pump.markPresent();
-    @endcode
-  */
-  void markPresent();
-
-  /*!
-    @brief   Whether markMissing() is in effect.
-
-    @return  True between markMissing() and markPresent().
-
-    @code
-      if (pump.isMissing())
-        Serial.println(F("Pump controller is not answering."));
-    @endcode
-  */
-  bool isMissing() const;
-
-  /*!
-    @brief   Tells a host that the device has restarted.
-
-    Sends a restart notice with the device's name, so a host can report it. The board
-    itself is unaffected. The sketch has to notice the restart, for example from an
-    uptime counter the device reports.
-
-    @code
-      if (reading.uptimeMs < lastPumpUptime)
-        pump.writeRestarted();
-    @endcode
-  */
-  void writeRestarted();
-
-private:
-  BlaeckDeviceRef(Blaeck *owner, byte id) : _owner(owner), _id(id) {}
-
-  Blaeck *_owner;
-  // The slave ID in the protocol, 1 and up; 0 names no device.
-  byte _id;
-
-  friend class Blaeck;
-  friend class BlaeckSignalRefBase;
-  friend class BlaeckCommandRefBase;
-  friend class BlaeckStateRefBase;
-  friend class BlaeckEventChannelRef;
-};
-
-// Text to the attached Stream or connected TCP terminals.
-class BlaeckTerminal : public Print
-{
-public:
-  explicit BlaeckTerminal(Blaeck *owner) : _owner(owner) {}
-
-  /*!
-    @brief   Sends one byte to every connected terminal.
-
-    Everything printed to Terminal goes through this; a sketch rarely calls it directly.
-
-    @param   b  The byte.
-    @return  1.
-
-    @code
-      device.Terminal.write('.');
-    @endcode
-  */
-  size_t write(uint8_t b) override;
-
-  /*!
-    @brief   Sends bytes to every connected terminal.
-
-    @param   buffer  The bytes.
-    @param   size    How many.
-    @return  size.
-
-    @code
-      device.Terminal.write((const uint8_t *)"ok\n", 3);
-    @endcode
-  */
-  size_t write(const uint8_t *buffer, size_t size) override;
-
-  using Print::write;
-
-private:
-  Blaeck *_owner;
-};
-
-// Some hosts only record values and need nothing but signal names and types. Others also
-// build controls and displays, and only those use what withUnit(), withIcon() and the other
-// descriptive calls declare.
-class Blaeck
-{
-public:
-  Blaeck();
-  ~Blaeck();
-  Blaeck(const Blaeck &) = delete;
-  Blaeck &operator=(const Blaeck &) = delete;
-
-  /*!
-    @brief  The device's name, which a host lists it under. Defaults to "Unnamed".
-
-    An empty string or null is sent as "Unnamed" too.
-
-    @note   Only the pointer is kept. A string literal is fine; a name built at
-            runtime must be in a global buffer.
-
-    @code
-      device.DeviceName = "Waveform Generator Demo";
-    @endcode
-  */
-  const char *DeviceName = BLAECK_DEVICE_NAME_UNNAMED;
-
-  /*!
-    @brief  The hardware's name or revision. Defaults to the selected build target.
-
-    Recognised boards use a friendly name, otherwise the core's ARDUINO_BOARD string
-    is used if available, or "n/a". This identifies the target selected when compiling,
-    not the physical board or PCB revision. Assign your own value to describe custom
-    hardware; begin() does not overwrite it.
-
-    @note   Only the pointer is kept. A string literal is fine; a name built at
-            runtime must be in a global buffer.
-
-    @code
-      device.DeviceHWVersion = "Weather Station PCB v2";
-    @endcode
-  */
-  const char *DeviceHWVersion;
-
-  /*!
-    @brief  The firmware's version. Defaults to "n/a".
-
-    @note   Only the pointer is kept. A string literal is fine; a name built at
-            runtime must be in a global buffer.
-
-    @code
-      device.DeviceFWVersion = "1.0";
-    @endcode
-  */
-  const char *DeviceFWVersion = "n/a";
-
   // ----- Signals -----
 
   /*!
@@ -3086,161 +2900,6 @@ public:
   */
   BlaeckTextSignalRef addSignal(const __FlashStringHelper *signalName, const __FlashStringHelper *value);
 
-  /*!
-    @brief   Removes every signal, so a new set can be added.
-
-    The table keeps its size. The rejection counts are reset too.
-
-    @warning Call writeSymbols() once the new signals are added. Until then a host
-             files values under the old names.
-
-    @code
-      device.clearAllSignals();
-      device.addSignal(F("Temperature"), &Temperature);
-      device.writeSymbols();
-    @endcode
-  */
-  void clearAllSignals();
-
-  /*!
-    @brief   Reports whether any signal could not be added.
-
-    That happens when the table is full, or when there wasn't enough RAM to build it.
-
-    @return  True if at least one signal was dropped.
-
-    @code
-      if (device.hasRejectedSignals())
-        Serial.println(F("Raise withSignals() on the begin() chain."));
-    @endcode
-  */
-  bool hasRejectedSignals() const { return _signalRegistrationFailed; }
-
-  /*!
-    @brief   Returns how many signals could not be added.
-
-    @return  How many were dropped.
-
-    @code
-      Serial.println(device.getRejectedSignalCount());
-    @endcode
-  */
-  uint16_t getRejectedSignalCount() const { return _rejectedSignalCount; }
-
-  /*!
-    @brief   The number of signals added. Valid indexes run from 0 to SignalCount - 1.
-
-    @note    Read it only. Assigning to it breaks the count.
-
-    @code
-      Serial.println(device.SignalCount);
-    @endcode
-  */
-  int SignalCount;
-
-  // ----- Device Restarted -----
-
-  /*!
-    @brief   Tells a host that the device has just started.
-
-    Sent once per boot, so a host knows to drop what it held from before. read()
-    sends it on its first call; call this only to send it earlier.
-
-    The state channels, event channels, commands and signal descriptions follow it,
-    so a host that stayed connected gets them without asking.
-
-    @code
-      device.writeRestarted();
-    @endcode
-  */
-  void writeRestarted();
-
-  // ----- Devices -----
-
-  /*!
-    @brief   Sends the device's name and versions, followed by each device from addDevice().
-
-    The device sends this when a host sends <BLAECK.GET_DEVICES>.
-
-    @code
-      device.writeDevices();
-    @endcode
-  */
-  void writeDevices();
-
-  /*!
-    @brief   Adds a device that a host shows below this one, such as a second board.
-
-    blaeck only reports the device. The sketch talks to it, over I2C, UART or anything
-    else, keeps the variables of its signals up to date, and forwards its commands.
-    Assign signals, commands and channels to it with inDevice(). Add devices in setup():
-    a host reads the device list when it connects.
-
-    A host names the device after the board and the device name, so keep the name
-    unique and stable. The first addDevice() makes the board a "master" in the
-    protocol; everything the sketch registered without inDevice() stays on the board.
-
-    @param   name  The name a host shows. RAM text is copied; an F() literal stays in flash.
-    @return  A handle for the device. If the table is full or the name is empty, the
-             device is dropped and the handle ignores every call; hasRejections()
-             reports it.
-
-    @code
-      BlaeckDeviceRef pump = device.addDevice(F("Pump controller"));
-      device.addSignal(F("Flow"), &pumpFlow).inDevice(pump);
-    @endcode
-  */
-  BlaeckDeviceRef addDevice(BlaeckString name);
-
-  // ----- Symbols -----
-
-  /*!
-    @brief   Sends every signal's name and type.
-
-    A host needs this to read the data. The device also sends it when a host sends
-    <BLAECK.WRITE_SYMBOLS>.
-
-    @warning Call it after adding, removing or renaming a signal, or a host files
-             values under the wrong names.
-
-    @code
-      device.clearAllSignals();
-      device.addSignal(F("Temperature"), &Temperature);
-      device.writeSymbols();
-    @endcode
-  */
-  void writeSymbols();
-
-  // ----- Signal Config -----
-
-  /*!
-    @brief   Sends the signals' units, icons and other descriptions.
-
-    Only signals that describe something are included. The device also sends it
-    when a host sends <BLAECK.WRITE_SIGNAL_CONFIG>, and on its own after a
-    description changes, so a sketch rarely needs to call it.
-
-    @code
-      device.writeSignalConfig();
-    @endcode
-  */
-  void writeSignalConfig();
-
-  // ----- Commands -----
-
-  /*!
-    @brief   Sends the list of commands the device accepts.
-
-    Typed commands include their kind, range and options, so a host can build a
-    control for each. The device also sends it at startup, after commands change,
-    and when a host sends <BLAECK.WRITE_COMMANDS>.
-
-    @code
-      device.writeCommands();
-    @endcode
-  */
-  void writeCommands();
-
   // ----- State channels -----
   // With BLAECK_ENABLE_STATE_CHANNELS=0 these compile but do nothing.
 
@@ -3307,31 +2966,6 @@ public:
   BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, unsigned long *value);
   BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, float *value);
   BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, double *value);
-  /*!
-    @brief   Removes every state channel, so a new set can be added.
-
-    The table keeps its size. Channels that belong to a command's withOwnState()
-    stay; clearAllCommandHandlers() removes those with their commands. The new list
-    is sent to the host automatically.
-
-    @code
-      device.clearAllStateChannels();
-      device.addStateChannel(F("Status"), BlaeckText);
-    @endcode
-  */
-  void clearAllStateChannels();
-
-  /*!
-    @brief   Sends the list of state channels, with their current values.
-
-    The device also sends it at startup, after the channels change, and when a host
-    sends <BLAECK.WRITE_STATE_CHANNELS>, so a sketch rarely needs to call it.
-
-    @code
-      device.writeStateChannels();
-    @endcode
-  */
-  void writeStateChannels();
 
   /*!
     @brief   Sends a text value on a state channel.
@@ -3480,29 +3114,6 @@ public:
   */
   bool addEventType(const char *channelName, BlaeckString eventType);
   bool addEventType(const __FlashStringHelper *channelName, BlaeckString eventType);
-  /*!
-    @brief   Removes every event channel and event type, so a new set can be added.
-
-    Both tables keep their size. The new list is sent to the host automatically.
-
-    @code
-      device.clearAllEventChannels();
-      device.addEventChannel(F("Activity"), F("idle_warning,resumed"));
-    @endcode
-  */
-  void clearAllEventChannels();
-
-  /*!
-    @brief   Sends the list of event channels and their types.
-
-    The device also sends it at startup, after the channels change, and when a host
-    sends <BLAECK.WRITE_EVENT_CHANNELS>, so a sketch rarely needs to call it.
-
-    @code
-      device.writeEventChannels();
-    @endcode
-  */
-  void writeEventChannels();
 
   /*!
     @brief   Reports an event on an event channel.
@@ -3781,6 +3392,536 @@ public:
     write(static_cast<const char *>(nullptr), value, timestamp);
   }
 
+  // ----- Command callback -----
+
+  /*!
+    @brief   Registers a command whose parameters the handler reads as it likes.
+
+    A host lists the command but can't build a control for it. For a control, use
+    onNumberCommand(), onSwitchCommand() or another typed command.
+
+    @param   command  The command name. It can't start with `#`, `@` or `BLAECK.`.
+    @param   handler  Called with the parameters as received.
+
+    @note    A command that can't be registered (table full, name too long or
+             reserved) is reported on the debug stream and counted in
+             hasRejectedCommands(). This applies to every command type.
+
+    @code
+      device.onCommand("SwitchLED", onSwitchLED);
+    @endcode
+  */
+  void onCommand(const char *command, BlaeckCommandHandler handler);
+
+  // ----- Typed commands -----
+  // Like onCommand(), but the returned handle describes the control, so a host can build one:
+  //
+  //   device.onNumberCommand("SET_FREQ", onSetFreq)
+  //       .withRange(0.0f, 2.0f, 0.01f)
+  //       .withUnit(F("Hz"));
+  //
+  // Values are checked against what is declared before the handler runs.
+
+  /*!
+    @brief   Registers a command that takes a number.
+
+    The handler reads the value with atof(params[0]). Text that isn't a number is
+    rejected before the handler runs.
+
+    @param   command  The command name.
+    @param   handler  Called with an accepted value.
+    @return  A handle whose only method is withRange(), which must come first.
+
+    @code
+      device.onNumberCommand("SET_FREQ", onSetFreq)
+          .withRange(0.0f, 2.0f, 0.01f)
+          .withUnit(F("Hz"));
+    @endcode
+  */
+  BLAECK_NODISCARD BlaeckNumberCommandNeedsRange onNumberCommand(const char *command, BlaeckCommandHandler handler);
+
+  /*!
+    @brief   Registers a command that switches something on or off.
+
+    The handler gets "0" or "1"; any other value is rejected before it runs.
+
+    @param   command  The command name.
+    @param   handler  Called with an accepted value.
+    @return  A handle for describing the control.
+
+    @code
+      device.onSwitchCommand("SET_ENABLE", onSetEnable)
+          .withOwnState(F("Enabled"), &Enabled);
+    @endcode
+  */
+  BlaeckSwitchCommandRef onSwitchCommand(const char *command, BlaeckCommandHandler handler);
+
+  /*!
+    @brief   Registers a command that picks one option from a list.
+
+    A host may send the option's name or its index; the handler always gets the
+    index, so it reads atoi(params[0]).
+
+    @param   command  The command name.
+    @param   handler  Called with an accepted value.
+    @return  A handle whose only method is withOptions(), which must come first.
+
+    @code
+      device.onSelectCommand("SET_WAVE", onSetWave)
+          .withOptions(F("Sine,Square,Triangle,Sawtooth"))
+          .withOwnState(F("Wave"), &waveIndex);
+    @endcode
+  */
+  BLAECK_NODISCARD BlaeckSelectCommandNeedsOptions onSelectCommand(const char *command, BlaeckCommandHandler handler);
+
+  /*!
+    @brief   Registers a command that is a button press.
+
+    It carries no value unless withPressPayload() gives it one.
+
+    @param   command  The command name.
+    @param   handler  Called on each press.
+    @return  A handle for describing the control.
+
+    @code
+      device.onButtonCommand("STATUS", onStatus);
+    @endcode
+  */
+  BlaeckButtonCommandRef onButtonCommand(const char *command, BlaeckCommandHandler handler);
+
+  /*!
+    @brief   Registers a command that takes text.
+
+    The handler gets the text decoded, and never longer than withMaxLength().
+
+    @param   command  The command name.
+    @param   handler  Called with an accepted value.
+    @return  A handle for describing the control.
+
+    @code
+      device.onTextCommand("SET_LABEL", onSetLabel)
+          .withMaxLength(sizeof(DeviceLabel) - 1)
+          .config();
+    @endcode
+  */
+  BlaeckTextCommandRef onTextCommand(const char *command, BlaeckCommandHandler handler);
+
+protected:
+  explicit BlaeckDeviceBase(Blaeck *core) : _core(core) {}
+  // Never deleted through this type, so the destructor need not be virtual.
+  ~BlaeckDeviceBase() = default;
+
+  // The Blaeck that holds the tables; for the board, Blaeck itself.
+  Blaeck *_core;
+};
+
+// The handle for a device from addDevice(): another board, or a part of this one, that a host
+// shows as its own device. The sketch fetches its values itself, over any link it likes, and
+// blaeck reports them under the device. A default or rejected handle ignores every call.
+class BlaeckDeviceRef
+{
+public:
+  BlaeckDeviceRef() : _owner(nullptr), _id(0) {}
+
+  /*!
+    @brief   Sets the device's hardware name or revision. Defaults to "n/a".
+
+    @param   hwVersion  The name. RAM text is copied; an F() literal stays in flash.
+    @return  The same handle, for chaining.
+
+    @code
+      pump = device.addDevice(F("Pump controller")).withHWVersion(F("Arduino Nano"));
+    @endcode
+  */
+  BlaeckDeviceRef &withHWVersion(BlaeckString hwVersion);
+
+  /*!
+    @brief   Sets the device's firmware version. Defaults to "n/a".
+
+    @param   fwVersion  The version. RAM text is copied; an F() literal stays in flash.
+    @return  The same handle, for chaining.
+
+    @code
+      pump = device.addDevice(F("Pump controller")).withFWVersion(F("1.2"));
+    @endcode
+  */
+  BlaeckDeviceRef &withFWVersion(BlaeckString fwVersion);
+
+  /*!
+    @brief   Reports that the device stopped answering.
+
+    Until markPresent(), its signals are left out of data frames, and each data frame
+    that leaves one out says so in its status. The sketch decides when a device counts
+    as missing; calling it again changes nothing.
+
+    @code
+      if (!pumpAnswered)
+        pump.markMissing();
+    @endcode
+  */
+  void markMissing();
+
+  /*!
+    @brief   Reports that the device answers again.
+
+    Its signals return to data frames. Each signal that reports on change is sent again
+    at the next chance, since the host lost track of it. Calling it on a device that
+    was not missing changes nothing.
+
+    @code
+      if (pumpAnswered)
+        pump.markPresent();
+    @endcode
+  */
+  void markPresent();
+
+  /*!
+    @brief   Whether markMissing() is in effect.
+
+    @return  True between markMissing() and markPresent().
+
+    @code
+      if (pump.isMissing())
+        Serial.println(F("Pump controller is not answering."));
+    @endcode
+  */
+  bool isMissing() const;
+
+  /*!
+    @brief   Tells a host that the device has restarted.
+
+    Sends a restart notice with the device's name, so a host can report it. The board
+    itself is unaffected. The sketch has to notice the restart, for example from an
+    uptime counter the device reports.
+
+    @code
+      if (reading.uptimeMs < lastPumpUptime)
+        pump.writeRestarted();
+    @endcode
+  */
+  void writeRestarted();
+
+private:
+  BlaeckDeviceRef(Blaeck *owner, byte id) : _owner(owner), _id(id) {}
+
+  Blaeck *_owner;
+  // The slave ID in the protocol, 1 and up; 0 names no device.
+  byte _id;
+
+  friend class Blaeck;
+  friend class BlaeckDeviceBase;
+  friend class BlaeckSignalRefBase;
+  friend class BlaeckCommandRefBase;
+  friend class BlaeckStateRefBase;
+  friend class BlaeckEventChannelRef;
+};
+
+// Text to the attached Stream or connected TCP terminals.
+class BlaeckTerminal : public Print
+{
+public:
+  explicit BlaeckTerminal(Blaeck *owner) : _owner(owner) {}
+
+  /*!
+    @brief   Sends one byte to every connected terminal.
+
+    Everything printed to Terminal goes through this; a sketch rarely calls it directly.
+
+    @param   b  The byte.
+    @return  1.
+
+    @code
+      device.Terminal.write('.');
+    @endcode
+  */
+  size_t write(uint8_t b) override;
+
+  /*!
+    @brief   Sends bytes to every connected terminal.
+
+    @param   buffer  The bytes.
+    @param   size    How many.
+    @return  size.
+
+    @code
+      device.Terminal.write((const uint8_t *)"ok\n", 3);
+    @endcode
+  */
+  size_t write(const uint8_t *buffer, size_t size) override;
+
+  using Print::write;
+
+private:
+  Blaeck *_owner;
+};
+
+// Some hosts only record values and need nothing but signal names and types. Others also
+// build controls and displays, and only those use what withUnit(), withIcon() and the other
+// descriptive calls declare.
+class Blaeck : public BlaeckDeviceBase
+{
+public:
+  Blaeck();
+  ~Blaeck();
+  Blaeck(const Blaeck &) = delete;
+  Blaeck &operator=(const Blaeck &) = delete;
+
+  /*!
+    @brief  The device's name, which a host lists it under. Defaults to "Unnamed".
+
+    An empty string or null is sent as "Unnamed" too.
+
+    @note   Only the pointer is kept. A string literal is fine; a name built at
+            runtime must be in a global buffer.
+
+    @code
+      device.DeviceName = "Waveform Generator Demo";
+    @endcode
+  */
+  const char *DeviceName = BLAECK_DEVICE_NAME_UNNAMED;
+
+  /*!
+    @brief  The hardware's name or revision. Defaults to the selected build target.
+
+    Recognised boards use a friendly name, otherwise the core's ARDUINO_BOARD string
+    is used if available, or "n/a". This identifies the target selected when compiling,
+    not the physical board or PCB revision. Assign your own value to describe custom
+    hardware; begin() does not overwrite it.
+
+    @note   Only the pointer is kept. A string literal is fine; a name built at
+            runtime must be in a global buffer.
+
+    @code
+      device.DeviceHWVersion = "Weather Station PCB v2";
+    @endcode
+  */
+  const char *DeviceHWVersion;
+
+  /*!
+    @brief  The firmware's version. Defaults to "n/a".
+
+    @note   Only the pointer is kept. A string literal is fine; a name built at
+            runtime must be in a global buffer.
+
+    @code
+      device.DeviceFWVersion = "1.0";
+    @endcode
+  */
+  const char *DeviceFWVersion = "n/a";
+
+  // ----- Signals -----
+
+  /*!
+    @brief   Removes every signal, so a new set can be added.
+
+    The table keeps its size. The rejection counts are reset too.
+
+    @warning Call writeSymbols() once the new signals are added. Until then a host
+             files values under the old names.
+
+    @code
+      device.clearAllSignals();
+      device.addSignal(F("Temperature"), &Temperature);
+      device.writeSymbols();
+    @endcode
+  */
+  void clearAllSignals();
+
+  /*!
+    @brief   Reports whether any signal could not be added.
+
+    That happens when the table is full, or when there wasn't enough RAM to build it.
+
+    @return  True if at least one signal was dropped.
+
+    @code
+      if (device.hasRejectedSignals())
+        Serial.println(F("Raise withSignals() on the begin() chain."));
+    @endcode
+  */
+  bool hasRejectedSignals() const { return _signalRegistrationFailed; }
+
+  /*!
+    @brief   Returns how many signals could not be added.
+
+    @return  How many were dropped.
+
+    @code
+      Serial.println(device.getRejectedSignalCount());
+    @endcode
+  */
+  uint16_t getRejectedSignalCount() const { return _rejectedSignalCount; }
+
+  /*!
+    @brief   The number of signals added. Valid indexes run from 0 to SignalCount - 1.
+
+    @note    Read it only. Assigning to it breaks the count.
+
+    @code
+      Serial.println(device.SignalCount);
+    @endcode
+  */
+  int SignalCount;
+
+  // ----- Device Restarted -----
+
+  /*!
+    @brief   Tells a host that the device has just started.
+
+    Sent once per boot, so a host knows to drop what it held from before. read()
+    sends it on its first call; call this only to send it earlier.
+
+    The state channels, event channels, commands and signal descriptions follow it,
+    so a host that stayed connected gets them without asking.
+
+    @code
+      device.writeRestarted();
+    @endcode
+  */
+  void writeRestarted();
+
+  // ----- Devices -----
+
+  /*!
+    @brief   Sends the device's name and versions, followed by each device from addDevice().
+
+    The device sends this when a host sends <BLAECK.GET_DEVICES>.
+
+    @code
+      device.writeDevices();
+    @endcode
+  */
+  void writeDevices();
+
+  /*!
+    @brief   Adds a device that a host shows below this one, such as a second board.
+
+    blaeck only reports the device. The sketch talks to it, over I2C, UART or anything
+    else, keeps the variables of its signals up to date, and forwards its commands.
+    Assign signals, commands and channels to it with inDevice(). Add devices in setup():
+    a host reads the device list when it connects.
+
+    A host names the device after the board and the device name, so keep the name
+    unique and stable. The first addDevice() makes the board a "master" in the
+    protocol; everything the sketch registered without inDevice() stays on the board.
+
+    @param   name  The name a host shows. RAM text is copied; an F() literal stays in flash.
+    @return  A handle for the device. If the table is full or the name is empty, the
+             device is dropped and the handle ignores every call; hasRejections()
+             reports it.
+
+    @code
+      BlaeckDeviceRef pump = device.addDevice(F("Pump controller"));
+      device.addSignal(F("Flow"), &pumpFlow).inDevice(pump);
+    @endcode
+  */
+  BlaeckDeviceRef addDevice(BlaeckString name);
+
+  // ----- Symbols -----
+
+  /*!
+    @brief   Sends every signal's name and type.
+
+    A host needs this to read the data. The device also sends it when a host sends
+    <BLAECK.WRITE_SYMBOLS>.
+
+    @warning Call it after adding, removing or renaming a signal, or a host files
+             values under the wrong names.
+
+    @code
+      device.clearAllSignals();
+      device.addSignal(F("Temperature"), &Temperature);
+      device.writeSymbols();
+    @endcode
+  */
+  void writeSymbols();
+
+  // ----- Signal Config -----
+
+  /*!
+    @brief   Sends the signals' units, icons and other descriptions.
+
+    Only signals that describe something are included. The device also sends it
+    when a host sends <BLAECK.WRITE_SIGNAL_CONFIG>, and on its own after a
+    description changes, so a sketch rarely needs to call it.
+
+    @code
+      device.writeSignalConfig();
+    @endcode
+  */
+  void writeSignalConfig();
+
+  // ----- Commands -----
+
+  /*!
+    @brief   Sends the list of commands the device accepts.
+
+    Typed commands include their kind, range and options, so a host can build a
+    control for each. The device also sends it at startup, after commands change,
+    and when a host sends <BLAECK.WRITE_COMMANDS>.
+
+    @code
+      device.writeCommands();
+    @endcode
+  */
+  void writeCommands();
+
+  // ----- State channels -----
+  // With BLAECK_ENABLE_STATE_CHANNELS=0 these compile but do nothing.
+
+  /*!
+    @brief   Removes every state channel, so a new set can be added.
+
+    The table keeps its size. Channels that belong to a command's withOwnState()
+    stay; clearAllCommandHandlers() removes those with their commands. The new list
+    is sent to the host automatically.
+
+    @code
+      device.clearAllStateChannels();
+      device.addStateChannel(F("Status"), BlaeckText);
+    @endcode
+  */
+  void clearAllStateChannels();
+
+  /*!
+    @brief   Sends the list of state channels, with their current values.
+
+    The device also sends it at startup, after the channels change, and when a host
+    sends <BLAECK.WRITE_STATE_CHANNELS>, so a sketch rarely needs to call it.
+
+    @code
+      device.writeStateChannels();
+    @endcode
+  */
+  void writeStateChannels();
+
+  // ----- Events -----
+  // With BLAECK_ENABLE_EVENTS=0 these compile but do nothing.
+
+  /*!
+    @brief   Removes every event channel and event type, so a new set can be added.
+
+    Both tables keep their size. The new list is sent to the host automatically.
+
+    @code
+      device.clearAllEventChannels();
+      device.addEventChannel(F("Activity"), F("idle_warning,resumed"));
+    @endcode
+  */
+  void clearAllEventChannels();
+
+  /*!
+    @brief   Sends the list of event channels and their types.
+
+    The device also sends it at startup, after the channels change, and when a host
+    sends <BLAECK.WRITE_EVENT_CHANNELS>, so a sketch rarely needs to call it.
+
+    @code
+      device.writeEventChannels();
+    @endcode
+  */
+  void writeEventChannels();
+
   // ----- Data Write All -----
 
   /*!
@@ -3900,24 +4041,6 @@ public:
 
   // ----- Command callback  -----
 
-  /*!
-    @brief   Registers a command whose parameters the handler reads as it likes.
-
-    A host lists the command but can't build a control for it. For a control, use
-    onNumberCommand(), onSwitchCommand() or another typed command.
-
-    @param   command  The command name. It can't start with `#`, `@` or `BLAECK.`.
-    @param   handler  Called with the parameters as received.
-
-    @note    A command that can't be registered (table full, name too long or
-             reserved) is reported on the debug stream and counted in
-             hasRejectedCommands(). This applies to every command type.
-
-    @code
-      device.onCommand("SwitchLED", onSwitchLED);
-    @endcode
-  */
-  void onCommand(const char *command, BlaeckCommandHandler handler);
   /*!
     @brief   Registers a handler that runs for every command.
 
@@ -4117,99 +4240,6 @@ public:
     @endcode
   */
   bool printRejections(Print *out);
-
-  // ----- Typed commands -----
-  // Like onCommand(), but the returned handle describes the control, so a host can build one:
-  //
-  //   device.onNumberCommand("SET_FREQ", onSetFreq)
-  //       .withRange(0.0f, 2.0f, 0.01f)
-  //       .withUnit(F("Hz"));
-  //
-  // Values are checked against what is declared before the handler runs.
-
-  /*!
-    @brief   Registers a command that takes a number.
-
-    The handler reads the value with atof(params[0]). Text that isn't a number is
-    rejected before the handler runs.
-
-    @param   command  The command name.
-    @param   handler  Called with an accepted value.
-    @return  A handle whose only method is withRange(), which must come first.
-
-    @code
-      device.onNumberCommand("SET_FREQ", onSetFreq)
-          .withRange(0.0f, 2.0f, 0.01f)
-          .withUnit(F("Hz"));
-    @endcode
-  */
-  BLAECK_NODISCARD BlaeckNumberCommandNeedsRange onNumberCommand(const char *command, BlaeckCommandHandler handler);
-
-  /*!
-    @brief   Registers a command that switches something on or off.
-
-    The handler gets "0" or "1"; any other value is rejected before it runs.
-
-    @param   command  The command name.
-    @param   handler  Called with an accepted value.
-    @return  A handle for describing the control.
-
-    @code
-      device.onSwitchCommand("SET_ENABLE", onSetEnable)
-          .withOwnState(F("Enabled"), &Enabled);
-    @endcode
-  */
-  BlaeckSwitchCommandRef onSwitchCommand(const char *command, BlaeckCommandHandler handler);
-
-  /*!
-    @brief   Registers a command that picks one option from a list.
-
-    A host may send the option's name or its index; the handler always gets the
-    index, so it reads atoi(params[0]).
-
-    @param   command  The command name.
-    @param   handler  Called with an accepted value.
-    @return  A handle whose only method is withOptions(), which must come first.
-
-    @code
-      device.onSelectCommand("SET_WAVE", onSetWave)
-          .withOptions(F("Sine,Square,Triangle,Sawtooth"))
-          .withOwnState(F("Wave"), &waveIndex);
-    @endcode
-  */
-  BLAECK_NODISCARD BlaeckSelectCommandNeedsOptions onSelectCommand(const char *command, BlaeckCommandHandler handler);
-
-  /*!
-    @brief   Registers a command that is a button press.
-
-    It carries no value unless withPressPayload() gives it one.
-
-    @param   command  The command name.
-    @param   handler  Called on each press.
-    @return  A handle for describing the control.
-
-    @code
-      device.onButtonCommand("STATUS", onStatus);
-    @endcode
-  */
-  BlaeckButtonCommandRef onButtonCommand(const char *command, BlaeckCommandHandler handler);
-
-  /*!
-    @brief   Registers a command that takes text.
-
-    The handler gets the text decoded, and never longer than withMaxLength().
-
-    @param   command  The command name.
-    @param   handler  Called with an accepted value.
-    @return  A handle for describing the control.
-
-    @code
-      device.onTextCommand("SET_LABEL", onSetLabel)
-          .withMaxLength(sizeof(DeviceLabel) - 1)
-          .config();
-    @endcode
-  */
-  BlaeckTextCommandRef onTextCommand(const char *command, BlaeckCommandHandler handler);
 
   /*!
     @brief   Copies the name of a select command's option at a given position.
@@ -4616,6 +4646,11 @@ protected:
   void _writeSignalText(int signalIndex, const void *value, bool inFlash, unsigned long long timestamp);
   void _emitTextBytes(const void *text, bool inFlash, size_t length);
   void _writeCommandState(const char *command, bool inFlash);
+  // The lookups behind BlaeckDeviceBase's findSignalIndex(), addEventType() and writeEvent().
+  int _findSignalIndex(const char *signalName);
+  int _findSignalIndex(const __FlashStringHelper *signalName);
+  bool _addEventType(const char *channelName, BlaeckString eventType);
+  void _writeEvent(const char *channelName, BlaeckString eventType);
   // Registers a command and returns its table index, or -1 if it was rejected (counted, and
   // reported on the debug stream).
   int _registerCommand(const char *command, BlaeckCommandHandler handler, uint8_t kind);
@@ -5226,6 +5261,7 @@ protected:
   friend class BlaeckEventChannelRef;
   friend class BlaeckBeginRef;
   friend class BlaeckDeviceRef;
+  friend class BlaeckDeviceBase;
 
 private:
   struct Connection
@@ -5365,9 +5401,6 @@ inline BlaeckBeginRef &BlaeckBeginRef::withDebugStream(Print *debugStream)
   }
   return *this;
 }
-
-
-
 
 // ----- Handle method bodies -----
 // Defined here because they need Blaeck to be complete.
