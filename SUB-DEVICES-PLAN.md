@@ -163,6 +163,24 @@ C1 Device Notification
   Message ID 0 (not an answer), no CRC, one event per frame. No name, versions or library
   info: the host looks them up in B7, and duplicating them would let the two disagree.
 
+  Sending works like C0 today: blaeck marks the notice as done only once it could send it, and
+  retries on every read() until a host can receive frames (TCP host connected, writes not
+  paused). C1 applies that per device and event: `markMissing()`, `markPresent()` and
+  `writeRestarted()` set a pending mark, and a B7 answer clears it too, since it carries the
+  state.
+
+  Loggbok's reactions, with DeviceID mapped to the name from the session's B7:
+
+  | C1 | Loggbok |
+  |---|---|
+  | not responding | event 515, the sub-device's MQTT availability "offline" (Home Assistant shows its entities as unavailable), marked in the tree; the database just gets a gap |
+  | responding again | event 516, availability "online"; data resumes |
+  | restarted, sub-device | event 510; no interval recovery |
+  | restarted, board (DeviceID 0) | event 510 and interval recovery, as with C0 today |
+
+  After a TCP reconnect, Loggbok compares B7's DeviceState with what it last knew and emits
+  515/516 for any change during the outage.
+
 - Rules:
   1. Restarted means "a restart not yet reported to a host". It is set at boot for the board
      and by `writeRestarted()` for a sub-device, and cleared as soon as it has gone out, in B7
