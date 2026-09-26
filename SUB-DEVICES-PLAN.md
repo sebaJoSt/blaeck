@@ -78,6 +78,13 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   typed by hand, with a new ack reason (for example `BLAECK_ACK_DEVICE_NOT_RESPONDING`); the
   handler does not run. Home Assistant already blocks commands to unavailable entities, but
   other hosts and scripts do not. Loggbok maps the reason to a readable message.
+- Explicit writes: `device.write("Flow", value)` (by name, index, or with a timestamp) already
+  works for a sub-device's signal; the host files it under the sub-device, and signal names are
+  unique across the board, so no sub-device reference is needed. While the sub-device is marked
+  missing, the write is dropped. Add a debug-stream note for that, printed only if
+  `withDebugStream()` is set, once per missing phase (reset by `markPresent()`), before any
+  frame opens, and not counted in `hasRejections()`. For example:
+  `write() dropped for 'Flow': 'Pump controller' is marked missing (once until markPresent()).`
 - Example fix: MainBoard updates `pumpSpeed` from each reading but never reports it, so the
   slider shows the requested value, not the one the pump runs at. Call
   `device.writeCommandState("SET_PUMP_SPEED")` when the reported speed changes.
