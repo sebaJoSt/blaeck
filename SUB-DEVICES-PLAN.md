@@ -152,10 +152,19 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   `withDebugStream()` is set, once per missing phase (reset by `markPresent()`), before any
   frame opens, and not counted in `hasRejections()`. For example:
   `write() dropped for 'Flow': 'Pump controller' is marked missing (once until markPresent()).`
-- Example fix: MainBoard updates `pumpSpeed` from each reading but never reports it, so the
-  slider shows the requested value, not the one the pump runs at. Call
-  `device.writeCommandState("SET_PUMP_SPEED")` when the reported speed changes.
-
+- Example (`examples/more/SubDevices/MainBoard`) should show the whole pattern the sketch is
+  responsible for. It already declares the catalog, polls the pump over its link, marks it
+  missing after 3 missed replies and present again, detects a restart by uptime and reports it,
+  and forwards SET_PUMP_SPEED. To add:
+  1. report the actual speed: `writeCommandState("SET_PUMP_SPEED")` when the speed the pump
+     reports changes (today the slider shows the requested value, not the one the pump runs at);
+  2. after the pump returns, send the speed and "Pump link" again (the speed does not come back
+     on its own if it did not change meanwhile);
+  3. after a pump restart, send its (reset) speed and "Pump link" at once.
+  A small `reportPumpState()` in the sketch, called on return, after a restart and when the
+  speed changes, covers 1-3 and shows the pattern the docs recommend. Also switch the example
+  to `pump.addSignal(...)` and friends once the base class exists. Per-device `writeAllData()`
+  is not needed here (the pump is polled at a fixed rate) and stays in the docs.
 - Scope and timing (2026-09-26): everything in this plan goes into blaeck 7.0, including the
   registration base class; time is not a constraint. B7 and C1 replace B3 and C0 for every
   blaeck board, with or without sub-devices. Order of work:
