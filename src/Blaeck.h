@@ -3555,10 +3555,10 @@ public:
 
     @code
       if (Temperature > 40.0f)
-        device.writeAllData();
+        device.writeAll();
     @endcode
   */
-  void writeAllData();
+  void writeAll();
 
   /*!
     @brief   Sends every signal's value now, with a timestamp from the caller.
@@ -3566,10 +3566,10 @@ public:
     @param   timestamp  In microseconds, in the epoch of the timestamp mode.
 
     @code
-      device.writeAllData(1723600000000000ULL);
+      device.writeAll(1723600000000000ULL);
     @endcode
   */
-  void writeAllData(unsigned long long timestamp);
+  void writeAll(unsigned long long timestamp);
 
   /*!
     @brief   Sends signals whose automatic reporting policies are due.
@@ -4018,7 +4018,7 @@ public:
     @brief   Sets a function to refresh values before interval and full snapshots.
 
     Runs before filtering a due host interval, even if no signals qualify, and before
-    writeAllData(), including host requests. It does not run for single-signal write()
+    writeAll(), including host requests. It does not run for single-signal write()
     or the every-tick writeOnChange() check. It runs from loop(), not an interrupt.
 
     @param   callback  The refresh function, or nullptr to remove it.
@@ -4347,7 +4347,7 @@ protected:
   void _captureSignalSnapshot(Signal &signal);
   bool _signalChanged(const Signal &signal, double delta) const;
 
-  void writeAllData(unsigned long messageID, unsigned long long timestamp);
+  void writeAll(unsigned long messageID, unsigned long long timestamp);
 
   // Store a value in a signal, converted to its type. False if there is no such signal or it
   // holds text.

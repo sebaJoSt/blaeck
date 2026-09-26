@@ -1253,7 +1253,7 @@ void Blaeck::read()
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
         // Marks the data frame as a reply to a request.
         _frameRequested = true;
-        this->writeAllData(msg_id, getTimeStamp());
+        this->writeAll(msg_id, getTimeStamp());
         _frameRequested = false;
       }
       else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_GET_DEVICES)))
@@ -4160,17 +4160,17 @@ void Blaeck::_writeSignalText(int signalIndex, const void *value, bool inFlash, 
   }
 }
 
-void Blaeck::writeAllData()
+void Blaeck::writeAll()
 {
-  this->writeAllData(getTimeStamp());
+  this->writeAll(getTimeStamp());
 }
 
-void Blaeck::writeAllData(unsigned long long timestamp)
+void Blaeck::writeAll(unsigned long long timestamp)
 {
-  this->writeAllData(0, timestamp);
+  this->writeAll(0, timestamp);
 }
 
-void Blaeck::writeAllData(unsigned long msg_id, unsigned long long timestamp)
+void Blaeck::writeAll(unsigned long msg_id, unsigned long long timestamp)
 {
   this->writeData(msg_id, 0, _signalIndex - 1, false, timestamp);
 }

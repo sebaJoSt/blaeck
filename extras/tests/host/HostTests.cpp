@@ -345,7 +345,7 @@ static void sessionBehavior(bool buffered)
   device.Terminal.print("terminal");
   assert(host2.output.empty() && terminal.output == "terminal");
   terminal.output.clear();
-  device.writeAllData();
+  device.writeAll();
   assert(!host2.output.empty() && terminal.output.empty());
 
   // A terminal's command runs unacknowledged, with no failed-write warning.
@@ -391,7 +391,7 @@ static void sessionBehavior(bool buffered)
   assert((closed == std::vector<byte>{0, 1}));
   terminal.output.clear();
   replacement.output.clear();
-  device.writeAllData();
+  device.writeAll();
   assert(terminal.output.empty() && replacement.output.empty()); // No host, no frames.
 
   device.end();
@@ -921,7 +921,7 @@ static void flashSignalText(bool buffered)
       assert(frames.size() == 1 && frames[0].values == std::vector<std::string>({expected}));
       assert(frames[0].timestamp == timestamp);
     };
-    device.writeAllData();
+    device.writeAll();
     expectText("Idle", 99);
     const __FlashStringHelper *flash = F("Running");
     const uint64_t explicitTime = timestamped ? 123456 : 99;
@@ -1020,7 +1020,7 @@ static void flashSignalText(bool buffered)
     device.clearAllSignals();
     strcpy(ram, "Reused RAM");
     device.addSignal(F("Status"), ram);
-    device.writeAllData();
+    device.writeAll();
     expectText("Reused RAM", 99); // Reused slots clear the flash flag.
   }
 }
@@ -1680,7 +1680,7 @@ static void reportingToggle(bool buffered)
     command(device, stream, "<BLAECK.DEACTIVATE>");
     device.write("Number", 3.0f);
     expectData(stream, widths, {0});
-    device.writeAllData();
+    device.writeAll();
     expectData(stream, widths, {0, 1, 2});
     number.writeOnChange(0.1, 250);
     boolean.writeOnChange(BLAECK_ANY_CHANGE, 250);
@@ -1784,7 +1784,7 @@ static void reportingActivationSnapshot(bool buffered)
   device.addSignal(F("Bool"), &flag).writeAtInterval(BLAECK_ON_CHANGE);
   device.addSignal(F("Text"), text).writeAtInterval(BLAECK_ON_CHANGE);
   const std::vector<int> widths = {4, 4, 4, 4, 4, 1, -1};
-  device.writeAllData();
+  device.writeAll();
   expectData(stream, widths, {0, 1, 2, 3, 4, 5, 6});
 
   const auto expectInitial = [&]()
@@ -2029,7 +2029,7 @@ static void reportingCallbacksAndTimestamps()
   device.write("Value", 5.0f);
   expectData(stream, {4}, {0});
   assert(beforeWriteCalls == 1);
-  device.writeAllData();
+  device.writeAll();
   expectData(stream, {4}, {0});
   assert(beforeWriteCalls == 2);
   device.setBeforeWriteCallback(nullptr);
@@ -2148,7 +2148,7 @@ static void reportingReconfiguration()
   device.writeIfDue();
   expectData(stream, {4}, {0}); // interval OFF does not cancel immediate changes
   value = 2;
-  device.writeAllData();
+  device.writeAll();
   expectData(stream, {4}, {0});
   device.writeIfDue();
   expectData(stream, {4}, {});
@@ -2328,7 +2328,7 @@ static void reportingFrameClassification(bool buffered)
   expectFlags(0x01); // spontaneous first report, with independent restart flag
   device.write("V", 1.0f);
   expectFlags(0);
-  device.writeAllData();
+  device.writeAll();
   expectFlags(0);
   command(device, stream, "<#42:BLAECK.WRITE_DATA>");
   expectFlags(0x02);
@@ -2354,7 +2354,7 @@ static void reportingFrameClassification(bool buffered)
   expectFlags(0); // interval due, but only the immediate path qualifies
   device.write("V", 10.0f);
   expectFlags(0);
-  device.writeAllData();
+  device.writeAll();
   expectFlags(0);
   command(device, stream, "<BLAECK.WRITE_DATA>");
   expectFlags(0x02);
