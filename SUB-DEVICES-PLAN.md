@@ -163,6 +163,16 @@ sensors and parts of the board. Drop the "master" sentence from the addDevice() 
   (today there is one availability topic for the whole bridge); keep the device tree when a
   B7 arrives during logging (ProcessDevices currently replaces the whole list).
   `MqttBridge.BuildDeviceId` is unused dead code.
+- Loggbok gap, independent of sub-devices: after a TCP reconnect it asks GET_DEVICES again but
+  never compares the answer with the session. ProcessDevices replaces the list, and
+  ValidateDevicesAfterReconnectAsync only checks that a device answered, ClientDataEnabled and
+  ServerRestarted. A different board at the same address (DHCP reuse, reflashed firmware) is
+  accepted silently. Proposed rule, matching "device list fixed per session":
+  - identity must match, else reject the reconnect with a clear error and stop or wait: board
+    name and library name, the same sub-devices by ID, name and parent, and the same signal
+    list (schema hash);
+  - versions may differ, with a warning (a firmware update during the outage is plausible);
+  - availability may differ (a sub-device went missing meanwhile; B7's NotResponding bit).
 - blaecktcpy hub decoder: only if blaeck boards should run behind a hub with B7.
 
 ## Known limits
