@@ -228,12 +228,12 @@ public:
   const blaeck::blaeck_detail::CommandHandlerEntry &commandMeta(int index) const { return _commandHandlers[index]; }
 #if BLAECK_ENABLE_STATE_CHANNELS
   const blaeck::blaeck_detail::StateChannelEntry &stateMeta(int index) const { return _stateChannels[index]; }
-  int stateIndex(blaeck::BlaeckString name) const { return _findStateChannel(name); }
+  int stateIndex(blaeck::BlaeckString name) const { return _findStateChannel(0, name); }
 #endif
 #if BLAECK_ENABLE_EVENTS
   const blaeck::blaeck_detail::EventChannelEntry &eventMeta(int index) const { return _eventChannels[index]; }
   const blaeck::blaeck_detail::EventTypeEntry &eventType(int index) const { return _eventTypes[index]; }
-  int eventIndex(const char *name) const { return _findEventChannel(name); }
+  int eventIndex(const char *name) const { return _findEventChannel(0, name); }
 #endif
   void cleanCatalogs()
   {
@@ -702,6 +702,7 @@ struct DataFrame
   byte flags = 0;
   byte status = 0;
   std::string statusPayload;
+  uint16_t schemaHash = 0;
 };
 
 static std::vector<DataFrame> takeData(std::string &output, const std::vector<int> &widths)
@@ -718,7 +719,9 @@ static std::vector<DataFrame> takeData(std::string &output, const std::vector<in
     DataFrame frame;
     frame.flags = static_cast<byte>(output[p++]);
     assert(output[p++] == ':');
-    p += 2; // schema hash
+    frame.schemaHash = static_cast<uint16_t>(static_cast<byte>(output[p]) |
+                                             (static_cast<byte>(output[p + 1]) << 8));
+    p += 2;
     assert(output[p++] == ':');
     frame.mode = static_cast<byte>(output[p++]);
     if (frame.mode != BLAECK_NO_TIMESTAMP)
@@ -1615,22 +1618,28 @@ static void subDevices(bool buffered)
   assert(device.printRejections(&debug));
   assert(debug.text.find("3 device registrations rejected; table capacity: 2.") != std::string::npos);
 
-  device.addSignal(F("Flow"), &flow).inDevice(pump);
-  device.addSignal(F("Pressure"), &pressure).inDevice(pump);
-  // A rejected or foreign handle leaves the entry on the board.
-  Blaeck other;
-  FakeStream otherStream;
-  other.begin(otherStream);
-  BlaeckDeviceRef foreign = other.addDevice(F("Foreign"));
-  device.addSignal(F("Orphan"), &orphan).inDevice(third).inDevice(foreign);
+  pump.addSignal(F("Flow"), &flow);
+  pump.addSignal(F("Pressure"), &pressure);
+  // A rejected or unset handle registers nothing, and counts nothing as rejected.
+  third.addSignal(F("Lost"), &orphan).withUnit(F("V"));
+  unset.addSignal("Lost", &orphan);
+  unset.onCommand("LOST", handler);
+  unset.addStateChannel(F("Lost"), BlaeckText);
+  unset.addEventChannel(F("Lost"), F("x"));
+  unset.write("Lost", 1.0f);
+  unset.writeState(F("Lost"), "x");
+  unset.writeEvent(F("Lost"), F("x"));
+  assert(device.SignalCount == 3 && unset.findSignalIndex("Lost") == -1);
+  assert(!device.hasRejectedSignals() && !device.hasRejectedCommands());
+  device.addSignal(F("Orphan"), &orphan);
 
-  // A command's own state follows the command's device in either order.
-  device.onNumberCommand("PUMP_SPEED", handler).withRange(0.0f, 100.0f, 1.0f)
-      .withOwnState(F("PumpSpeedState"), &speed).inDevice(pump);
-  device.onSwitchCommand("PUMP_ON", handler).inDevice(pump).withOwnState(F("PumpOnState"), &pumpOn);
+  // A command registered through a device's handle takes its own state channel along.
+  pump.onNumberCommand("PUMP_SPEED", handler).withRange(0.0f, 100.0f, 1.0f)
+      .withOwnState(F("PumpSpeedState"), &speed);
+  pump.onSwitchCommand("PUMP_ON", handler).withOwnState(F("PumpOnState"), &pumpOn);
   device.onButtonCommand("BOARD_RESET", handler);
-  device.addStateChannel(F("PumpStatus"), BlaeckText).inDevice(pump);
-  device.addEventChannel(F("FanAlarm"), F("stall")).inDevice(fan);
+  pump.addStateChannel(F("PumpStatus"), BlaeckText);
+  fan.addEventChannel(F("FanAlarm"), F("stall"));
 
   // The board's restart notice calls it the master once devices exist.
   device.read();
@@ -1671,10 +1680,14 @@ static void subDevices(bool buffered)
   assert(ownerOf(commandFramePayload(stream.data.output, 0x80, 0), "FanAlarm") == owner(0x02, 2));
   stream.data.output.clear();
 
+  // Names are found within the handle's own device only.
   device.writeState(F("PumpStatus"), "ok");
+  device.writeEvent(F("FanAlarm"), F("stall"));
+  assert(stream.data.output.empty());
+  pump.writeState(F("PumpStatus"), "ok");
   assert(commandFramePayload(stream.data.output, 0x95, 0).substr(0, 2) == owner(0x02, 1));
   stream.data.output.clear();
-  device.writeEvent(F("FanAlarm"), F("stall"));
+  fan.writeEvent(F("FanAlarm"), F("stall"));
   assert(commandFramePayload(stream.data.output, 0x85, 0).substr(0, 2) == owner(0x02, 2));
   stream.data.output.clear();
 
@@ -1702,7 +1715,7 @@ static void subDevices(bool buffered)
   device.writeAll();
   frames = takeData(stream.data.output, widths);
   assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 3}) && frames[0].status == 0x01);
-  device.write("Flow", 5.0f);
+  pump.write("Flow", 5.0f);
   assert(takeData(stream.data.output, widths).empty()); // nothing left to send
 
   // A device without signals changes nothing when it goes missing.
@@ -1721,8 +1734,7 @@ static void subDevices(bool buffered)
   changes.begin(changesStream).withDevices(1);
   float level = 7;
   BlaeckDeviceRef tank = changes.addDevice(F("Tank"));
-  changes.addSignal(F("Level"), &level).writeAtInterval(BLAECK_OFF).writeOnChange(BLAECK_ANY_CHANGE)
-      .inDevice(tank);
+  tank.addSignal(F("Level"), &level).writeAtInterval(BLAECK_OFF).writeOnChange(BLAECK_ANY_CHANGE);
   changes.read();
   changesStream.data.output.clear();
   changes.writeIfDue();
@@ -1741,6 +1753,161 @@ static void subDevices(bool buffered)
   debug.text.clear();
   big.begin(bigStream).withDebugStream(&debug).withDevices(300);
   assert(debug.text.find("withDevices(300): clamped to 255") != std::string::npos);
+}
+
+// CRC16-CCITT (init 0, poly 0x1021), as a host computes the schema hash.
+static uint16_t crc16(const std::string &data)
+{
+  uint16_t crc = 0;
+  for (unsigned char b : data)
+  {
+    crc ^= static_cast<uint16_t>(b << 8);
+    for (int i = 0; i < 8; ++i)
+      crc = (crc & 0x8000) ? static_cast<uint16_t>((crc << 1) ^ 0x1021) : static_cast<uint16_t>(crc << 1);
+  }
+  return crc;
+}
+
+// Owner bytes of every catalog entry with this name, in catalog order.
+static std::vector<std::string> ownersOf(const std::string &payload, const char *name, size_t gap = 0)
+{
+  std::vector<std::string> owners;
+  const std::string key = std::string(name) + '\0';
+  for (size_t at = payload.find(key); at != std::string::npos; at = payload.find(key, at + 1))
+  {
+    assert(at >= 2 + gap);
+    owners.push_back(payload.substr(at - 2 - gap, 2));
+  }
+  return owners;
+}
+
+static void sameNamesAcrossDevices()
+{
+  hostMillis() = 0;
+  auto handler = [](const char *, const char *const *, byte) {};
+  FakeStream stream;
+  Capture debug;
+  Blaeck device;
+  device.begin(stream).withDevices(2).withDebugStream(&debug);
+  BlaeckDeviceRef zoneA = device.addDevice(F("Zone A"));
+  BlaeckDeviceRef zoneB = device.addDevice("Zone B");
+
+  float boardTemp = 1, aTemp = 2, bTemp = 3;
+  device.addSignal("Temperature", &boardTemp);
+  zoneA.addSignal(F("Temperature"), &aTemp);
+  zoneB.addSignal("Temperature", &bTemp);
+  assert(device.SignalCount == 3);
+  assert(device.findSignalIndex("Temperature") == 0 && zoneA.findSignalIndex(F("Temperature")) == 1 &&
+         zoneB.findSignalIndex("Temperature") == 2);
+
+  // The same state channel name on each; declaring it again within one device reuses its slot.
+  device.addStateChannel(F("Status"), BlaeckText);
+  zoneA.addStateChannel("Status", BlaeckText);
+  zoneA.addStateChannel(F("Status"), BlaeckText).withIcon(F("mdi:pump"));
+
+  // Event channels and their types are per device, too.
+  device.addEventChannel(F("Alarm"), F("overheated"));
+  zoneA.addEventChannel("Alarm", F("dry_run"));
+  assert(zoneA.addEventType(F("Alarm"), F("blocked")));
+
+  // Command names stay unique per board, but their own state channels are per device.
+  byte aSpeed = 10, bSpeed = 20;
+  zoneA.onNumberCommand("SET_A_SPEED", handler).withRange(0.0f, 100.0f, 1.0f).withOwnState(F("Speed"), &aSpeed);
+  zoneB.onNumberCommand("SET_B_SPEED", handler).withRange(0.0f, 100.0f, 1.0f).withOwnState(F("Speed"), &bSpeed);
+  assert(!device.hasRejections());
+  assert(!zoneB.addEventType(F("Alarm"), F("blocked"))); // zone B has no Alarm
+
+  device.read();
+  stream.data.output.clear();
+
+  command(device, stream, "<BLAECK.WRITE_SYMBOLS>");
+  std::string payload = commandFramePayload(stream.data.output, 0xB0, 0);
+  assert((ownersOf(payload, "Temperature") == std::vector<std::string>{owner(0x01, 0), owner(0x02, 1), owner(0x02, 2)}));
+  stream.data.output.clear();
+
+#if BLAECK_ENABLE_STATE_CHANNELS
+  command(device, stream, "<BLAECK.WRITE_STATE_CHANNELS>");
+  payload = commandFramePayload(stream.data.output, 0x90, 0);
+  assert((ownersOf(payload, "Status") == std::vector<std::string>{owner(0x01, 0), owner(0x02, 1)}));
+  assert((ownersOf(payload, "Speed") == std::vector<std::string>{owner(0x02, 1), owner(0x02, 2)}));
+  stream.data.output.clear();
+
+  // Each handle reaches its own channel: the 95 frame carries owner and channel index.
+  device.writeState(F("Status"), "board");
+  std::string state = commandFramePayload(stream.data.output, 0x95, 0);
+  assert(state.substr(0, 2) == owner(0x01, 0) && state.find("board") != std::string::npos);
+  stream.data.output.clear();
+  zoneA.writeState("Status", "zone a");
+  state = commandFramePayload(stream.data.output, 0x95, 0);
+  assert(state.substr(0, 2) == owner(0x02, 1) && state.find("zone a") != std::string::npos);
+  stream.data.output.clear();
+  zoneB.writeState(F("Status"), "none"); // zone B has no Status
+  assert(stream.data.output.empty());
+
+  // A command's own state is the channel of its own device.
+  zoneB.writeCommandState("SET_B_SPEED");
+  const std::string speed = commandFramePayload(stream.data.output, 0x95, 0);
+  // Channels in order: Status (board), Status (zone A), Speed (zone A), Speed (zone B).
+  assert(speed.substr(0, 2) == owner(0x02, 2));
+  assert(speed[2] == 3 && speed[3] == 0 && static_cast<byte>(speed.back()) == 20);
+  stream.data.output.clear();
+#endif
+
+#if BLAECK_ENABLE_EVENTS
+  zoneA.writeEvent(F("Alarm"), F("blocked"));
+  assert(commandFramePayload(stream.data.output, 0x85, 0).substr(0, 2) == owner(0x02, 1));
+  stream.data.output.clear();
+  debug.text.clear();
+  device.writeEvent("Alarm", F("dry_run")); // a type of zone A's Alarm, not the board's
+  assert(stream.data.output.empty());
+  assert(debug.text.find("type not declared") != std::string::npos);
+#endif
+
+  // Explicit writes by name go to the handle's signal.
+  const std::vector<int> widths = {4, 4, 4};
+  zoneB.write("Temperature", 30.0f);
+  auto frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{2}));
+  device.write(F("Temperature"), 10.0f);
+  frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0}));
+
+  // The schema hash covers a device's signal as "<device name>/<signal name>".
+  const char f = static_cast<char>(0x08); // float
+  assert(frames[0].schemaHash ==
+         crc16(std::string("Temperature") + f + "Zone A/Temperature" + f + "Zone B/Temperature" + f));
+
+  const uint16_t hash = frames[0].schemaHash;
+
+  // Firmware that registers zone B's signal before zone A's sends the same names in another
+  // order. Without the device names the hash would match, and a host would file zone A's
+  // values under zone B.
+  FakeStream swappedStream;
+  Blaeck swapped;
+  swapped.begin(swappedStream).withDevices(2);
+  BlaeckDeviceRef swappedA = swapped.addDevice(F("Zone A"));
+  BlaeckDeviceRef swappedB = swapped.addDevice("Zone B");
+  swapped.addSignal("Temperature", &boardTemp);
+  swappedB.addSignal("Temperature", &bTemp);
+  swappedA.addSignal("Temperature", &aTemp);
+  swapped.read();
+  swappedStream.data.output.clear();
+  swapped.writeAll();
+  frames = takeData(swappedStream.data.output, widths);
+  assert(frames.size() == 1 && frames[0].schemaHash != hash);
+  assert(frames[0].schemaHash ==
+         crc16(std::string("Temperature") + f + "Zone B/Temperature" + f + "Zone A/Temperature" + f));
+
+  // A board without devices hashes exactly as before: names and type codes only.
+  FakeStream plainStream;
+  Blaeck plain;
+  plain.begin(plainStream);
+  plain.addSignal("Temperature", &boardTemp);
+  plain.read();
+  plainStream.data.output.clear();
+  plain.writeAll();
+  frames = takeData(plainStream.data.output, {4});
+  assert(frames.size() == 1 && frames[0].schemaHash == crc16(std::string("Temperature") + f));
 }
 
 static void ackResult(const std::string &output, uint32_t messageId, const char *bare, byte status)
@@ -1762,7 +1929,7 @@ static void routedDeviceCommands()
   device.begin(stream).withDevices(2);
   BlaeckDeviceRef pump = device.addDevice(F("Pump"));
   device.addDevice(F("Fan"));
-  device.onNumberCommand("SET_PUMP_SPEED", onPing).withRange(0.0f, 100.0f, 1.0f).inDevice(pump);
+  pump.onNumberCommand("SET_PUMP_SPEED", onPing).withRange(0.0f, 100.0f, 1.0f);
   device.onCommand("BOARD_PING", onPing);
   device.read();
   stream.data.output.clear();
@@ -2696,6 +2863,7 @@ int main()
     subDevices(false);
     subDevices(true);
     routedDeviceCommands();
+    sameNamesAcrossDevices();
   }
   reportingPolicies(false);
   reportingPolicies(true);

@@ -79,7 +79,7 @@ inline bool isRunning() { return true; }
 // --- A signal a switch command can mirror ---
 bool ledState = false;
 
-// --- A second board, for the addDevice() and inDevice() blocks ---
+// --- A second board, for the addDevice() and device-handle blocks ---
 BlaeckDeviceRef pump;
 float pumpFlow = 0.0f;
 bool pumpAnswered = true;

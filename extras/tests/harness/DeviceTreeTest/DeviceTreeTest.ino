@@ -64,7 +64,7 @@ void pollPump()
     if (!pump.isMissing())
     {
       pump.markMissing();
-      device.writeState(F("PumpLink"), "no answer");
+      pump.writeState(F("PumpLink"), "no answer");
     }
     return;
   }
@@ -72,7 +72,7 @@ void pollPump()
   if (reading.uptimeMs < lastPumpUptime)
   {
     pump.writeRestarted();
-    device.writeEvent(F("PumpAlarms"), F("restarted"));
+    pump.writeEvent(F("PumpAlarms"), F("restarted"));
   }
   lastPumpUptime = reading.uptimeMs;
 
@@ -83,7 +83,7 @@ void pollPump()
   if (pump.isMissing())
   {
     pump.markPresent();
-    device.writeState(F("PumpLink"), "ok");
+    pump.writeState(F("PumpLink"), "ok");
   }
 }
 
@@ -133,19 +133,18 @@ void setup()
              .withFWVersion(F("1.0"));
 
   device.addSignal(F("BoardValue"), &boardValue);
-  device.addSignal(F("Flow"), &pumpFlow).inDevice(pump);
-  device.addSignal(F("Pressure"), &pumpPressure).inDevice(pump);
+  pump.addSignal(F("Flow"), &pumpFlow);
+  pump.addSignal(F("Pressure"), &pumpPressure);
 
-  device.onNumberCommand("SET_PUMP_SPEED", onSetPumpSpeed)
+  pump.onNumberCommand("SET_PUMP_SPEED", onSetPumpSpeed)
       .withRange(0.0f, 100.0f, 1.0f)
-      .withOwnState(F("PumpSpeed"), &pumpSpeed)
-      .inDevice(pump);
+      .withOwnState(F("PumpSpeed"), &pumpSpeed);
   device.onCommand("POLL", onPoll);
   device.onCommand("SIM_SILENT", onSimSilent);
   device.onCommand("SIM_RESTART", onSimRestart);
 
-  device.addStateChannel(F("PumpLink"), BlaeckText).inDevice(pump);
-  device.addEventChannel(F("PumpAlarms"), F("restarted")).inDevice(pump);
+  pump.addStateChannel(F("PumpLink"), BlaeckText);
+  pump.addEventChannel(F("PumpAlarms"), F("restarted"));
 }
 
 void loop()

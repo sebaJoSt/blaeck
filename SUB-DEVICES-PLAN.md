@@ -13,9 +13,12 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
 - `device.addDevice(name)` returns a `BlaeckDeviceRef`, with `withHWVersion()` and
   `withFWVersion()` (default "n/a"). Slave IDs are assigned in order, 1-255. An empty or
   duplicate name, or a full table, is rejected. `withDevices(n)` on the begin() chain.
-- `.inDevice(ref)` on signals, typed commands, state channels and event channels. A command's
-  `withOwnState()` channel follows its command in either order. Plain `onCommand()` commands
-  stay on the board (no handle).
+- `BlaeckDeviceBase` (steps 1 and 2 done): `Blaeck` and `BlaeckDeviceRef` both inherit the
+  registration calls (`addSignal`, `addStateChannel`, `addEventChannel`, `addEventType`,
+  `onCommand`, the typed commands) and the name lookups (`write`, `writeState`, `writeEvent`,
+  `writeCommandState`, `findSignalIndex`). A sub-device registers through its handle,
+  `pump.addSignal(...)`; `inDevice()` is gone. Names are per device (see Decided). A default
+  or rejected handle has no board and ignores every call; it counts nothing as rejected.
 - Frames: B3 device list and C0 restart report the board as master (single without devices) and
   each sub-device as a slave. B0, A0, 90, 95, 80 and 85 carry the owner's ownership bytes.
   Without sub-devices every frame is byte-identical to before.
@@ -68,7 +71,11 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
     entries, `zoneA.write("Temperature", v)` only zone A's. `write`, `writeState`,
     `writeEvent`, `writeCommandState` and `findSignalIndex` live in the registration base class
     next to `addSignal`, so both have them without extra code.
-  - Registration rejects a duplicate name within the same sub-device (or the board).
+  - Declaring a name again keeps today's board rules, now within one device: a state or
+    event channel declared again reuses its slot (metadata cleared, event types kept);
+    signals have no duplicate check (numbered arrays repeat a base name); a command registered
+    again replaces the old one, and through another device's handle moves to that device.
+    The same name on another device is a separate entry.
   - Everything set through a handle (signal metadata such as withUnit, withIcon,
     withOptions, withDisplayName, withNameSuffix; writeAtInterval/writeOnChange; state, event
     and command metadata) names its entry by number and is unaffected. Only blaeck's internal
@@ -83,7 +90,7 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
     | registering a state or event channel | duplicate check | only within the same sub-device |
     | `withOwnState()` | a same-named channel to take over | only within the command's sub-device |
     | `writeCommandState(command)` | the command's own state channel | within the command's sub-device |
-    | moving a command to another sub-device | its own state channel | the channel moves along, found in the old sub-device |
+    | a command registered again through another handle | its old own state channel | stays behind, as a re-registered command's does on the board today |
 
     Commands themselves (incoming commands, `getSelectOptionIndexOf`, `writeCommandState` by
     command name) are unaffected, since command names stay unique per board. Debug messages
@@ -91,8 +98,9 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   - A0's StateSignal field names the signal or state channel a command reports through
     (`withOwnState()`, `withStateSignal()`); it is resolved within the command's own sub-device,
     by blaeck and by hosts.
-  - Schema hash: for every signal of a sub-device, the hash also covers that sub-device's name,
-    fed before the signal name. The board's own signals are hashed exactly as today, so boards
+  - Schema hash (implemented): a sub-device's signal is hashed as
+    `<sub-device name>/<signal name>` followed by its type code, i.e. the device name's bytes
+    and a `/` fed before the signal name, the same text as Loggbok's qualified column. The board's own signals are hashed exactly as today, so boards
     without sub-devices keep today's hash. The device name rather than its ID, because the
     database column depends on the name and the ID only follows registration order.
     Why: the hash (CRC16 over names and type codes, in signal-list order; blaeck
@@ -193,8 +201,8 @@ The code on this branch still sends B3, C0 and status 0x01; it has to follow thi
 
 ### 1. Registration API
 
-Decided and started: `BlaeckDeviceBase` (step 1 done: `Blaeck` inherits it, no behaviour
-change; the sub-device handle follows in step 2). Background:
+Decided and done: `BlaeckDeviceBase`, inherited by `Blaeck` (step 1, no behaviour change) and
+by `BlaeckDeviceRef` (step 2). Background:
 
 Proposed: a shared base class with all registration functions (`addSignal`, `addStateChannel`,
 `addEventChannel`, `addEventType`, `onCommand`, `onNumberCommand` ... `onTextCommand`) and the

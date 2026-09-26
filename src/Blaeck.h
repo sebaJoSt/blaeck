@@ -811,8 +811,6 @@ protected:
   // Marks the command catalog as changed, so it is sent again.
   void _markDirty() const;
 
-  void _setDevice(const BlaeckDeviceRef &device);
-
   void _setStateSignal(BlaeckString signalName)
   {
 #if BLAECK_ENABLE_COMMAND_META
@@ -1168,27 +1166,6 @@ public:
   TYPE &disabledByDefault(bool on = true)
   {
     _setDisabledByDefault(on);
-    return _self();
-  }
-
-  /*!
-    @brief   Assigns the command to a device from addDevice().
-
-    A host then shows the command under that device instead of under the board. Call it in
-    setup(), before a host connects.
-
-    @param   device  The handle addDevice() returned.
-    @return  The same handle, for chaining.
-
-    @code
-      device.onNumberCommand("SET_PUMP_SPEED", onSetPumpSpeed)
-          .withRange(0.0f, 100.0f, 1.0f)
-          .inDevice(pump);
-    @endcode
-  */
-  TYPE &inDevice(const BlaeckDeviceRef &device)
-  {
-    _setDevice(device);
     return _self();
   }
 
@@ -1745,8 +1722,6 @@ protected:
   void _setInterval(BlaeckIntervalMode mode, double delta);
   void _setOnChange(double delta, uint32_t minIntervalMs);
   void _setOnChange(BlaeckIntervalMode mode);
-  void _setDevice(const BlaeckDeviceRef &device);
-
   Blaeck *_owner;
   int16_t _index;
 };
@@ -1966,25 +1941,6 @@ public:
     return _self();
   }
 
-  /*!
-    @brief   Assigns the signal to a device from addDevice().
-
-    A host then shows the signal under that device instead of under the board. Call it in
-    setup(), before a host connects.
-
-    @param   device  The handle addDevice() returned.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addSignal(F("Flow"), &pumpFlow).withUnit(F("L/min")).inDevice(pump);
-    @endcode
-  */
-  TYPE &inDevice(const BlaeckDeviceRef &device)
-  {
-    _setDevice(device);
-    return _self();
-  }
-
 protected:
   BlaeckSignalRefShared(Blaeck *owner, int16_t index) : BlaeckSignalRefBase(owner, index) {}
   BlaeckSignalRefShared() : BlaeckSignalRefBase() {}
@@ -2151,8 +2107,6 @@ protected:
 
   // Marks the state catalog as changed, so it is sent again.
   void _markDirty() const;
-
-  void _setDevice(const BlaeckDeviceRef &device);
 
   // The debug stream, or nullptr.
   Print *_debugStream() const;
@@ -2336,25 +2290,6 @@ public:
         _markDirty();
       }
     }
-    return _self();
-  }
-
-  /*!
-    @brief   Assigns the state channel to a device from addDevice().
-
-    A host then shows the state channel under that device instead of under the board. Call it in
-    setup(), before a host connects.
-
-    @param   device  The handle addDevice() returned.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addStateChannel(F("Pump status"), BlaeckText).inDevice(pump);
-    @endcode
-  */
-  TYPE &inDevice(const BlaeckDeviceRef &device)
-  {
-    _setDevice(device);
     return _self();
   }
 
@@ -2797,28 +2732,15 @@ public:
   */
   BlaeckEventChannelRef disabledByDefault(bool on = true);
 
-  /*!
-    @brief   Assigns the event channel to a device from addDevice().
-
-    A host then shows the event channel under that device instead of under the board. Call it in
-    setup(), before a host connects.
-
-    @param   device  The handle addDevice() returned.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addEventChannel(F("Pump alarms"), F("dry_run,overheat")).inDevice(pump);
-    @endcode
-  */
-  BlaeckEventChannelRef inDevice(const BlaeckDeviceRef &device);
-
 private:
   Blaeck *_owner;
   int16_t _index;
 };
 
-// What the board declares and reports through: signals, commands, state channels and
-// events, and the writes that find them by name. Blaeck inherits it for the board.
+// What the board and each device from addDevice() declare and report through: signals,
+// commands, state channels and events, and the writes that find them by name. Blaeck
+// inherits it for the board, BlaeckDeviceRef for a device. Names are looked up within the
+// device the call is made on, so `pump.write("Flow", v)` finds only the pump's signal.
 class BlaeckDeviceBase
 {
 public:
@@ -3507,21 +3429,41 @@ public:
   BlaeckTextCommandRef onTextCommand(const char *command, BlaeckCommandHandler handler);
 
 protected:
-  explicit BlaeckDeviceBase(Blaeck *core) : _core(core) {}
+  BlaeckDeviceBase(Blaeck *core, byte deviceId) : _core(core), _deviceId(deviceId) {}
   // Never deleted through this type, so the destructor need not be virtual.
   ~BlaeckDeviceBase() = default;
 
-  // The Blaeck that holds the tables; for the board, Blaeck itself.
+  // The Blaeck that holds the tables: for the board Blaeck itself, for a device the board
+  // that added it. nullptr in a default or rejected device handle, which ignores every call.
   Blaeck *_core;
+  // 0 for the board, 1 and up for a device from addDevice().
+  byte _deviceId;
+
+private:
+  // Blaeck's calls of the same names, for this device. A handle without a board registers
+  // nothing (-1) and sends nothing.
+  int _registerSignal(const char *signalName, dataType type, void *address, bool textInFlash = false);
+  int _registerSignal(const __FlashStringHelper *signalName, dataType type, void *address, bool textInFlash = false);
+  int _registerCommand(const char *command, BlaeckCommandHandler handler, uint8_t kind);
+  int _registerStateChannel(const char *channelName, const __FlashStringHelper *flashName,
+                            dataType valueType = Blaeck_string, const void *value = nullptr,
+                            bool textInFlash = false);
+  int _registerEventChannel(const char *channelName, const __FlashStringHelper *flashName, BlaeckString eventTypes);
+  void _writeStateText(const char *name, bool nameInFlash, const char *text, bool textInFlash);
+  void _writeStateCurrent(const char *name, bool nameInFlash);
+  void _writeStateNumber(const char *channelName, long s, unsigned long u, double d, bool nameInFlash = false);
+  // The board's current timestamp, or 0 without a board.
+  unsigned long long _timeStamp();
 };
 
 // The handle for a device from addDevice(): another board, or a part of this one, that a host
 // shows as its own device. The sketch fetches its values itself, over any link it likes, and
-// blaeck reports them under the device. A default or rejected handle ignores every call.
-class BlaeckDeviceRef
+// blaeck reports them under the device. Register the device's signals, commands and channels
+// through the handle, as on the board. A default or rejected handle ignores every call.
+class BlaeckDeviceRef : public BlaeckDeviceBase
 {
 public:
-  BlaeckDeviceRef() : _owner(nullptr), _id(0) {}
+  BlaeckDeviceRef() : BlaeckDeviceBase(nullptr, 0) {}
 
   /*!
     @brief   Sets the device's hardware name or revision. Defaults to "n/a".
@@ -3602,11 +3544,7 @@ public:
   void writeRestarted();
 
 private:
-  BlaeckDeviceRef(Blaeck *owner, byte id) : _owner(owner), _id(id) {}
-
-  Blaeck *_owner;
-  // The slave ID in the protocol, 1 and up; 0 names no device.
-  byte _id;
+  BlaeckDeviceRef(Blaeck *owner, byte id) : BlaeckDeviceBase(owner, id) {}
 
   friend class Blaeck;
   friend class BlaeckDeviceBase;
@@ -3798,12 +3736,14 @@ public:
 
     blaeck only reports the device. The sketch talks to it, over I2C, UART or anything
     else, keeps the variables of its signals up to date, and forwards its commands.
-    Assign signals, commands and channels to it with inDevice(). Add devices in setup():
-    a host reads the device list when it connects.
+    Register the device's signals, commands and channels through the returned handle,
+    the same calls as on the board. Add devices in setup(): a host reads the device list
+    when it connects.
 
     A host names the device after the board and the device name, so keep the name
-    unique and stable. The first addDevice() makes the board a "master" in the
-    protocol; everything the sketch registered without inDevice() stays on the board.
+    unique and stable. Signal and channel names only need to be unique within the board
+    or within one device; command names within the whole board. The first addDevice()
+    makes the board a "master" in the protocol.
 
     @param   name  The name a host shows. RAM text is copied; an F() literal stays in flash.
     @return  A handle for the device. If the table is full or the name is empty, the
@@ -3812,7 +3752,7 @@ public:
 
     @code
       BlaeckDeviceRef pump = device.addDevice(F("Pump controller"));
-      device.addSignal(F("Flow"), &pumpFlow).inDevice(pump);
+      pump.addSignal(F("Flow"), &pumpFlow).withUnit(F("L/min"));
     @endcode
   */
   BlaeckDeviceRef addDevice(BlaeckString name);
@@ -4638,41 +4578,41 @@ protected:
 #endif
   // Add a signal and return its index, or -1 if it was rejected. All addSignal() overloads
   // end up here.
-  int _registerSignal(const char *signalName, dataType type, void *address, bool textInFlash = false);
-  int _registerSignal(const __FlashStringHelper *signalName, dataType type, void *address, bool textInFlash = false);
+  int _registerSignal(byte deviceId, const char *signalName, dataType type, void *address, bool textInFlash = false);
+  int _registerSignal(byte deviceId, const __FlashStringHelper *signalName, dataType type, void *address, bool textInFlash = false);
   // Exactly one of ram and flash is non-null.
-  int _registerSignalCommon(const char *ram, const __FlashStringHelper *flash,
+  int _registerSignalCommon(byte deviceId, const char *ram, const __FlashStringHelper *flash,
                             dataType type, void *address, bool textInFlash);
   void _writeSignalText(int signalIndex, const void *value, bool inFlash, unsigned long long timestamp);
   void _emitTextBytes(const void *text, bool inFlash, size_t length);
   void _writeCommandState(const char *command, bool inFlash);
   // The lookups behind BlaeckDeviceBase's findSignalIndex(), addEventType() and writeEvent().
-  int _findSignalIndex(const char *signalName);
-  int _findSignalIndex(const __FlashStringHelper *signalName);
-  bool _addEventType(const char *channelName, BlaeckString eventType);
-  void _writeEvent(const char *channelName, BlaeckString eventType);
+  int _findSignalIndex(byte deviceId, const char *signalName);
+  int _findSignalIndex(byte deviceId, const __FlashStringHelper *signalName);
+  bool _addEventType(byte deviceId, const char *channelName, BlaeckString eventType);
+  void _writeEvent(byte deviceId, const char *channelName, BlaeckString eventType);
   // Registers a command and returns its table index, or -1 if it was rejected (counted, and
   // reported on the debug stream).
-  int _registerCommand(const char *command, BlaeckCommandHandler handler, uint8_t kind);
+  int _registerCommand(byte deviceId, const char *command, BlaeckCommandHandler handler, uint8_t kind);
   // Resets an entry's metadata, so registering a name again starts from scratch.
   void _resetCommandMeta(uint16_t handlerIndex, uint8_t kind);
   // Adds a state channel and returns its index, or -1 if it was rejected. Adding an existing
   // name reuses its slot with the metadata cleared. Exactly one of channelName and flashName
   // is set; a flash name is kept as a pointer, a RAM name is copied.
-  int _registerStateChannel(const char *channelName, const __FlashStringHelper *flashName, dataType valueType = Blaeck_string,
+  int _registerStateChannel(byte deviceId, const char *channelName, const __FlashStringHelper *flashName, dataType valueType = Blaeck_string,
                               const void *value = nullptr, bool textInFlash = false);
-  void _writeStateText(const char *name, bool nameInFlash, const char *text, bool textInFlash);
-  void _writeStateCurrent(const char *name, bool nameInFlash);
-  void _writeStateNumber(const char *channelName, long s, unsigned long u, double d, bool nameInFlash = false);
+  void _writeStateText(byte deviceId, const char *name, bool nameInFlash, const char *text, bool textInFlash);
+  void _writeStateCurrent(byte deviceId, const char *name, bool nameInFlash);
+  void _writeStateNumber(byte deviceId, const char *channelName, long s, unsigned long u, double d, bool nameInFlash = false);
   // As _registerStateChannel(). A redeclared event channel keeps its types.
-  int _registerEventChannel(const char *channelName, const __FlashStringHelper *flashName, BlaeckString eventTypes);
+  int _registerEventChannel(byte deviceId, const char *channelName, const __FlashStringHelper *flashName, BlaeckString eventTypes);
   // Adds one event type per comma-separated field, in order.
   void _addEventTypesCsv(uint16_t channelIndex, const detail::StoredString &eventTypes);
 #if BLAECK_ENABLE_COMMAND_META
   void writeCommandsFrame(unsigned long MessageID);
   byte _validateTypedCommand(uint16_t handlerIndex);
   // Adds the channel a command's withOwnState() uses. addStateChannel() refuses such names.
-  bool _addOwnedStateChannel(BlaeckString channelName, BlaeckStateTextGetter getStateText,
+  bool _addOwnedStateChannel(byte deviceId, BlaeckString channelName, BlaeckStateTextGetter getStateText,
                              dataType valueType = Blaeck_string, const void *value = nullptr);
   // Adds the withOwnState() channel and marks the catalogs for sending. False if the channel
   // couldn't be added, and the command then reports no state.
@@ -4695,19 +4635,19 @@ protected:
 #if BLAECK_ENABLE_STATE_CHANNELS
   void writeStateChannelsFrame(unsigned long MessageID);
   // Index of a declared channel, or -1 when the name was never declared.
-  int _findStateChannel(const char *channelName) const;
-  int _findStateChannel(const __FlashStringHelper *channelName) const;
-  int _findStateChannel(BlaeckString channelName) const
+  int _findStateChannel(byte deviceId, const char *channelName) const;
+  int _findStateChannel(byte deviceId, const __FlashStringHelper *channelName) const;
+  int _findStateChannel(byte deviceId, BlaeckString channelName) const
   {
-    return channelName.inFlash() ? _findStateChannel(reinterpret_cast<const __FlashStringHelper *>(channelName.data()))
-                                 : _findStateChannel(channelName.data());
+    return channelName.inFlash() ? _findStateChannel(deviceId, reinterpret_cast<const __FlashStringHelper *>(channelName.data()))
+                                 : _findStateChannel(deviceId, channelName.data());
   }
 #endif
 #if BLAECK_ENABLE_EVENTS
   void writeEventChannelsFrame(unsigned long MessageID);
   // Index of a declared event channel, or -1 when the name was never declared.
-  int _findEventChannel(const char *channelName) const;
-  int _findEventChannel(const __FlashStringHelper *channelName) const;
+  int _findEventChannel(byte deviceId, const char *channelName) const;
+  int _findEventChannel(byte deviceId, const __FlashStringHelper *channelName) const;
   // Position of an event type within its own channel's list, or -1 when that
   // channel never declared it.
   int _findEventType(uint16_t channelIndex, BlaeckString eventType) const;
@@ -5077,8 +5017,6 @@ protected:
   {
     return (id != 0 && id <= _deviceCount) ? &_devices[id - 1] : nullptr;
   }
-  // The slave ID a handle names, or -1 when it names no device of this Blaeck.
-  int _deviceIdOf(const BlaeckDeviceRef &device) const;
   bool _deviceMissing(byte id) const
   {
     const DeviceEntry *d = _deviceEntry(id);
@@ -5086,10 +5024,6 @@ protected:
   }
   void _setDeviceMissing(byte id, bool missing);
   void _writeDeviceRestarted(byte id);
-  void _setSignalDevice(int16_t index, const BlaeckDeviceRef &device);
-  void _setCommandDevice(int16_t index, const BlaeckDeviceRef &device);
-  void _setStateChannelDevice(int16_t index, const BlaeckDeviceRef &device);
-  void _setEventChannelDevice(int16_t index, const BlaeckDeviceRef &device);
   // Needed even with BLAECK_ENABLE_STATE_CHANNELS=0, because the state handles still compile.
   typedef blaeck_detail::StateChannelEntry StateChannelEntry;
 
@@ -5138,7 +5072,7 @@ protected:
   byte _valueBytes(dataType declared, long s, unsigned long u, double d, byte *out);
   // Finds the channel for a writeState() push, or returns -1 (with a warning) if the push is
   // refused.
-  int _stateChannelForPush(const char *channelName, bool wantText, bool nameInFlash = false);
+  int _stateChannelForPush(byte deviceId, const char *channelName, bool wantText, bool nameInFlash = false);
 #endif
 #if BLAECK_ENABLE_EVENTS
   typedef blaeck_detail::EventChannelEntry EventChannelEntry;

@@ -34,10 +34,9 @@ void setup()
              .withFWVersion(F("1.0"));
 
   device.addSignal(F("Temperature"), &temperature);
-  device.addSignal(F("Flow"), &pumpFlow).inDevice(pump);
-  device.onNumberCommand("SET_PUMP_SPEED", onSetPumpSpeed)
-      .withRange(0.0f, 100.0f, 1.0f)
-      .inDevice(pump);
+  pump.addSignal(F("Flow"), &pumpFlow);
+  pump.onNumberCommand("SET_PUMP_SPEED", onSetPumpSpeed)
+      .withRange(0.0f, 100.0f, 1.0f);
 }
 
 void loop()
@@ -66,12 +65,23 @@ Greenhouse
 [SubDevices](../examples/more/SubDevices) is the complete version: a main board and a pump board
 talking over a UART, with a checksum, a tolerance for missed replies and restart detection.
 
-## Assigning to a device
+## Registering on a device
 
-`addDevice()` returns a handle. Pass it to `inDevice()` on a signal, a typed command, a state
-channel or an event channel. Everything registered without `inDevice()` stays on the board.
-A command's `withOwnState()` channel goes with its command. Plain commands from `onCommand()`
-always belong to the board.
+`addDevice()` returns a handle, and the handle has the same registration calls as the board:
+`addSignal()`, `addStateChannel()`, `addEventChannel()`, `addEventType()`, `onCommand()` and the
+typed commands. What you register through the handle belongs to the device; what you register
+through the board stays on the board. A command's `withOwnState()` channel belongs to the
+command's device.
+
+The writes that take a name look it up in the same place: `pump.write("Flow", value)`,
+`pump.writeState(...)` and `pump.writeEvent(...)` find the pump's entries, `device.write(...)`
+the board's.
+
+Names only have to be unique within the board or within one device. The board and two zones
+can each have a `Temperature` signal, a `Status` state channel or an `Alarm` event channel; a
+host shows them under their own device. Don't repeat the device's name in its entries: a host
+already shows "Pump controller" in front of `Flow`. Command names are the exception - they are
+unique across the whole board, because an incoming command is found by its name.
 
 A host sends a device's command with the device's ID in front, such as
 `<@1:SET_PUMP_SPEED,40>`. blaeck runs it only if the command belongs to that device, so your

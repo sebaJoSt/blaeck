@@ -6,7 +6,8 @@ Version 7.0.0 is in development; setting its metadata does not publish a release
 - Follow `extras/API-STYLE.md` for public documentation and implementation comments.
 - One concrete `Blaeck` class in `src/Blaeck.h`, with no virtual functions or transport hooks.
   Its only base, `BlaeckDeviceBase`, holds the registration and name-lookup API as thin
-  non-virtual wrappers; the tables and logic stay in `Blaeck`. `Blaeck.cpp` implements protocol/catalog logic and lifecycle; `BlaeckTransport.cpp` implements
+  non-virtual wrappers, shared with the sub-device handle `BlaeckDeviceRef`; the tables and
+  logic stay in `Blaeck`. `Blaeck.cpp` implements protocol/catalog logic and lifecycle; `BlaeckTransport.cpp` implements
   connection I/O using Arduino's generic interfaces, never a concrete network library.
   Keep one catalog per device, not two wrapped devices. The small typed server adapter
   in `src/detail/BlaeckServerAdapter.h` and CRC32 helper in `src/detail/BlaeckCRC32.h`

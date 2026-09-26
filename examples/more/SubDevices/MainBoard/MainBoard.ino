@@ -71,7 +71,7 @@ bool requestReading()
   if (uptimeMs < lastPumpUptime)
   {
     pump.writeRestarted();
-    device.writeEvent(F("Pump alarms"), F("restarted"));
+    pump.writeEvent(F("Alarms"), F("restarted"));
   }
   lastPumpUptime = uptimeMs;
 
@@ -89,7 +89,7 @@ void pollPump()
     if (pump.isMissing())
     {
       pump.markPresent();
-      device.writeState(F("Pump link"), "ok");
+      pump.writeState(F("Link"), "ok");
     }
     return;
   }
@@ -99,7 +99,7 @@ void pollPump()
   if (missedReplies == MISSES_BEFORE_MISSING && !pump.isMissing())
   {
     pump.markMissing();
-    device.writeState(F("Pump link"), "no answer");
+    pump.writeState(F("Link"), "no answer");
   }
 }
 
@@ -132,15 +132,16 @@ void setup()
 
   device.addSignal(F("Temperature"), &boardTemperature).withUnit(F("\xC2\xB0" "C"));
 
-  device.addSignal(F("Flow"), &pumpFlow).withUnit(F("L/min")).inDevice(pump);
-  device.addSignal(F("Pressure"), &pumpPressure).withUnit(F("bar")).inDevice(pump);
-  device.onNumberCommand("SET_PUMP_SPEED", onSetPumpSpeed)
+  // The pump's entries, registered through its handle. A host shows them under
+  // "Pump controller", so their names need no "Pump" of their own.
+  pump.addSignal(F("Flow"), &pumpFlow).withUnit(F("L/min"));
+  pump.addSignal(F("Pressure"), &pumpPressure).withUnit(F("bar"));
+  pump.onNumberCommand("SET_PUMP_SPEED", onSetPumpSpeed)
       .withRange(0.0f, 100.0f, 1.0f)
       .withUnit(F("%"))
-      .withOwnState(F("Pump speed"), &pumpSpeed)
-      .inDevice(pump);
-  device.addStateChannel(F("Pump link"), BlaeckText).inDevice(pump);
-  device.addEventChannel(F("Pump alarms"), F("restarted")).inDevice(pump);
+      .withOwnState(F("Speed"), &pumpSpeed);
+  pump.addStateChannel(F("Link"), BlaeckText);
+  pump.addEventChannel(F("Alarms"), F("restarted"));
 }
 
 void loop()
