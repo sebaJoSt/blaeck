@@ -104,9 +104,20 @@ UART, CAN or I2C, the sensors of an RF bridge, or parts of the board itself. bla
   - The wire needs nothing else: every B0, 90 and 80 record carries its owner; F0, 95 and 85
     refer by number.
   - Loggbok: database columns of sub-device signals are qualified by device, for example
-    `Zone A/Temperature`, and its duplicate check uses the qualified name; the board's own
-    signals keep plain names, so existing tables are unchanged. MQTT topics and Home Assistant
-    identities are already per device path.
+    `Zone A/Temperature`; the board's own signals keep plain names, so existing tables are
+    unchanged. MQTT topics and Home Assistant identities are already per device path. Rules:
+    - always qualified for sub-devices, not only on a clash, so adding a second sub-device with
+      the same signal name later does not rename the first one's column;
+    - `/` as separator, matching the MQTT path and the tree (the databases quote identifiers);
+    - `SignalNameRules` (case-insensitive duplicates, reserved names such as TimeStamp) runs on
+      the qualified name, which also catches clashes like device "A/B" + signal "C" versus
+      device "A" + signal "B/C";
+    - renaming a sub-device creates new columns, as renaming the board does;
+    - new length check: PostgreSQL/TimescaleDB truncates identifiers to 63 bytes with only a
+      notice, so two long names differing after byte 63 would share a column. Reject
+      qualified names over 63 bytes (UTF-8) for TimescaleDB with a clear message. SQLite has no
+      such limit. This affects long plain signal names already today; qualification makes it
+      more likely.
 - Not a full `Blaeck` per sub-device: `sizeof(Blaeck)` is 506 bytes on a Mega, 346 on an Uno.
 - Device list: a new B7 (see below), sent always. No capability negotiation: Loggbok asks
   GET_DEVICES first and must understand B7 and C1 before blaeck 7.0 is released.
