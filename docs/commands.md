@@ -56,7 +56,7 @@ void loop()
 Home Assistant shows this as a number input. Setting it to 1.5 is what sent the command above.
 
 The name travels on the wire, so write it as an identifier: `SET_FREQ`, not `Set Frequency`. It
-may not start with `#`, `@` or `BLAECK.`.
+may not start with `#` or `BLAECK.`.
 
 ## The kinds of control
 

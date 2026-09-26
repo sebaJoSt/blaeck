@@ -2045,19 +2045,26 @@ static void deviceCommands()
   ackResult(stream.data.output, 7, "SET_PUMP_SPEED,40", 0);
   stream.data.output.clear();
 
-  // '@' is no prefix: the command is unknown and nothing runs.
+  // '@' means nothing: "@1:#8:SET_PUMP_SPEED" is one unknown name, and nothing runs.
   command(device, stream, "<@1:#8:SET_PUMP_SPEED,41>");
   assert(pings.size() == 1);
   const std::string ack = commandFramePayload(stream.data.output, 0xA5, 0);
   assert(static_cast<byte>(ack[8]) == 1 && static_cast<byte>(ack[9]) == BLAECK_ACK_UNKNOWN);
   stream.data.output.clear();
+  // So a name may start with it.
+  device.onCommand("@PING", onPing);
+  assert(!device.hasRejectedCommands());
+  command(device, stream, "<#9:@PING,1>");
+  ackResult(stream.data.output, 9, "@PING,1", 0);
+  stream.data.output.clear();
+  pings.pop_back();
 
   // While the pump is missing its command is refused and the handler doesn't run.
   pump.markMissing();
   stream.data.output.clear();
-  command(device, stream, "<#9:SET_PUMP_SPEED,42>");
+  command(device, stream, "<#11:SET_PUMP_SPEED,42>");
   assert(pings.size() == 1);
-  const std::string refused = commandFramePayload(stream.data.output, 0xA5, 9);
+  const std::string refused = commandFramePayload(stream.data.output, 0xA5, 11);
   assert(static_cast<byte>(refused[8]) == 1 && static_cast<byte>(refused[9]) == BLAECK_ACK_DEVICE_NOT_RESPONDING);
   stream.data.output.clear();
   command(device, stream, "<#10:BOARD_PING,1>"); // the board's own commands still run

@@ -1596,13 +1596,12 @@ int Blaeck::_registerCommand(byte deviceId, const char *command, BlaeckCommandHa
     _rejectedCommandCount++;
     return -1;
   }
-  // '#' starts a received command's message-id prefix, and '@' is reserved for a prefix, so a
-  // name starting with one could never be matched.
-  if (command[0] == '#' || command[0] == '@')
+  // '#' starts a received command's message id, so a name starting with it could never be matched.
+  if (command[0] == '#')
   {
     if (_debugStream != nullptr)
     {
-      _debugStream->print(F("Command name starts with a reserved prefix character: "));
+      _debugStream->print(F("Command name starts with '#', which marks a message id: "));
       _debugStream->println(command);
     }
     _rejectedCommandCount++;

@@ -3329,7 +3329,7 @@ public:
     A host lists the command but can't build a control for it. For a control, use
     onNumberCommand(), onSwitchCommand() or another typed command.
 
-    @param   command  The command name. It can't start with `#`, `@` or `BLAECK.`.
+    @param   command  The command name. It can't start with `#` or `BLAECK.`.
     @param   handler  Called with the parameters as received.
 
     @note    A command that can't be registered (table full, name too long or
