@@ -700,51 +700,44 @@ struct DataFrame
   uint64_t timestamp = 0;
   byte mode = 0;
   byte flags = 0;
-  byte status = 0;
-  std::string statusPayload;
   uint16_t schemaHash = 0;
 };
 
 static std::vector<DataFrame> takeData(std::string &output, const std::vector<int> &widths)
 {
   std::vector<DataFrame> result;
-  const std::string marker = std::string("<BLAECK:") + char(0xD2) + ':';
+  const std::string marker = std::string("<BLAECK:") + char(0xD3) + ':';
   size_t start = 0;
   while ((start = output.find(marker, start)) != std::string::npos)
   {
     const size_t end = output.find("/BLAECK>\r\n", start);
-    assert(end != std::string::npos && end >= start + 31);
+    assert(end != std::string::npos && end >= start + 22);
     size_t p = start + marker.size() + 4;
     assert(output[p++] == ':');
     DataFrame frame;
     frame.flags = static_cast<byte>(output[p++]);
-    assert(output[p++] == ':');
     frame.schemaHash = static_cast<uint16_t>(static_cast<byte>(output[p]) |
                                              (static_cast<byte>(output[p + 1]) << 8));
     p += 2;
-    assert(output[p++] == ':');
     frame.mode = static_cast<byte>(output[p++]);
     if (frame.mode != BLAECK_NO_TIMESTAMP)
     {
       memcpy(&frame.timestamp, output.data() + p, 8);
       p += 8;
     }
-    assert(output[p++] == ':');
-    while (p < end - 9)
+    while (p < end - 4)
     {
       uint16_t id;
       memcpy(&id, output.data() + p, 2);
       p += 2;
       assert(id < widths.size());
       const size_t size = widths[id] < 0 ? static_cast<byte>(output[p++]) : widths[id];
-      assert(p + size <= end - 9);
+      assert(p + size <= end - 4);
       frame.ids.push_back(id);
       frame.values.push_back(output.substr(p, size));
       p += size;
     }
-    assert(p == end - 9);
-    frame.status = static_cast<byte>(output[end - 9]);
-    frame.statusPayload = output.substr(end - 8, 4);
+    assert(p == end - 4);
     uint32_t actual;
     memcpy(&actual, output.data() + end - 4, 4);
     blaeck::detail::BlaeckCRC32 crc;
@@ -1715,10 +1708,9 @@ static void subDevices(bool buffered)
   device.writeIfDue();
   auto frames = takeData(stream.data.output, widths);
   assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 1, 2, 3}));
-  assert(frames[0].status == 0 && frames[0].statusPayload == std::string(4, '\0'));
 
   // Going missing is a C1 at once, sent only on a real change; the device's signals leave the
-  // data frames, whose status stays normal.
+  // data frames.
   pump.markMissing();
   assert(commandFramePayload(stream.data.output, 0xC1, 0) == notice(1, 0x02));
   stream.data.output.clear();
@@ -1728,10 +1720,9 @@ static void subDevices(bool buffered)
   device.writeIfDue();
   frames = takeData(stream.data.output, widths);
   assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 3}));
-  assert(frames[0].status == 0 && frames[0].statusPayload == std::string(4, '\0'));
   device.writeAll();
   frames = takeData(stream.data.output, widths);
-  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 3}) && frames[0].status == 0);
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 3}));
   pump.writeAll();
   assert(takeData(stream.data.output, widths).empty());
 
@@ -1774,7 +1765,7 @@ static void subDevices(bool buffered)
   stream.data.output.clear();
   device.writeIfDue();
   frames = takeData(stream.data.output, widths);
-  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 1, 2, 3}) && frames[0].status == 0);
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 1, 2, 3}));
   fan.markPresent();
   stream.data.output.clear();
 

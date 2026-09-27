@@ -109,24 +109,21 @@ def owner_before(payload, name, gap=0):
 
 
 def decode_data(body):
-    """Signal indexes, float values and status of a D2 frame (all test signals are floats)."""
+    """Signal indexes and float values of a D3 frame (all test signals are floats)."""
     crc, = struct.unpack("<I", body[-4:])
     if zlib.crc32(body[:-4]) != crc:
         raise AssertionError("Data CRC32 mismatch")
-    mode = body[12]
-    position = 13 + (8 if mode != 0 else 0)
-    if body[position] != ord(":"):
-        raise AssertionError("Invalid data header")
-    position += 1
+    mode = body[10]
+    position = 11 + (8 if mode != 0 else 0)
     values = {}
-    while position < len(body) - 9:
+    while position < len(body) - 4:
         index, = struct.unpack_from("<H", body, position)
         value, = struct.unpack_from("<f", body, position + 2)
         values[index] = value
         position += 6
-    if position != len(body) - 9:
+    if position != len(body) - 4:
         raise AssertionError("Misaligned signal payload")
-    return values, body[-9], body[-8:-4]
+    return values
 
 
 class Checks:
@@ -181,9 +178,8 @@ def run(port):
 
     link.send("<SET_PUMP_SPEED,40>", done("SET_PUMP_SPEED"))
     items = link.send("<POLL>", done("POLL"))
-    values, status, payload = decode_data(frames(items, 0xD2)[-1][3])
-    check("pump answering: all three signals, status 0",
-          sorted(values) == [0, 1, 2] and status == 0 and payload == bytes(4), (values, status, payload))
+    values = decode_data(frames(items, 0xD3)[-1][3])
+    check("pump answering: all three signals", sorted(values) == [0, 1, 2], values)
     check("the forwarded speed reached the pump", abs(values.get(1, -1) - 4.0) < 1e-6, values)
 
     # How Loggbok sends a command of the pump: by name, like the board's.
@@ -195,15 +191,14 @@ def run(port):
     check("'@' is no prefix: the command is unknown",
           ("text", "DONE POLL") not in items and items[-1][2][8:10] == bytes([1, 1]), items[-1][2][8:10])
     items = link.send("<POLL>", done("POLL"))
-    values, _, _ = decode_data(frames(items, 0xD2)[-1][3])
+    values = decode_data(frames(items, 0xD3)[-1][3])
     check("the speed reached the pump", abs(values.get(1, -1) - 3.0) < 1e-6, values)
 
     link.send("<SIM_SILENT,1>", done("SIM_SILENT"))
     items = link.send("<POLL>", done("POLL"))
-    values, status, payload = decode_data(frames(items, 0xD2)[-1][3])
+    values = decode_data(frames(items, 0xD3)[-1][3])
     check("pump missing: a notice for device 1", notice(1, 2) in [f[2] for f in frames(items, 0xC1)])
-    check("pump missing: only BoardValue is sent, status normal",
-          sorted(values) == [0] and status == 0 and payload == bytes(4), (values, status, payload))
+    check("pump missing: only BoardValue is sent", sorted(values) == [0], values)
     link_states = frames(items, 0x95)
     check("pump missing: PumpLink says so, for the pump",
           bool(link_states) and link_states[-1][2][:1] == PUMP and b"no answer" in link_states[-1][2])
@@ -217,10 +212,9 @@ def run(port):
 
     link.send("<SIM_SILENT,0>", done("SIM_SILENT"))
     items = link.send("<POLL>", done("POLL"))
-    values, status, _ = decode_data(frames(items, 0xD2)[-1][3])
+    values = decode_data(frames(items, 0xD3)[-1][3])
     check("pump back: a notice for device 1", notice(1, 3) in [f[2] for f in frames(items, 0xC1)])
-    check("pump back: all three signals, status 0", sorted(values) == [0, 1, 2] and status == 0,
-          (values, status))
+    check("pump back: all three signals", sorted(values) == [0, 1, 2], values)
     link_states = frames(items, 0x95)
     check("pump back: PumpLink says ok", bool(link_states) and b"ok" in link_states[-1][2])
 

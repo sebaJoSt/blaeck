@@ -4052,7 +4052,7 @@ bool Blaeck::_frameOpen(byte msgKey, unsigned long msgId, bool withCrc)
   _emitStr("<BLAECK:");
   if (withCrc)
   {
-    // The CRC covers the key through the status payload, not the start marker.
+    // The CRC covers the key through the last data byte, not the start marker.
     _crc.restart();
     _frameCrcOn = true;
   }
@@ -4210,16 +4210,14 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
   if (!any)
     return;
 
-  if (!_frameOpen(0xD2, msg_id, true))
+  // Layout: Data (0xD3) in the protocol spec.
+  if (!_frameOpen(0xD3, msg_id, true))
     return;
 
   bool restartFlagSnapshot = _sendRestartFlag;
   _emitByte(_frameFlags(restartFlagSnapshot, intervalReport));
-  _emitByte(':');
-
   _emitByte((byte)(_schemaHash & 0xFF));
   _emitByte((byte)((_schemaHash >> 8) & 0xFF));
-  _emitByte(':');
 
   _emitByte((byte)_timestampMode);
   if (_timestampMode != BLAECK_NO_TIMESTAMP)
@@ -4229,7 +4227,6 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
     ullCvt.val = timestamp;
     _emitBytes(ullCvt.bval, 8);
   }
-  _emitByte(':');
 
   for (int i = signalIndex_start; i <= signalIndex_end; i++)
   {
@@ -4277,10 +4274,6 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
     }
 
   }
-
-  // Status byte and payload: always normal (0) from blaeck.
-  const byte status[5] = {0, 0, 0, 0, 0};
-  _emitBytes(status, 5);
 
   uint32_t crc_value = _frameCrcEnd();
   _emitBytes((byte *)&crc_value, 4);

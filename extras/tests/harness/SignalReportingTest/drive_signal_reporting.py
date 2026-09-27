@@ -18,25 +18,23 @@ FORMATS = {0: "<f", 1: "<f", 2: "<f", 3: "<f", 4: "<?", 6: "<i", 7: "<I", 8: "<f
 
 
 def decode_data(frame):
-    if not frame.startswith(START + b"\xd2:") or not frame.endswith(END):
+    if not frame.startswith(START + b"\xd3:") or not frame.endswith(END):
         raise ValueError("Not a complete data frame")
     body = frame[len(START):-len(END)]
-    if len(body) < 31:
+    if len(body) < 23:
         raise ValueError("Truncated data frame")
     crc, = struct.unpack("<I", body[-4:])
     if zlib.crc32(body[:-4]) != crc:
         raise ValueError("Data CRC32 mismatch")
-    if any(body[p] != ord(":") for p in (1, 6, 8, 11)):
+    if any(body[p] != ord(":") for p in (1, 6)):
         raise ValueError("Invalid data header separators")
-    mode = body[12]
+    mode = body[10]
     if mode != 1:
         raise ValueError(f"Expected MICROS timestamp, got mode {mode}")
-    timestamp, = struct.unpack_from("<Q", body, 13)
-    if body[21] != ord(":") or body[-9:-4] != bytes(5):
-        raise ValueError("Invalid data header/status")
-    position = 22
+    timestamp, = struct.unpack_from("<Q", body, 11)
+    position = 19
     values = {}
-    while position < len(body) - 9:
+    while position < len(body) - 4:
         index, = struct.unpack_from("<H", body, position)
         position += 2
         if index in values:
@@ -51,11 +49,11 @@ def decode_data(frame):
             value, = struct.unpack_from(FORMATS[index], body, position)
         else:
             raise ValueError(f"Unknown signal {index}")
-        if position + size > len(body) - 9:
+        if position + size > len(body) - 4:
             raise ValueError("Signal payload exceeds frame")
         values[index] = value
         position += size
-    if position != len(body) - 9:
+    if position != len(body) - 4:
         raise ValueError("Misaligned signal payload")
     return {"values": values, "timestamp": timestamp, "flags": body[7]}
 
@@ -76,7 +74,7 @@ class Decoder:
                     break
                 frame = bytes(self.buffer[:end + len(END)])
                 del self.buffer[:end + len(END)]
-                if frame[len(START)] == 0xD2:
+                if frame[len(START)] == 0xD3:
                     result.append(decode_data(frame))
             elif START.startswith(self.buffer):
                 break
