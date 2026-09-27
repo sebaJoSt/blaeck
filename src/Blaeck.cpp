@@ -4049,7 +4049,9 @@ bool Blaeck::_frameOpen(byte msgKey, unsigned long msgId, bool withCrc)
     _bufReset();
   _frameCrcOn = false;
 
-  _emitStr("<BLAECK:");
+  // Layout: the envelope in the protocol spec's introduction.
+  _putBytes((const byte *)"<blaeck:", 8);
+  _frameEscaped = true;
   if (withCrc)
   {
     // The CRC covers the key through the last data byte, not the start marker.
@@ -4067,7 +4069,8 @@ bool Blaeck::_frameOpen(byte msgKey, unsigned long msgId, bool withCrc)
 bool Blaeck::_frameClose()
 {
   _frameCrcOn = false;
-  _emitStr("/BLAECK>\r\n");
+  _frameEscaped = false;
+  _putBytes((const byte *)"/>\n", 3);
   bool complete;
   if (!_frameDirect)
     complete = _bufSend();

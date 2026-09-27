@@ -59,7 +59,7 @@ def read_for(s, seconds):
 
 def text_of(raw):
     """Strip Blaeck frames; the debug text shares the port with them."""
-    t = re.sub(rb"<BLAECK:.*?/BLAECK>\r\n", b"", raw, flags=re.S)
+    t = re.sub(rb"<blaeck:[^\n]*\n", b"", raw)
     out = []
     for line in t.split(b"\n"):
         line = line.replace(b"\r", b"")

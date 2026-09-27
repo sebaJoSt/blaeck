@@ -703,8 +703,53 @@ struct DataFrame
   uint16_t schemaHash = 0;
 };
 
-static std::vector<DataFrame> takeData(std::string &output, const std::vector<int> &widths)
+// The frames in a device's output as the readers below take them: unescaped, between
+// "<BLAECK:" and "/BLAECK>\r\n". Checks each frame on the way: nothing between its markers may
+// read as a frame's start or a line's end, and it ends in "/>" and LF.
+static std::string unescaped(const std::string &wire)
 {
+  std::string out;
+  size_t p = 0;
+  for (;;)
+  {
+    const size_t start = wire.find("<blaeck:", p);
+    if (start == std::string::npos)
+    {
+      out.append(wire, p, std::string::npos);
+      return out;
+    }
+    out.append(wire, p, start - p);
+    out += "<BLAECK:";
+    size_t q = start + 8;
+    for (;;)
+    {
+      assert(q < wire.size());
+      char c = wire[q++];
+      assert(c != '<' && c != '\r');
+      if (c == '\n')
+      {
+        assert(out.size() >= 2 && out.compare(out.size() - 2, 2, "/>") == 0);
+        out.erase(out.size() - 2);
+        out += "/BLAECK>\r\n";
+        break;
+      }
+      if (c == '\\')
+      {
+        assert(q < wire.size());
+        const char escaped = static_cast<char>(wire[q++] ^ 0x20);
+        assert(escaped == '<' || escaped == '\\' || escaped == '\r' || escaped == '\n');
+        c = escaped;
+      }
+      out += c;
+    }
+    p = q;
+  }
+}
+
+static std::vector<DataFrame> takeData(std::string &wire, const std::vector<int> &widths)
+{
+  std::string output = unescaped(wire);
+  wire.clear();
   std::vector<DataFrame> result;
   const std::string marker = std::string("<BLAECK:") + char(0xD3) + ':';
   size_t start = 0;
@@ -765,8 +810,9 @@ static void command(Blaeck &device, FakeStream &stream, const char *text)
   device.read();
 }
 
-static std::string commandFramePayload(const std::string &output, byte key, uint32_t messageId)
+static std::string commandFramePayload(const std::string &wire, byte key, uint32_t messageId)
 {
+  const std::string output = unescaped(wire);
   const std::string marker = std::string("<BLAECK:") + char(key) + ':';
   const size_t start = output.find(marker);
   assert(start != std::string::npos);
@@ -889,6 +935,32 @@ static void commandBufferBoundaries(bool tcp, bool buffered)
   receive("<" + prefix + oversized + ">");
   assert(pings.empty());
   expectAck(oversized.substr(0, capacity - 1 - prefix.size()), 42, BLAECK_ACK_TRUNCATED);
+}
+
+// Within a frame, bytes that would read as a frame's start, an escape or a line's end go escaped,
+// and read back unchanged; '/' goes as it is. The frame is one line ending in "/>" and LF.
+static void frameEscaping(bool buffered)
+{
+  FakeStream stream;
+  Blaeck device;
+  device.begin(stream).withSignals(1);
+  device.setBufferedWrites(buffered);
+  static char text[] = "a<b\\c\rd\ne/f";
+  device.addSignal("Text", text).writeAtInterval(BLAECK_OFF);
+  device.writeAll();
+
+  const std::string wire = stream.data.output;
+  assert(wire.compare(0, 8, "<blaeck:") == 0);
+  assert(wire.compare(wire.size() - 3, 3, "/>\n") == 0);
+  assert(wire.find('\n') == wire.size() - 1);
+  assert(wire.find('<', 1) == std::string::npos);
+  assert(wire.find('\r') == std::string::npos);
+  for (const char *escaped : {"\\\x1c", "\\\x7c", "\\\x2d", "\\\x2a"})
+    assert(wire.find(escaped) != std::string::npos);
+  assert(wire.find("e/f") != std::string::npos);
+
+  const auto frames = takeData(stream.data.output, {-1});
+  assert(frames.size() == 1 && frames[0].values == std::vector<std::string>({"a<b\\c\rd\ne/f"}));
 }
 
 static void flashSignalText(bool buffered)
@@ -1834,7 +1906,7 @@ static void deviceNoticesBeforeHost()
 
   host.input = "<BLAECK.GET_DEVICES>";
   device.read();
-  assert(host.output.find(std::string("<BLAECK:") + char(0xC1)) == std::string::npos);
+  assert(host.output.find(std::string("<blaeck:") + char(0xC1)) == std::string::npos);
   assert(commandFramePayload(host.output, 0xB7, 0) ==
          deviceList(3, deviceRecord(0, 0x02, "Board", "Mega", "n/a") +
                        deviceRecord(1, 0x03, "Pump", "n/a", "n/a") +
@@ -2955,6 +3027,8 @@ int main()
   configurationAllocationFailures();
   flashSignalText(false);
   flashSignalText(true);
+  frameEscaping(false);
+  frameEscaping(true);
   flashNamesAndFailures();
   flashStateText(false);
   flashStateText(true);

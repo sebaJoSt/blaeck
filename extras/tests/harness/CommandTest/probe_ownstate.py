@@ -24,6 +24,30 @@ NAME = {0x0: "bool", 0x1: "byte", 0x2: "short", 0x3: "ushort", 0x4: "int", 0x5: 
         0x6: "long", 0x7: "ulong", 0x8: "float", 0x9: "double", 0xA: "string"}
 
 
+
+def unescape(raw):
+    """A frame's bytes between its markers as sent before escaping: a backslash and the byte XOR 0x20."""
+    out = bytearray()
+    escaped = False
+    for b in raw:
+        if escaped:
+            out.append(b ^ 0x20)
+            escaped = False
+        elif b == 0x5C:
+            escaped = True
+        else:
+            out.append(b)
+    return bytes(out)
+
+
+def frames_of(raw):
+    """(key, message id, payload) of each frame in raw, unescaped."""
+    frames = []
+    for body in re.findall(rb"<blaeck:([^\n]*)/>\n", raw):
+        body = unescape(body)
+        frames.append((body[0:1], body[2:6], body[7:]))
+    return frames
+
 def decode(payload):
     if len(payload) < 5:
         return None
@@ -60,9 +84,9 @@ with serial.Serial(sys.argv[1], 115200, timeout=0.2) as s:
         while time.time() < end:
             buf += s.read(4096)
 
-        frames = re.findall(rb"<BLAECK:(.)(?::)(.{4})(?::)(.*?)/BLAECK>\r\n", buf, flags=re.S)
+        frames = frames_of(buf)
         pushes = [decode(p) for k, _m, p in frames if k[0] == 0x95]
-        text = re.sub(rb"<BLAECK:.*?/BLAECK>\r\n", b"", buf, flags=re.S)
+        text = re.sub(rb"<blaeck:[^\n]*\n", b"", buf)
         cmd = [l for l in re.findall(rb"CMD [^\r\n]+", text)]
 
         print(f"\n{line}   ({why})")

@@ -4670,6 +4670,8 @@ protected:
   bool _shortWriteReported = false;
   // On while a data frame's CRC is being computed.
   bool _frameCrcOn = false;
+  // Set between the start and the end marker, where <, \, CR and LF are escaped.
+  bool _frameEscaped = false;
 
   // Starts a frame. False if no frame may be written (no host yet, or writes paused).
   bool _frameOpen(byte msgKey, unsigned long msgId, bool withCrc = false);
@@ -4680,21 +4682,11 @@ protected:
     _frameCrcOn = false;
     return _crc.calc();
   }
-  void _emitByte(byte b)
+  // Bytes as they go on the wire: to the transport, or into the frame buffer.
+  void _putBytes(const byte *data, size_t len)
   {
-    if (_frameCrcOn)
-      _crc.add(b);
-    if (_frameDirect)
-      _writeDirect(&b, 1);
-    else if (_bufEnsure(1))
-      _frameBuf[_framePos++] = b;
-    else
-      _bufOverflow = true;
-  }
-  void _emitBytes(const byte *data, size_t len)
-  {
-    if (_frameCrcOn)
-      _crc.add(data, len);
+    if (len == 0)
+      return;
     if (_frameDirect)
       _writeDirect(data, len);
     else if (_bufEnsure(len))
@@ -4704,6 +4696,33 @@ protected:
     }
     else
       _bufOverflow = true;
+  }
+  // Within a frame, a byte that would read as a frame's start (<), an escape (backslash) or a
+  // line's end (CR, LF) goes as a backslash and the byte XOR 0x20. Layout: Escaping in the
+  // protocol spec.
+  static bool _mustEscape(byte b) { return b == '<' || b == '\\' || b == '\r' || b == '\n'; }
+  // Frame content; the CRC covers it as it is, before escaping.
+  void _emitByte(byte b) { _emitBytes(&b, 1); }
+  void _emitBytes(const byte *data, size_t len)
+  {
+    if (_frameCrcOn)
+      _crc.add(data, len);
+    if (!_frameEscaped)
+    {
+      _putBytes(data, len);
+      return;
+    }
+    size_t run = 0;
+    for (size_t i = 0; i < len; ++i)
+    {
+      if (!_mustEscape(data[i]))
+        continue;
+      _putBytes(data + run, i - run);
+      const byte escaped[2] = {'\\', (byte)(data[i] ^ 0x20)};
+      _putBytes(escaped, 2);
+      run = i + 1;
+    }
+    _putBytes(data + run, len - run);
   }
   void _emitStr(const char *s)
   {

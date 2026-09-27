@@ -12,15 +12,30 @@ import time
 import unittest
 import zlib
 
-START = b"<BLAECK:"
-END = b"/BLAECK>\r\n"
+START = b"<blaeck:"
+END = b"/>\n"
 FORMATS = {0: "<f", 1: "<f", 2: "<f", 3: "<f", 4: "<?", 6: "<i", 7: "<I", 8: "<f"}
+
+
+def unescape(raw):
+    """A frame's bytes between its markers as sent before escaping: a backslash and the byte XOR 0x20."""
+    out = bytearray()
+    escaped = False
+    for b in raw:
+        if escaped:
+            out.append(b ^ 0x20)
+            escaped = False
+        elif b == 0x5C:
+            escaped = True
+        else:
+            out.append(b)
+    return bytes(out)
 
 
 def decode_data(frame):
     if not frame.startswith(START + b"\xd3:") or not frame.endswith(END):
         raise ValueError("Not a complete data frame")
-    body = frame[len(START):-len(END)]
+    body = unescape(frame[len(START):-len(END)])
     if len(body) < 23:
         raise ValueError("Truncated data frame")
     crc, = struct.unpack("<I", body[-4:])
@@ -67,13 +82,12 @@ class Decoder:
         result = []
         while self.buffer:
             if self.buffer.startswith(START):
-                # Test values never contain the frame terminator. Keep partial UART
-                # reads intact; do not strip binary frames with a text regex.
-                end = self.buffer.find(END)
+                # A raw LF only ever ends a frame. Keep partial UART reads intact.
+                end = self.buffer.find(b"\n")
                 if end < 0:
                     break
-                frame = bytes(self.buffer[:end + len(END)])
-                del self.buffer[:end + len(END)]
+                frame = bytes(self.buffer[:end + 1])
+                del self.buffer[:end + 1]
                 if frame[len(START)] == 0xD3:
                     result.append(decode_data(frame))
             elif START.startswith(self.buffer):

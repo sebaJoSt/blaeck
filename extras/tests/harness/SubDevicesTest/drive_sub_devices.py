@@ -13,9 +13,24 @@ import sys
 import time
 import zlib
 
-START = b"<BLAECK:"
-END = b"/BLAECK>\r\n"
+START = b"<blaeck:"
+END = b"/>\n"
 VERSION = "7.0.0"
+
+def unescape(raw):
+    """A frame's bytes between its markers as sent before escaping: a backslash and the byte XOR 0x20."""
+    out = bytearray()
+    escaped = False
+    for b in raw:
+        if escaped:
+            out.append(b ^ 0x20)
+            escaped = False
+        elif b == 0x5C:
+            escaped = True
+        else:
+            out.append(b)
+    return bytes(out)
+
 
 # The DeviceID each catalog entry and push carries: 0 for the board, 1 for the pump.
 BOARD = bytes([0])
@@ -32,11 +47,14 @@ class Link:
     def _items(self):
         while self.buffer:
             if self.buffer.startswith(START):
-                end = self.buffer.find(END)
+                # A raw LF only ever ends a frame, right after "/>".
+                end = self.buffer.find(b"\n")
                 if end < 0:
                     return
-                body = bytes(self.buffer[len(START):end])
-                del self.buffer[:end + len(END)]
+                if self.buffer[end - 2:end] != b"/>":
+                    raise ValueError(f"Frame does not end in /> and LF: {bytes(self.buffer[:end + 1])!r}")
+                body = unescape(bytes(self.buffer[len(START):end - 2]))
+                del self.buffer[:end + 1]
                 if len(body) < 7 or body[1] != ord(":") or body[6] != ord(":"):
                     raise ValueError(f"Malformed frame header: {body[:8]!r}")
                 yield ("frame", body[0], body[7:], body)

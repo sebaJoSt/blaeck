@@ -33,8 +33,32 @@ def read_for(s, seconds):
     return buf
 
 
+def unescape(raw):
+    """A frame's bytes between its markers as sent before escaping: a backslash and the byte XOR 0x20."""
+    out = bytearray()
+    escaped = False
+    for b in raw:
+        if escaped:
+            out.append(b ^ 0x20)
+            escaped = False
+        elif b == 0x5C:
+            escaped = True
+        else:
+            out.append(b)
+    return bytes(out)
+
+
+def frames_of(raw):
+    """(key, message id, payload) of each frame in raw, unescaped."""
+    frames = []
+    for body in re.findall(rb"<blaeck:([^\n]*)/>\n", raw):
+        body = unescape(body)
+        frames.append((body[0:1], body[2:6], body[7:]))
+    return frames
+
+
 def text_of(raw):
-    t = re.sub(rb"<BLAECK:.*?/BLAECK>\r\n", b"", raw, flags=re.S)
+    t = re.sub(rb"<blaeck:[^\n]*\n", b"", raw)
     out = []
     for line in t.split(b"\n"):
         line = line.replace(b"\r", b"")
@@ -67,7 +91,7 @@ with serial.Serial(PORT, 115200, timeout=0.2) as s:
         s.reset_input_buffer()
         s.write(cmd.encode()); s.flush()
         raw = read_for(s, 0.9)
-        frames = re.findall(rb"<BLAECK:(.)(?::)(.{4})(?::)(.*?)/BLAECK>\r\n", raw, flags=re.S)
+        frames = frames_of(raw)
         events = [p for k, _m, p in frames if k[0] == 0x85]
         ran = any(l.startswith("FIRED") for l in text_of(raw))
         got = len(events) > 0
