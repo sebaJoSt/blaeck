@@ -779,7 +779,7 @@ struct EventChannelEntry
   uint8_t deviceId = 0;
 };
 
-// A device added with addDevice(). Its slave ID in the protocol is its index plus one.
+// A device added with addDevice(). Its DeviceID in the protocol is its index plus one.
 struct DeviceEntry
 {
   detail::StoredString name;
@@ -3520,8 +3520,7 @@ public:
 
     A host names the device after the board and the device name, so keep the name
     unique and stable. Signal and channel names only need to be unique within the board
-    or within one device; command names within the whole board. The first addDevice()
-    makes the board a "master" in the protocol.
+    or within one device; command names within the whole board.
 
     @param   name  The name a host shows. RAM text is copied; an F() literal stays in flash.
     @return  A handle for the device. If the table is full or the name is empty, the
@@ -4520,7 +4519,7 @@ protected:
   static const byte DEFAULT_COMMANDS = 32;
   static const byte DEFAULT_DEVICES = 8;
 #endif
-  // Slave IDs are one byte and 0 is the board itself.
+  // Device IDs are one byte and 0 is the board itself.
   // Device IDs 1-254: the device list counts the board and its devices in one byte.
   static const byte MAX_DEVICES = 254;
   // C1 Device Notification events.
@@ -4763,13 +4762,9 @@ protected:
   void _writeSignalNow(int signalIndex, unsigned long long timestamp);
   // writeAll() for one device from addDevice().
   void _writeDeviceSignals(byte deviceId, unsigned long long timestamp);
-  // The master/slave and slave ID bytes for an entry of the given device. The board is
-  // "single" without devices and "master" with them; a device is a "slave" with its ID.
-  void _emitOwner(byte deviceId)
-  {
-    _emitByte(deviceId != 0 ? 0x02 : (_deviceCount > 0 ? 0x01 : 0x00));
-    _emitByte(deviceId);
-  }
+  // The owner of a catalog entry or push: 0 for the board, 1-254 for a device from addDevice(),
+  // the same DeviceID as in the B7 device list.
+  void _emitDeviceId(byte deviceId) { _emitByte(deviceId); }
 
   static unsigned long long _microsWrapper()
   {
@@ -4786,13 +4781,13 @@ protected:
   bool _ensureCommandTable();
 
   // ── Devices ───────────────────────────────────────────────────────
-  // Added in order and never removed, so a device's slave ID is its index plus one.
+  // Added in order and never removed, so a device's DeviceID is its index plus one.
   typedef blaeck_detail::DeviceEntry DeviceEntry;
   DeviceEntry *_devices = nullptr;
   uint16_t _deviceCapacity = DEFAULT_DEVICES;
   byte _deviceCount = 0;
   bool _ensureDeviceTable();
-  // The entry for a slave ID, or nullptr for 0 or an ID never handed out.
+  // The entry for a DeviceID, or nullptr for 0 or an ID never handed out.
   DeviceEntry *_deviceEntry(byte id) const
   {
     return (id != 0 && id <= _deviceCount) ? &_devices[id - 1] : nullptr;

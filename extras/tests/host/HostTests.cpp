@@ -841,9 +841,9 @@ static void commandBufferBoundaries(bool tcp, bool buffered)
 #if BLAECK_ENABLE_COMMAND_META
   receive("<BLAECK.WRITE_COMMANDS>");
   const std::string catalog = commandFramePayload(io.output, 0xA0, 0);
-  assert(catalog.size() >= 4);
+  assert(catalog.size() >= 3);
   uint16_t advertised;
-  memcpy(&advertised, catalog.data() + 2, 2);
+  memcpy(&advertised, catalog.data() + 1, 2); // after the DeviceID
   assert(advertised == capacity - 1);
   io.output.clear();
 #endif
@@ -1079,14 +1079,14 @@ static void flashNamesAndFailures()
   debug.text.clear();
   device.writeState(F("Long"), longText);
   auto state = commandFramePayload(stream.data.output, 0x95, 0);
-  assert(state.size() == 261 && static_cast<byte>(state[5]) == 255);
-  assert(state.substr(6) == std::string(255, 'a'));
+  assert(state.size() == 260 && static_cast<byte>(state[4]) == 255);
+  assert(state.substr(5) == std::string(255, 'a'));
   assert(debug.text.find("State text truncated") != std::string::npos);
   stream.data.output.clear();
   debug.text.clear();
   device.writeState("Long", longText);
   state = commandFramePayload(stream.data.output, 0x95, 0);
-  assert(state.substr(6) == std::string(255, 'a'));
+  assert(state.substr(5) == std::string(255, 'a'));
   assert(debug.text.empty()); // Truncation is still warned only once.
 #endif
 }
@@ -1132,9 +1132,9 @@ static void flashStateText(bool buffered)
   {
 #if BLAECK_ENABLE_STATE_CHANNELS
     const auto payload = commandFramePayload(stream.data.output, 0x95, 0);
-    assert(payload.size() == 6 + value.size());
-    assert(static_cast<byte>(payload[5]) == value.size());
-    assert(payload.substr(6) == value);
+    assert(payload.size() == 5 + value.size());
+    assert(static_cast<byte>(payload[4]) == value.size());
+    assert(payload.substr(5) == value);
 #else
     assert(stream.data.output.empty());
     (void)value;
@@ -1311,7 +1311,7 @@ static void ordinaryConfiguration(bool buffered)
   stream.data.output.clear();
 #if BLAECK_ENABLE_COMMAND_META && BLAECK_ENABLE_STATE_CHANNELS
   device.writeCommandState("SELECT");
-  assert(commandFramePayload(stream.data.output, 0x95, 0).substr(6) == "High");
+  assert(commandFramePayload(stream.data.output, 0x95, 0).substr(5) == "High");
   stream.data.output.clear();
   // Replacing the command's copy must not invalidate a channel sharing its old options.
   device.onSelectCommand("SELECT", onPing).withOptions("New,Other");
@@ -1542,19 +1542,20 @@ static void beginOnlyOnce()
   }
 }
 
-// The two ownership bytes of the catalog record that holds `name`: master/slave and slave ID.
-// They sit right before the name, or before the payload length in a command record.
+// The DeviceID byte of the catalog record that holds `name`. It sits right before the name,
+// or before the payload length in a command record.
 static std::string ownerOf(const std::string &payload, const char *name, size_t gap = 0)
 {
   const std::string key = std::string(name) + '\0';
   const size_t at = payload.find(key);
-  assert(at != std::string::npos && at >= 2 + gap);
-  return payload.substr(at - 2 - gap, 2);
+  assert(at != std::string::npos && at >= 1 + gap);
+  return payload.substr(at - 1 - gap, 1);
 }
 
-static std::string owner(byte config, byte id)
+// The DeviceID an entry carries: 0 for the board, 1 and up for a device from addDevice().
+static std::string owner(byte deviceId)
 {
-  return std::string(1, static_cast<char>(config)) + static_cast<char>(id);
+  return std::string(1, static_cast<char>(deviceId));
 }
 
 // One B7 record: DeviceID, ParentID 0, DeviceFlags 0, DeviceState, then the three names.
@@ -1593,7 +1594,7 @@ static void noDeviceOwnership()
          deviceList(1, deviceRecord(0, 0, "Solo", "Mega", "n/a")));
   stream.data.output.clear();
   command(device, stream, "<BLAECK.WRITE_SYMBOLS>");
-  assert(ownerOf(commandFramePayload(stream.data.output, 0xB0, 0), "Value") == owner(0x00, 0));
+  assert(ownerOf(commandFramePayload(stream.data.output, 0xE0, 0), "Value") == owner(0));
 }
 
 static void subDevices(bool buffered)
@@ -1667,29 +1668,29 @@ static void subDevices(bool buffered)
   stream.data.output.clear();
 
   command(device, stream, "<BLAECK.WRITE_SYMBOLS>");
-  std::string payload = commandFramePayload(stream.data.output, 0xB0, 0);
-  assert(ownerOf(payload, "BoardValue") == owner(0x01, 0));
-  assert(ownerOf(payload, "Flow") == owner(0x02, 1));
-  assert(ownerOf(payload, "Pressure") == owner(0x02, 1));
-  assert(ownerOf(payload, "Orphan") == owner(0x01, 0));
+  std::string payload = commandFramePayload(stream.data.output, 0xE0, 0);
+  assert(ownerOf(payload, "BoardValue") == owner(0));
+  assert(ownerOf(payload, "Flow") == owner(1));
+  assert(ownerOf(payload, "Pressure") == owner(1));
+  assert(ownerOf(payload, "Orphan") == owner(0));
   stream.data.output.clear();
 
   command(device, stream, "<BLAECK.WRITE_COMMANDS>");
   payload = commandFramePayload(stream.data.output, 0xA0, 0);
-  assert(ownerOf(payload, "PUMP_SPEED", 2) == owner(0x02, 1));
-  assert(ownerOf(payload, "PUMP_ON", 2) == owner(0x02, 1));
-  assert(ownerOf(payload, "BOARD_RESET", 2) == owner(0x01, 0));
+  assert(ownerOf(payload, "PUMP_SPEED", 2) == owner(1));
+  assert(ownerOf(payload, "PUMP_ON", 2) == owner(1));
+  assert(ownerOf(payload, "BOARD_RESET", 2) == owner(0));
   stream.data.output.clear();
 
   command(device, stream, "<BLAECK.WRITE_STATE_CHANNELS>");
   payload = commandFramePayload(stream.data.output, 0x90, 0);
-  assert(ownerOf(payload, "PumpStatus") == owner(0x02, 1));
-  assert(ownerOf(payload, "PumpSpeedState") == owner(0x02, 1));
-  assert(ownerOf(payload, "PumpOnState") == owner(0x02, 1));
+  assert(ownerOf(payload, "PumpStatus") == owner(1));
+  assert(ownerOf(payload, "PumpSpeedState") == owner(1));
+  assert(ownerOf(payload, "PumpOnState") == owner(1));
   stream.data.output.clear();
 
   command(device, stream, "<BLAECK.WRITE_EVENT_CHANNELS>");
-  assert(ownerOf(commandFramePayload(stream.data.output, 0x80, 0), "FanAlarm") == owner(0x02, 2));
+  assert(ownerOf(commandFramePayload(stream.data.output, 0x80, 0), "FanAlarm") == owner(2));
   stream.data.output.clear();
 
   // Names are found within the handle's own device only.
@@ -1697,10 +1698,10 @@ static void subDevices(bool buffered)
   device.writeEvent(F("FanAlarm"), F("stall"));
   assert(stream.data.output.empty());
   pump.writeState(F("PumpStatus"), "ok");
-  assert(commandFramePayload(stream.data.output, 0x95, 0).substr(0, 2) == owner(0x02, 1));
+  assert(commandFramePayload(stream.data.output, 0x95, 0).substr(0, 1) == owner(1));
   stream.data.output.clear();
   fan.writeEvent(F("FanAlarm"), F("stall"));
-  assert(commandFramePayload(stream.data.output, 0x85, 0).substr(0, 2) == owner(0x02, 2));
+  assert(commandFramePayload(stream.data.output, 0x85, 0).substr(0, 1) == owner(2));
   stream.data.output.clear();
 
   // A device restart is reported for that device only.
@@ -1880,8 +1881,8 @@ static std::vector<std::string> ownersOf(const std::string &payload, const char 
   const std::string key = std::string(name) + '\0';
   for (size_t at = payload.find(key); at != std::string::npos; at = payload.find(key, at + 1))
   {
-    assert(at >= 2 + gap);
-    owners.push_back(payload.substr(at - 2 - gap, 2));
+    assert(at >= 1 + gap);
+    owners.push_back(payload.substr(at - 1 - gap, 1));
   }
   return owners;
 }
@@ -1962,25 +1963,25 @@ static void sameNamesAcrossDevices()
   stream.data.output.clear();
 
   command(device, stream, "<BLAECK.WRITE_SYMBOLS>");
-  std::string payload = commandFramePayload(stream.data.output, 0xB0, 0);
-  assert((ownersOf(payload, "Temperature") == std::vector<std::string>{owner(0x01, 0), owner(0x02, 1), owner(0x02, 2)}));
+  std::string payload = commandFramePayload(stream.data.output, 0xE0, 0);
+  assert((ownersOf(payload, "Temperature") == std::vector<std::string>{owner(0), owner(1), owner(2)}));
   stream.data.output.clear();
 
 #if BLAECK_ENABLE_STATE_CHANNELS
   command(device, stream, "<BLAECK.WRITE_STATE_CHANNELS>");
   payload = commandFramePayload(stream.data.output, 0x90, 0);
-  assert((ownersOf(payload, "Status") == std::vector<std::string>{owner(0x01, 0), owner(0x02, 1)}));
-  assert((ownersOf(payload, "Speed") == std::vector<std::string>{owner(0x02, 1), owner(0x02, 2)}));
+  assert((ownersOf(payload, "Status") == std::vector<std::string>{owner(0), owner(1)}));
+  assert((ownersOf(payload, "Speed") == std::vector<std::string>{owner(1), owner(2)}));
   stream.data.output.clear();
 
   // Each handle reaches its own channel: the 95 frame carries owner and channel index.
   device.writeState(F("Status"), "board");
   std::string state = commandFramePayload(stream.data.output, 0x95, 0);
-  assert(state.substr(0, 2) == owner(0x01, 0) && state.find("board") != std::string::npos);
+  assert(state.substr(0, 1) == owner(0) && state.find("board") != std::string::npos);
   stream.data.output.clear();
   zoneA.writeState("Status", "zone a");
   state = commandFramePayload(stream.data.output, 0x95, 0);
-  assert(state.substr(0, 2) == owner(0x02, 1) && state.find("zone a") != std::string::npos);
+  assert(state.substr(0, 1) == owner(1) && state.find("zone a") != std::string::npos);
   stream.data.output.clear();
   zoneB.writeState(F("Status"), "none"); // zone B has no Status
   assert(stream.data.output.empty());
@@ -1989,14 +1990,14 @@ static void sameNamesAcrossDevices()
   zoneB.writeCommandState("SET_B_SPEED");
   const std::string speed = commandFramePayload(stream.data.output, 0x95, 0);
   // Channels in order: Status (board), Status (zone A), Speed (zone A), Speed (zone B).
-  assert(speed.substr(0, 2) == owner(0x02, 2));
-  assert(speed[2] == 3 && speed[3] == 0 && static_cast<byte>(speed.back()) == 20);
+  assert(speed.substr(0, 1) == owner(2));
+  assert(speed[1] == 3 && speed[2] == 0 && static_cast<byte>(speed.back()) == 20);
   stream.data.output.clear();
 #endif
 
 #if BLAECK_ENABLE_EVENTS
   zoneA.writeEvent(F("Alarm"), F("blocked"));
-  assert(commandFramePayload(stream.data.output, 0x85, 0).substr(0, 2) == owner(0x02, 1));
+  assert(commandFramePayload(stream.data.output, 0x85, 0).substr(0, 1) == owner(1));
   stream.data.output.clear();
   debug.text.clear();
   device.writeEvent("Alarm", F("dry_run")); // a type of zone A's Alarm, not the board's

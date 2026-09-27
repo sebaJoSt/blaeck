@@ -368,14 +368,14 @@ void Blaeck::_setTableCapacity(TableId table, unsigned int count)
     _commandCapacity = (count > MAX_TABLE_ENTRIES) ? MAX_TABLE_ENTRIES : (uint16_t)count;
     break;
   case TABLE_DEVICES:
-    // Slave IDs are one byte, so far fewer fit than in the other tables.
+    // Device IDs are one byte, so far fewer fit than in the other tables.
     if (count > MAX_DEVICES && _debugStream != nullptr)
     {
       _debugStream->print(F("BLAECK.withDevices("));
       _debugStream->print(count);
       _debugStream->print(F("): clamped to "));
       _debugStream->print(MAX_DEVICES);
-      _debugStream->println(F(", which is the most slave IDs allow."));
+      _debugStream->println(F(", which is the most device IDs allow."));
     }
     _deviceCapacity = (count > MAX_DEVICES) ? MAX_DEVICES : (uint16_t)count;
     break;
@@ -2737,7 +2737,7 @@ void Blaeck::_writeStateFrame(int channelIndex, const char *text, const byte *pu
   if (!_frameOpen(0x95, 0))
     return;
   // Layout: State (0x95) in the protocol spec.
-  _emitOwner(_stateChannels[channelIndex].deviceId);
+  _emitDeviceId(_stateChannels[channelIndex].deviceId);
   _emitByte((byte)(channelIndex & 0xFF));
   _emitByte((byte)((channelIndex >> 8) & 0xFF));
   _emitByte(_dtypeCode(e.valueType));
@@ -3025,7 +3025,7 @@ void Blaeck::writeStateChannelsFrame(unsigned long msg_id)
 
     uint16_t flags = _stateChannelFlags(e, stateText != nullptr || valueLen > 0);
 
-    _emitOwner(e.deviceId);
+    _emitDeviceId(e.deviceId);
     if (e.nameInFlash)
       _emitFlashStr0(reinterpret_cast<const __FlashStringHelper *>(e.name));
     else
@@ -3448,7 +3448,7 @@ void Blaeck::writeEventChannelsFrame(unsigned long msg_id)
     if (e.disabledByDefault)
       flags |= 0x0008;
 
-    _emitOwner(e.deviceId);
+    _emitDeviceId(e.deviceId);
     if (e.nameInFlash)
       _emitFlashStr0(reinterpret_cast<const __FlashStringHelper *>(e.name));
     else
@@ -3513,7 +3513,7 @@ void Blaeck::_writeEvent(byte deviceId, const char *channelName, BlaeckString ev
 
   if (!_frameOpen(0x85, 0))
     return;
-  _emitOwner(_eventChannels[channelIndex].deviceId);
+  _emitDeviceId(_eventChannels[channelIndex].deviceId);
   _emitByte((byte)(channelIndex & 0xFF));
   _emitByte((byte)((channelIndex >> 8) & 0xFF));
   _emitByte((byte)(eventIndex & 0xFF));
@@ -4305,12 +4305,12 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
 
 void Blaeck::writeSymbolsFrame(unsigned long msg_id)
 {
-  if (!_frameOpen(0xB0, msg_id))
+  if (!_frameOpen(0xE0, msg_id))
     return;
 
   for (int i = 0; i < _signalIndex; i++)
   {
-    _emitOwner(Signals[i].DeviceId);
+    _emitDeviceId(Signals[i].DeviceId);
 
     // A reference, to avoid copying the entry.
     const Signal &signal = Signals[i];
@@ -4425,7 +4425,7 @@ void Blaeck::writeCommandsFrame(unsigned long msg_id)
     // The longest command the device can receive, so a host knows how much room is left for
     // parameters.
     uint16_t payloadMax = (uint16_t)(MAXIMUM_CHAR_COUNT - 1);
-    _emitOwner(e.deviceId);
+    _emitDeviceId(e.deviceId);
     _emitByte((byte)(payloadMax & 0xFF));
     _emitByte((byte)((payloadMax >> 8) & 0xFF));
     _emitStr0(e.command);

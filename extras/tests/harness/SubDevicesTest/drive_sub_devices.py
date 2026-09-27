@@ -17,9 +17,9 @@ START = b"<BLAECK:"
 END = b"/BLAECK>\r\n"
 VERSION = "7.0.0"
 
-SINGLE, MASTER, SLAVE = 0x00, 0x01, 0x02
-BOARD = bytes([MASTER, 0])
-PUMP = bytes([SLAVE, 1])
+# The DeviceID each catalog entry and push carries: 0 for the board, 1 for the pump.
+BOARD = bytes([0])
+PUMP = bytes([1])
 
 
 class Link:
@@ -101,11 +101,11 @@ def notice(device_id, event):
 
 
 def owner_before(payload, name, gap=0):
-    """The two ownership bytes of the catalog record that holds `name`."""
+    """The DeviceID byte of the catalog record that holds `name`."""
     at = payload.find(name.encode() + b"\0")
-    if at < 2 + gap:
+    if at < 1 + gap:
         raise AssertionError(f"{name} not found in catalog")
-    return payload[at - 2 - gap:at - gap]
+    return payload[at - 1 - gap:at - gap]
 
 
 def decode_data(body):
@@ -163,7 +163,7 @@ def run(port):
           devices == device_list(device_record(0, 0, "SubDevicesTest", "Arduino Mega 2560", "1.0"),
                                  device_record(1, 0, "Pump controller", "Simulated", "1.0")), devices)
 
-    symbols = frames(link.send("<BLAECK.WRITE_SYMBOLS>", frame_with(0xB0)), 0xB0)[-1][2]
+    symbols = frames(link.send("<BLAECK.WRITE_SYMBOLS>", frame_with(0xE0)), 0xE0)[-1][2]
     check("BoardValue belongs to the board", owner_before(symbols, "BoardValue") == BOARD)
     check("Flow and Pressure belong to the pump",
           owner_before(symbols, "Flow") == PUMP and owner_before(symbols, "Pressure") == PUMP)
@@ -206,7 +206,7 @@ def run(port):
           sorted(values) == [0] and status == 0 and payload == bytes(4), (values, status, payload))
     link_states = frames(items, 0x95)
     check("pump missing: PumpLink says so, for the pump",
-          bool(link_states) and link_states[-1][2][:2] == PUMP and b"no answer" in link_states[-1][2])
+          bool(link_states) and link_states[-1][2][:1] == PUMP and b"no answer" in link_states[-1][2])
     items = link.send("<#7:SET_PUMP_SPEED,20>", ack_for(7))
     check("pump missing: its command is refused, reason 8",
           ("text", "DONE SET_PUMP_SPEED") not in items and items[-1][2][8:10] == bytes([1, 8]),
@@ -230,7 +230,7 @@ def run(port):
     check("pump restart: a restart notice for the pump only",
           [r[2] for r in restarts] == [notice(1, 1)], [r[2] for r in restarts])
     alarms = frames(items, 0x85)
-    check("pump restart: the event comes from the pump", bool(alarms) and alarms[-1][2][:2] == PUMP)
+    check("pump restart: the event comes from the pump", bool(alarms) and alarms[-1][2][:1] == PUMP)
 
     print(f"{'FAILED' if checks.failed else 'PASSED'}: {checks.failed} failure(s)")
     return 1 if checks.failed else 0
