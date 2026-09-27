@@ -1886,6 +1886,42 @@ static std::vector<std::string> ownersOf(const std::string &payload, const char 
   return owners;
 }
 
+// A left-out timestamp is taken from the timestamp mode when the value is sent; 0 is a timestamp too.
+static void defaultTimestamps()
+{
+  FakeStream stream;
+  Blaeck device;
+  device.begin(stream).withSignals(1).withDevices(1);
+  device.setTimestampMode(BLAECK_MICROS);
+  hostMillis() = 0;
+  hostMicros() = 1234;
+  float value = 1;
+  BlaeckDeviceRef pump = device.addDevice(F("Pump"));
+  pump.addSignal(F("Flow"), &value);
+  device.read();
+  stream.data.output.clear();
+  const std::vector<int> widths = {4};
+
+  pump.write(F("Flow"), 2.0f);
+  auto frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && frames[0].timestamp == 1234);
+
+  pump.write("Flow", 3.0f, 0ULL);
+  frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && frames[0].timestamp == 0);
+
+  device.write(0, "text", 77ULL); // a text value on a float signal is ignored
+  assert(takeData(stream.data.output, widths).empty());
+
+  hostMicros() = 5678;
+  pump.writeAll();
+  frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && frames[0].timestamp == 5678);
+  device.writeAll(42ULL);
+  frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && frames[0].timestamp == 42);
+}
+
 static void sameNamesAcrossDevices()
 {
   hostMillis() = 0;
@@ -2973,6 +3009,7 @@ int main()
     deviceCommands();
     deviceNoticesBeforeHost();
     sameNamesAcrossDevices();
+    defaultTimestamps();
   }
   reportingPolicies(false);
   reportingPolicies(true);

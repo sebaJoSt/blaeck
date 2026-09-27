@@ -297,6 +297,11 @@ enum BlaeckIntervalMode : uint8_t
 */
 constexpr double BLAECK_ANY_CHANGE = 0;
 
+// The default of every timestamp parameter: blaeck takes the timestamp from the timestamp mode
+// when the value is sent (micros(), or the setTimestampCallback() function). Never a real
+// timestamp - in microseconds it lies about 585,000 years ahead - so 0 stays one.
+constexpr unsigned long long BLAECK_NOW = ~0ULL;
+
 struct SignalReporting
 {
   byte value[sizeof(double) > sizeof(unsigned long) ? sizeof(double) : sizeof(unsigned long)] = {};
@@ -607,10 +612,6 @@ private:
 // classes need them, and in a namespace so they can't clash with names in a sketch.
 namespace blaeck_detail
 {
-// A literal index 0 must not compete with null-name forwarding overloads.
-template<class T> struct NullName {};
-template<> struct NullName<decltype(nullptr)> { using type = void; };
-
 // Longest command name, terminator included. Every command entry holds an array this long.
 #if defined(__AVR__)
 static const byte MAX_COMMAND_NAME_COUNT = 24;
@@ -2761,9 +2762,10 @@ public:
 
     The variable is read each time data is sent, so it must be a global.
 
-    @param   signalName  The name a host shows and logs the signal under. It is
-                         copied.
-    @param   value       The variable. There is an overload for each type.
+    @param   signalName  The name a host shows and logs the signal under. RAM text is copied; an F() literal stays in flash.
+    @param   value       The variable. There is an overload for each type. Text is
+                         pointed at, not copied; an F() text stays in flash, and later
+                         write() calls may replace it with RAM or flash text.
     @return  A handle for describing how a host shows the signal. It can be
              ignored, or kept in a global to change the signal later.
     @note    If the table is full, the signal is dropped and the handle ignores
@@ -2779,55 +2781,18 @@ public:
           .withDisplayPrecision(1);
     @endcode
   */
-  BlaeckBoolSignalRef addSignal(const char *signalName, bool *value);
-  BlaeckNumericSignalRef addSignal(const char *signalName, byte *value);
-  BlaeckNumericSignalRef addSignal(const char *signalName, short *value);
-  BlaeckNumericSignalRef addSignal(const char *signalName, unsigned short *value);
-  BlaeckNumericSignalRef addSignal(const char *signalName, int *value);
-  BlaeckNumericSignalRef addSignal(const char *signalName, unsigned int *value);
-  BlaeckNumericSignalRef addSignal(const char *signalName, long *value);
-  BlaeckNumericSignalRef addSignal(const char *signalName, unsigned long *value);
-  BlaeckNumericSignalRef addSignal(const char *signalName, float *value);
-  BlaeckNumericSignalRef addSignal(const char *signalName, double *value);
-  BlaeckTextSignalRef addSignal(const char *signalName, const char *value);
-  // The text stays in flash and is retained, like a RAM text pointer.
-  BlaeckTextSignalRef addSignal(const char *signalName, const __FlashStringHelper *value);
-
-  /*!
-    @brief   Adds a signal whose name is an F() literal.
-
-    The name stays in flash instead of being copied to SRAM.
-
-    @param   signalName  The name, as an F() literal.
-    @param   value       The variable to read.
-    @return  A handle for describing how a host shows the signal.
-
-    @code
-      device.addSignal(F("Temperature"), &Temperature);
-    @endcode
-  */
-  BlaeckBoolSignalRef addSignal(const __FlashStringHelper *signalName, bool *value);
-  BlaeckNumericSignalRef addSignal(const __FlashStringHelper *signalName, byte *value);
-  BlaeckNumericSignalRef addSignal(const __FlashStringHelper *signalName, short *value);
-  BlaeckNumericSignalRef addSignal(const __FlashStringHelper *signalName, unsigned short *value);
-  BlaeckNumericSignalRef addSignal(const __FlashStringHelper *signalName, int *value);
-  BlaeckNumericSignalRef addSignal(const __FlashStringHelper *signalName, unsigned int *value);
-  BlaeckNumericSignalRef addSignal(const __FlashStringHelper *signalName, long *value);
-  BlaeckNumericSignalRef addSignal(const __FlashStringHelper *signalName, unsigned long *value);
-  BlaeckNumericSignalRef addSignal(const __FlashStringHelper *signalName, float *value);
-  BlaeckNumericSignalRef addSignal(const __FlashStringHelper *signalName, double *value);
-  BlaeckTextSignalRef addSignal(const __FlashStringHelper *signalName, const char *value);
-  /*!
-    @brief   Registers a text signal with its name and initial value in flash.
-
-    The value is retained without copying it into RAM. Later write() calls may
-    replace it with either RAM or flash text.
-
-    @code
-      device.addSignal(F("Status"), F("Idle"));
-    @endcode
-  */
-  BlaeckTextSignalRef addSignal(const __FlashStringHelper *signalName, const __FlashStringHelper *value);
+  BlaeckBoolSignalRef addSignal(BlaeckString signalName, bool *value);
+  BlaeckNumericSignalRef addSignal(BlaeckString signalName, byte *value);
+  BlaeckNumericSignalRef addSignal(BlaeckString signalName, short *value);
+  BlaeckNumericSignalRef addSignal(BlaeckString signalName, unsigned short *value);
+  BlaeckNumericSignalRef addSignal(BlaeckString signalName, int *value);
+  BlaeckNumericSignalRef addSignal(BlaeckString signalName, unsigned int *value);
+  BlaeckNumericSignalRef addSignal(BlaeckString signalName, long *value);
+  BlaeckNumericSignalRef addSignal(BlaeckString signalName, unsigned long *value);
+  BlaeckNumericSignalRef addSignal(BlaeckString signalName, float *value);
+  BlaeckNumericSignalRef addSignal(BlaeckString signalName, double *value);
+  BlaeckTextSignalRef addSignal(BlaeckString signalName, const char *value);
+  BlaeckTextSignalRef addSignal(BlaeckString signalName, const __FlashStringHelper *value);
 
   // ----- State channels -----
   // With BLAECK_ENABLE_STATE_CHANNELS=0 these compile but do nothing.
@@ -2840,10 +2805,11 @@ public:
 
     The second argument sets the type. Pass a variable and the channel reads it when
     it is sent. Pass a tag such as BlaeckText or BlaeckFloat and the channel only
-    carries what writeState() sends.
+    carries what writeState() sends. Pass an F() text for a fixed value that
+    writeState(channelName) sends without copying it into RAM.
 
-    @param   channelName  The name a host shows. It is copied. At most 15 characters
-                          on AVR and 31 elsewhere; a longer name is refused.
+    @param   channelName  The name a host shows. RAM text is copied; an F() literal stays in flash. At most 15
+                          characters on AVR and 31 elsewhere; a longer name is refused.
     @return  A handle for describing how a host shows the channel.
 
     @code
@@ -2851,50 +2817,21 @@ public:
       device.addStateChannel(F("Amplitude"), &Amplitude).withUnit(F("V"));
     @endcode
   */
-  BlaeckTextStateRef addStateChannel(const char *channelName, BlaeckTextTag);
-  BlaeckBoolStateRef addStateChannel(const char *channelName, BlaeckBoolTag);
-  BlaeckNumericStateRef addStateChannel(const char *channelName, BlaeckNumericTag type);
-  BlaeckTextStateRef addStateChannel(const char *channelName, const char *value);
-  // A fixed flash value; writeState(channelName) reads it without copying it into RAM.
-  BlaeckTextStateRef addStateChannel(const char *channelName, const __FlashStringHelper *value);
-  BlaeckBoolStateRef addStateChannel(const char *channelName, bool *value);
-  BlaeckNumericStateRef addStateChannel(const char *channelName, byte *value);
-  BlaeckNumericStateRef addStateChannel(const char *channelName, short *value);
-  BlaeckNumericStateRef addStateChannel(const char *channelName, unsigned short *value);
-  BlaeckNumericStateRef addStateChannel(const char *channelName, int *value);
-  BlaeckNumericStateRef addStateChannel(const char *channelName, unsigned int *value);
-  BlaeckNumericStateRef addStateChannel(const char *channelName, long *value);
-  BlaeckNumericStateRef addStateChannel(const char *channelName, unsigned long *value);
-  BlaeckNumericStateRef addStateChannel(const char *channelName, float *value);
-  BlaeckNumericStateRef addStateChannel(const char *channelName, double *value);
-
-  // The same, with an F() name, which stays in flash instead of being copied.
-  BlaeckTextStateRef addStateChannel(const __FlashStringHelper *channelName, BlaeckTextTag);
-  BlaeckBoolStateRef addStateChannel(const __FlashStringHelper *channelName, BlaeckBoolTag);
-  BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, BlaeckNumericTag type);
-  BlaeckTextStateRef addStateChannel(const __FlashStringHelper *channelName, const char *value);
-  /*!
-    @brief   Registers a state channel bound to a fixed flash text value.
-
-    The name and text are retained without RAM copies. Use writeState(channelName)
-    to send the bound value, rather than pushing another text value.
-
-    @code
-      device.addStateChannel(F("Build"), F("Production"));
-      device.writeState(F("Build"));
-    @endcode
-  */
-  BlaeckTextStateRef addStateChannel(const __FlashStringHelper *channelName, const __FlashStringHelper *value);
-  BlaeckBoolStateRef addStateChannel(const __FlashStringHelper *channelName, bool *value);
-  BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, byte *value);
-  BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, short *value);
-  BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, unsigned short *value);
-  BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, int *value);
-  BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, unsigned int *value);
-  BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, long *value);
-  BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, unsigned long *value);
-  BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, float *value);
-  BlaeckNumericStateRef addStateChannel(const __FlashStringHelper *channelName, double *value);
+  BlaeckTextStateRef addStateChannel(BlaeckString channelName, BlaeckTextTag);
+  BlaeckBoolStateRef addStateChannel(BlaeckString channelName, BlaeckBoolTag);
+  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, BlaeckNumericTag type);
+  BlaeckTextStateRef addStateChannel(BlaeckString channelName, const char *value);
+  BlaeckTextStateRef addStateChannel(BlaeckString channelName, const __FlashStringHelper *value);
+  BlaeckBoolStateRef addStateChannel(BlaeckString channelName, bool *value);
+  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, byte *value);
+  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, short *value);
+  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, unsigned short *value);
+  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, int *value);
+  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, unsigned int *value);
+  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, long *value);
+  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, unsigned long *value);
+  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, float *value);
+  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, double *value);
 
   /*!
     @brief   Sends a text value on a state channel.
@@ -2902,8 +2839,9 @@ public:
     A host shows it, but it isn't logged as data.
 
     @param   channelName  A channel added with addStateChannel().
-    @param   text         The value. Anything past 255 bytes is cut off, with a
-                          warning on the debug stream the first time.
+    @param   text         The value, RAM or F() text. It is read during this call, not
+                          kept. Anything past 255 bytes is cut off, with a warning on
+                          the debug stream the first time.
 
     @warning The value is dropped if the channel doesn't exist, carries a number
              (use writeState(channelName)), or belongs to a command (use
@@ -2915,30 +2853,12 @@ public:
       device.writeState(F("Status"), text);
     @endcode
   */
-  void writeState(const char *channelName, const char *text);
+  void writeState(BlaeckString channelName, const char *text);
+  void writeState(BlaeckString channelName, const __FlashStringHelper *text);
+  void writeState(BlaeckString channelName, decltype(nullptr)) { writeState(channelName, static_cast<const char *>(nullptr)); }
 
-  // Sends the channel's current value, read from its variable or getter.
-  void writeState(const char *channelName);
-
-  // The same two, with an F() name.
-  void writeState(const __FlashStringHelper *channelName, const char *text);
-  void writeState(const __FlashStringHelper *channelName);
-  /*!
-    @brief   Sends flash text on an unbound text state channel.
-
-    The text is read during this call, not copied into a retained value. The same
-    ownership, type and 255-byte limit checks apply as for RAM text.
-
-    @code
-      device.addStateChannel(F("Status"), BlaeckText);
-      device.writeState(F("Status"), F("Running"));
-    @endcode
-  */
-  void writeState(const __FlashStringHelper *channelName, const __FlashStringHelper *text);
-  // The same flash value with a RAM channel name.
-  void writeState(const char *channelName, const __FlashStringHelper *text);
-  void writeState(const char *channelName, decltype(nullptr)) { writeState(channelName, static_cast<const char *>(nullptr)); }
-  void writeState(const __FlashStringHelper *channelName, decltype(nullptr)) { writeState(channelName, static_cast<const char *>(nullptr)); }
+  // Sends the channel's current value, read from its variable, getter or fixed text.
+  void writeState(BlaeckString channelName);
 
   /*!
     @brief   Sends a number on a state channel that was added with a type tag.
@@ -2953,35 +2873,24 @@ public:
       device.writeState(F("Temperature"), 20.5f);
     @endcode
   */
-  void writeState(const char *channelName, bool value);
-  void writeState(const char *channelName, byte value);
-  void writeState(const char *channelName, short value);
-  void writeState(const char *channelName, unsigned short value);
-  void writeState(const char *channelName, int value);
-  void writeState(const char *channelName, unsigned int value);
-  void writeState(const char *channelName, long value);
-  void writeState(const char *channelName, unsigned long value);
-  void writeState(const char *channelName, float value);
-  void writeState(const char *channelName, double value);
-
-  // The same, with an F() name.
-  void writeState(const __FlashStringHelper *channelName, bool value);
-  void writeState(const __FlashStringHelper *channelName, byte value);
-  void writeState(const __FlashStringHelper *channelName, short value);
-  void writeState(const __FlashStringHelper *channelName, unsigned short value);
-  void writeState(const __FlashStringHelper *channelName, int value);
-  void writeState(const __FlashStringHelper *channelName, unsigned int value);
-  void writeState(const __FlashStringHelper *channelName, long value);
-  void writeState(const __FlashStringHelper *channelName, unsigned long value);
-  void writeState(const __FlashStringHelper *channelName, float value);
-  void writeState(const __FlashStringHelper *channelName, double value);
+  void writeState(BlaeckString channelName, bool value);
+  void writeState(BlaeckString channelName, byte value);
+  void writeState(BlaeckString channelName, short value);
+  void writeState(BlaeckString channelName, unsigned short value);
+  void writeState(BlaeckString channelName, int value);
+  void writeState(BlaeckString channelName, unsigned int value);
+  void writeState(BlaeckString channelName, long value);
+  void writeState(BlaeckString channelName, unsigned long value);
+  void writeState(BlaeckString channelName, float value);
+  void writeState(BlaeckString channelName, double value);
 
   /*!
     @brief   Sends a command's current value on its withOwnState() channel.
 
     Call it after the value changes, usually from the handler.
 
-    @param   command  The command's name. In a handler, pass its command argument.
+    @param   command  The command's name, RAM or F() text. In a handler, pass its
+                      command argument.
     @note    Does nothing for a command without withOwnState().
 
     @code
@@ -2992,16 +2901,7 @@ public:
       }
     @endcode
   */
-  void writeCommandState(const char *command);
-  /*!
-    @brief   Sends a command's owned state using a flash command name.
-
-    @code
-      device.writeCommandState(F("SET_SPEED"));
-    @endcode
-  */
-  void writeCommandState(const __FlashStringHelper *command);
-  void writeCommandState(decltype(nullptr)) { writeCommandState(static_cast<const char *>(nullptr)); }
+  void writeCommandState(BlaeckString command);
 
   // ----- Events -----
   // With BLAECK_ENABLE_EVENTS=0 these compile but do nothing.
@@ -3009,7 +2909,7 @@ public:
   /*!
     @brief   Adds an event channel, for reporting things that happen.
 
-    @param   channelName  The name a host shows. It is copied.
+    @param   channelName  The name a host shows. RAM text is copied; an F() literal stays in flash.
     @param   eventTypes   The events the channel can report, comma-separated.
     @return  A handle for describing how a host shows the channel.
 
@@ -3020,10 +2920,7 @@ public:
           .withIcon(F("mdi:pulse"));
     @endcode
   */
-  BlaeckEventChannelRef addEventChannel(const char *channelName, BlaeckString eventTypes);
-
-  // The same, with an F() name.
-  BlaeckEventChannelRef addEventChannel(const __FlashStringHelper *channelName, BlaeckString eventTypes);
+  BlaeckEventChannelRef addEventChannel(BlaeckString channelName, BlaeckString eventTypes);
 
   /*!
     @brief   Adds one more event type to an existing event channel.
@@ -3041,8 +2938,7 @@ public:
         device.addEventType(F("Activity"), F("low_battery"));
     @endcode
   */
-  bool addEventType(const char *channelName, BlaeckString eventType);
-  bool addEventType(const __FlashStringHelper *channelName, BlaeckString eventType);
+  bool addEventType(BlaeckString channelName, BlaeckString eventType);
 
   /*!
     @brief   Reports an event on an event channel.
@@ -3059,10 +2955,7 @@ public:
       device.writeEvent(F("Activity"), F("idle_warning"));
     @endcode
   */
-  void writeEvent(const char *channelName, BlaeckString eventType);
-
-  // The same, with an F() name.
-  void writeEvent(const __FlashStringHelper *channelName, BlaeckString eventType);
+  void writeEvent(BlaeckString channelName, BlaeckString eventType);
 
   // ----- Data Write -----
 
@@ -3070,10 +2963,13 @@ public:
     @brief   Sets a signal's value and sends it right away.
 
     Separate from the timed interval, so a value can go out the moment something
-    happens. There are overloads for each type, and ones taking a timestamp.
+    happens. There is an overload for each type.
 
-    @param   signalName  The signal's name.
+    @param   signalName  The signal's name, RAM or F() text.
     @param   value       The new value.
+    @param   timestamp   Sample time in microseconds in the timestamp mode's epoch.
+                         Leave it out to have blaeck take it from the timestamp mode
+                         when the value is sent.
     @note    For a short pulse, write both the rise and the fall. The logged data
              then shows how long it lasted.
 
@@ -3091,23 +2987,25 @@ public:
       }
     @endcode
   */
-  void write(const char *signalName, bool value);
-  void write(const char *signalName, byte value);
-  void write(const char *signalName, short value);
-  void write(const char *signalName, unsigned short value);
-  void write(const char *signalName, int value);
-  void write(const char *signalName, unsigned int value);
-  void write(const char *signalName, long value);
-  void write(const char *signalName, unsigned long value);
-  void write(const char *signalName, float value);
-  void write(const char *signalName, double value);
+  void write(BlaeckString signalName, bool value, unsigned long long timestamp = BLAECK_NOW);
+  void write(BlaeckString signalName, byte value, unsigned long long timestamp = BLAECK_NOW);
+  void write(BlaeckString signalName, short value, unsigned long long timestamp = BLAECK_NOW);
+  void write(BlaeckString signalName, unsigned short value, unsigned long long timestamp = BLAECK_NOW);
+  void write(BlaeckString signalName, int value, unsigned long long timestamp = BLAECK_NOW);
+  void write(BlaeckString signalName, unsigned int value, unsigned long long timestamp = BLAECK_NOW);
+  void write(BlaeckString signalName, long value, unsigned long long timestamp = BLAECK_NOW);
+  void write(BlaeckString signalName, unsigned long value, unsigned long long timestamp = BLAECK_NOW);
+  void write(BlaeckString signalName, float value, unsigned long long timestamp = BLAECK_NOW);
+  void write(BlaeckString signalName, double value, unsigned long long timestamp = BLAECK_NOW);
 
   /*!
     @brief   Points a text signal at a value and sends it right away.
 
-    @param   signalName  The registered text signal's name.
-    @param   value       Null-terminated text.
-    @warning The text is not copied. Keep its buffer valid until replaced by another
+    @param   signalName  The registered text signal's name, RAM or F() text.
+    @param   value       Null-terminated text, or F() text, which stays in flash.
+    @param   timestamp   Sample time in microseconds. Leave it out to have blaeck take it
+                         from the timestamp mode when the value is sent.
+    @warning RAM text is not copied. Keep its buffer valid until replaced by another
              text write or the signal is removed. Later reports read the same memory.
              Use a global/static buffer or a string literal, not a local array or
              a temporary String's c_str().
@@ -3117,36 +3015,12 @@ public:
       device.write("Status", "Running");
     @endcode
   */
-  void write(const char *signalName, const char *value);
-
-  void write(const char *signalName, bool value, unsigned long long timestamp);
-  void write(const char *signalName, byte value, unsigned long long timestamp);
-  void write(const char *signalName, short value, unsigned long long timestamp);
-  void write(const char *signalName, unsigned short value, unsigned long long timestamp);
-  void write(const char *signalName, int value, unsigned long long timestamp);
-  void write(const char *signalName, unsigned int value, unsigned long long timestamp);
-  void write(const char *signalName, long value, unsigned long long timestamp);
-  void write(const char *signalName, unsigned long value, unsigned long long timestamp);
-  void write(const char *signalName, float value, unsigned long long timestamp);
-  void write(const char *signalName, double value, unsigned long long timestamp);
-
-  /*!
-    @brief   Points a text signal at a value and sends it with a supplied timestamp.
-
-    @param   signalName  The registered text signal's name.
-    @param   value       Null-terminated text.
-    @param   timestamp   Sample time in microseconds in the configured time base.
-    @warning The text is not copied. Keep its buffer valid until replaced by another
-             text write or the signal is removed. Later reports read the same memory.
-             Use a global/static buffer or a string literal, not a local array or
-             a temporary String's c_str().
-
-    @code
-      device.addSignal(F("Status"), "Idle");
-      device.write("Status", "Running", 123456ULL);
-    @endcode
-  */
-  void write(const char *signalName, const char *value, unsigned long long timestamp);
+  void write(BlaeckString signalName, const char *value, unsigned long long timestamp = BLAECK_NOW);
+  void write(BlaeckString signalName, const __FlashStringHelper *value, unsigned long long timestamp = BLAECK_NOW);
+  void write(BlaeckString signalName, decltype(nullptr), unsigned long long timestamp = BLAECK_NOW)
+  {
+    write(signalName, static_cast<const char *>(nullptr), timestamp);
+  }
 
   /*!
     @brief   Returns a signal's index, for the faster by-index calls.
@@ -3154,7 +3028,8 @@ public:
     Calls by name compare against every signal's name, so look the index up once in
     setup() for anything that runs often.
 
-    @param   signalName  The name the signal was added with.
+    @param   signalName  The name the signal was added with, RAM or F() text,
+                         including any numeric suffix.
     @return  Its index, or -1 if there is no signal by that name.
 
     @code
@@ -3162,40 +3037,17 @@ public:
       device.write(tempIndex, readSensor());
     @endcode
   */
-  int findSignalIndex(const char *signalName);
-  /*!
-    @brief   Looks up a signal by its flash name, including any numeric suffix.
-
-    @return  Its index, or -1 if there is no match.
-
-    @code
-      int statusIndex = device.findSignalIndex(F("Status"));
-    @endcode
-  */
-  int findSignalIndex(const __FlashStringHelper *signalName);
-  int findSignalIndex(decltype(nullptr)) { return findSignalIndex(static_cast<const char *>(nullptr)); }
-
-  // The same, by index.
-  void write(int signalIndex, bool value);
-  void write(int signalIndex, byte value);
-  void write(int signalIndex, short value);
-  void write(int signalIndex, unsigned short value);
-  void write(int signalIndex, int value);
-  void write(int signalIndex, unsigned int value);
-  void write(int signalIndex, long value);
-  void write(int signalIndex, unsigned long value);
-  void write(int signalIndex, float value);
-  void write(int signalIndex, double value);
+  int findSignalIndex(BlaeckString signalName);
 
   /*!
-    @brief   Points a text signal at a value and sends it, looking it up by index.
+    @brief   Sets a signal's value and sends it right away, looking it up by index.
 
-    @param   signalIndex  The registered text signal's index.
-    @param   value        Null-terminated text.
-    @warning The text is not copied. Keep its buffer valid until replaced by another
-             text write or the signal is removed. Later reports read the same memory.
-             Use a global/static buffer or a string literal, not a local array or
-             a temporary String's c_str().
+    The same overloads as by name; text as in write(signalName, value).
+
+    @param   signalIndex  The signal's index, from findSignalIndex().
+    @param   value        The new value.
+    @param   timestamp    Sample time in microseconds. Leave it out to have blaeck take it
+                          from the timestamp mode when the value is sent.
 
     @code
       device.addSignal(F("Status"), "Idle");
@@ -3203,122 +3055,21 @@ public:
       device.write(statusIndex, "Running");
     @endcode
   */
-  void write(int signalIndex, const char *value);
-
-  void write(int signalIndex, bool value, unsigned long long timestamp);
-  void write(int signalIndex, byte value, unsigned long long timestamp);
-  void write(int signalIndex, short value, unsigned long long timestamp);
-  void write(int signalIndex, unsigned short value, unsigned long long timestamp);
-  void write(int signalIndex, int value, unsigned long long timestamp);
-  void write(int signalIndex, unsigned int value, unsigned long long timestamp);
-  void write(int signalIndex, long value, unsigned long long timestamp);
-  void write(int signalIndex, unsigned long value, unsigned long long timestamp);
-  void write(int signalIndex, float value, unsigned long long timestamp);
-  void write(int signalIndex, double value, unsigned long long timestamp);
-
-  /*!
-    @brief   Points a text signal at a value and sends it by index with a timestamp.
-
-    @param   signalIndex  The registered text signal's index.
-    @param   value        Null-terminated text.
-    @param   timestamp    Sample time in microseconds in the configured time base.
-    @warning The text is not copied. Keep its buffer valid until replaced by another
-             text write or the signal is removed. Later reports read the same memory.
-             Use a global/static buffer or a string literal, not a local array or
-             a temporary String's c_str().
-
-    @code
-      device.addSignal(F("Status"), "Idle");
-      int statusIndex = device.findSignalIndex("Status");
-      device.write(statusIndex, "Running", 123456ULL);
-    @endcode
-  */
-  void write(int signalIndex, const char *value, unsigned long long timestamp);
-
-  /*!
-    @brief   Retains flash text as a signal's value and sends it immediately.
-
-    Later reports read the same flash text. No RAM copy is made just to retain it;
-    change tracking still uses its existing last-sent snapshot. RAM and flash writes
-    can replace each other without changing the signal's reporting policies.
-
-    @code
-      device.addSignal(F("Status"), F("Idle"));
-      device.write("Status", F("Running"));
-    @endcode
-  */
-  void write(const char *signalName, const __FlashStringHelper *value);
-  // The same, with the timestamp in microseconds in the configured time base.
-  void write(const char *signalName, const __FlashStringHelper *value, unsigned long long timestamp);
-  // The same flash text, addressed by signal index.
-  void write(int signalIndex, const __FlashStringHelper *value);
-  void write(int signalIndex, const __FlashStringHelper *value, unsigned long long timestamp);
-
-  void write(const char *name, decltype(nullptr)) { write(name, static_cast<const char *>(nullptr)); }
-  void write(const char *name, decltype(nullptr), unsigned long long timestamp) { write(name, static_cast<const char *>(nullptr), timestamp); }
-  void write(int index, decltype(nullptr)) { write(index, static_cast<const char *>(nullptr)); }
-  void write(int index, decltype(nullptr), unsigned long long timestamp) { write(index, static_cast<const char *>(nullptr), timestamp); }
-
-  /*!
-    @brief   Writes a signal using a flash name, without a temporary name buffer.
-
-    Accepts the same numeric, RAM-text and flash-text values as the index overloads.
-    Text ownership and reporting behavior are unchanged.
-
-    @code
-      device.write(F("Temperature"), 23.5);
-      device.write(F("Status"), F("Running"));
-    @endcode
-  */
-  void write(const __FlashStringHelper *name, bool value) { write(findSignalIndex(name), value); }
-  void write(const __FlashStringHelper *name, byte value) { write(findSignalIndex(name), value); }
-  void write(const __FlashStringHelper *name, short value) { write(findSignalIndex(name), value); }
-  void write(const __FlashStringHelper *name, unsigned short value) { write(findSignalIndex(name), value); }
-  void write(const __FlashStringHelper *name, int value) { write(findSignalIndex(name), value); }
-  void write(const __FlashStringHelper *name, unsigned int value) { write(findSignalIndex(name), value); }
-  void write(const __FlashStringHelper *name, long value) { write(findSignalIndex(name), value); }
-  void write(const __FlashStringHelper *name, unsigned long value) { write(findSignalIndex(name), value); }
-  void write(const __FlashStringHelper *name, float value) { write(findSignalIndex(name), value); }
-  void write(const __FlashStringHelper *name, double value) { write(findSignalIndex(name), value); }
-  void write(const __FlashStringHelper *name, const char *value) { write(findSignalIndex(name), value); }
-  void write(const __FlashStringHelper *name, const __FlashStringHelper *value) { write(findSignalIndex(name), value); }
-  void write(const __FlashStringHelper *name, decltype(nullptr)) { write(findSignalIndex(name), static_cast<const char *>(nullptr)); }
-
-  /*!
-    @brief   Writes a signal using a flash name and an explicit timestamp.
-
-    @param   timestamp  Sample time in microseconds in the configured time base.
-
-    @code
-      device.write(F("Status"), F("Running"), 123456ULL);
-    @endcode
-  */
-  void write(const __FlashStringHelper *name, bool value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
-  void write(const __FlashStringHelper *name, byte value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
-  void write(const __FlashStringHelper *name, short value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
-  void write(const __FlashStringHelper *name, unsigned short value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
-  void write(const __FlashStringHelper *name, int value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
-  void write(const __FlashStringHelper *name, unsigned int value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
-  void write(const __FlashStringHelper *name, long value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
-  void write(const __FlashStringHelper *name, unsigned long value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
-  void write(const __FlashStringHelper *name, float value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
-  void write(const __FlashStringHelper *name, double value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
-  void write(const __FlashStringHelper *name, const char *value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
-  void write(const __FlashStringHelper *name, const __FlashStringHelper *value, unsigned long long timestamp) { write(findSignalIndex(name), value, timestamp); }
-  void write(const __FlashStringHelper *name, decltype(nullptr), unsigned long long timestamp) { write(findSignalIndex(name), static_cast<const char *>(nullptr), timestamp); }
-
-  // Preserve null-name calls without ambiguity between the RAM and flash overloads.
-  template<class Name, class T, class = typename blaeck_detail::NullName<Name>::type>
-  auto write(Name, T value)
-      -> decltype(this->write(static_cast<const char *>(nullptr), value), void())
+  void write(int signalIndex, bool value, unsigned long long timestamp = BLAECK_NOW);
+  void write(int signalIndex, byte value, unsigned long long timestamp = BLAECK_NOW);
+  void write(int signalIndex, short value, unsigned long long timestamp = BLAECK_NOW);
+  void write(int signalIndex, unsigned short value, unsigned long long timestamp = BLAECK_NOW);
+  void write(int signalIndex, int value, unsigned long long timestamp = BLAECK_NOW);
+  void write(int signalIndex, unsigned int value, unsigned long long timestamp = BLAECK_NOW);
+  void write(int signalIndex, long value, unsigned long long timestamp = BLAECK_NOW);
+  void write(int signalIndex, unsigned long value, unsigned long long timestamp = BLAECK_NOW);
+  void write(int signalIndex, float value, unsigned long long timestamp = BLAECK_NOW);
+  void write(int signalIndex, double value, unsigned long long timestamp = BLAECK_NOW);
+  void write(int signalIndex, const char *value, unsigned long long timestamp = BLAECK_NOW);
+  void write(int signalIndex, const __FlashStringHelper *value, unsigned long long timestamp = BLAECK_NOW);
+  void write(int signalIndex, decltype(nullptr), unsigned long long timestamp = BLAECK_NOW)
   {
-    write(static_cast<const char *>(nullptr), value);
-  }
-  template<class Name, class T, class = typename blaeck_detail::NullName<Name>::type>
-  auto write(Name, T value, unsigned long long timestamp)
-      -> decltype(this->write(static_cast<const char *>(nullptr), value, timestamp), void())
-  {
-    write(static_cast<const char *>(nullptr), value, timestamp);
+    write(signalIndex, static_cast<const char *>(nullptr), timestamp);
   }
 
   // ----- Command callback -----
@@ -3449,18 +3200,14 @@ protected:
 private:
   // Blaeck's calls of the same names, for this device. A handle without a board registers
   // nothing (-1) and sends nothing.
-  int _registerSignal(const char *signalName, dataType type, void *address, bool textInFlash = false);
-  int _registerSignal(const __FlashStringHelper *signalName, dataType type, void *address, bool textInFlash = false);
+  int _registerSignal(BlaeckString signalName, dataType type, void *address, bool textInFlash = false);
   int _registerCommand(const char *command, BlaeckCommandHandler handler, uint8_t kind);
-  int _registerStateChannel(const char *channelName, const __FlashStringHelper *flashName,
-                            dataType valueType = Blaeck_string, const void *value = nullptr,
+  int _registerStateChannel(BlaeckString channelName, dataType valueType = Blaeck_string, const void *value = nullptr,
                             bool textInFlash = false);
-  int _registerEventChannel(const char *channelName, const __FlashStringHelper *flashName, BlaeckString eventTypes);
-  void _writeStateText(const char *name, bool nameInFlash, const char *text, bool textInFlash);
-  void _writeStateCurrent(const char *name, bool nameInFlash);
-  void _writeStateNumber(const char *channelName, long s, unsigned long u, double d, bool nameInFlash = false);
-  // The board's current timestamp, or 0 without a board.
-  unsigned long long _timeStamp();
+  int _registerEventChannel(BlaeckString channelName, BlaeckString eventTypes);
+  void _writeStateText(BlaeckString channelName, const char *text, bool textInFlash);
+  void _writeStateCurrent(BlaeckString channelName);
+  void _writeStateNumber(BlaeckString channelName, long s, unsigned long u, double d);
 };
 
 // The handle for a device from addDevice(): another board, or a part of this one, that a host
@@ -3561,23 +3308,16 @@ public:
     reading and only the device's signals. Nothing is sent while the device is marked
     missing. The before-write callback does not run.
 
+    @param   timestamp  In microseconds, in the epoch of the timestamp mode. Leave it out
+                        to have blaeck take it from the timestamp mode when the frame is
+                        sent.
+
     @code
       if (readFlowFromPump(pumpFlow))
         pump.writeAll();
     @endcode
   */
-  void writeAll();
-
-  /*!
-    @brief   Sends every signal of this device now, with a timestamp from the caller.
-
-    @param   timestamp  In microseconds, in the epoch of the timestamp mode.
-
-    @code
-      pump.writeAll(1723600000000000ULL);
-    @endcode
-  */
-  void writeAll(unsigned long long timestamp);
+  void writeAll(unsigned long long timestamp = BLAECK_NOW);
 
 private:
   BlaeckDeviceRef(Blaeck *owner, byte id) : BlaeckDeviceBase(owner, id) {}
@@ -3907,23 +3647,16 @@ public:
 
     The device also does this when a host sends <BLAECK.WRITE_DATA>.
 
+    @param   timestamp  In microseconds, in the epoch of the timestamp mode. Leave it out
+                        to have blaeck take it from the timestamp mode when the frame is
+                        sent.
+
     @code
       if (Temperature > 40.0f)
         device.writeAll();
     @endcode
   */
-  void writeAll();
-
-  /*!
-    @brief   Sends every signal's value now, with a timestamp from the caller.
-
-    @param   timestamp  In microseconds, in the epoch of the timestamp mode.
-
-    @code
-      device.writeAll(1723600000000000ULL);
-    @endcode
-  */
-  void writeAll(unsigned long long timestamp);
+  void writeAll(unsigned long long timestamp = BLAECK_NOW);
 
   /*!
     @brief   Sends signals whose automatic reporting policies are due.
@@ -3935,24 +3668,17 @@ public:
     The first interval after every ACTIVATE includes all interval-enabled signals
     without change filtering. Pause/resume still applies.
 
+    @param   timestamp  The frame's time, in microseconds in the timestamp mode's epoch.
+                        Leave it out to have blaeck take it from the timestamp mode when
+                        the frame is sent. Scheduling and rate limits
+                        use millis() either way.
+
     @code
       device.read();
       device.writeIfDue();
     @endcode
   */
-  void writeIfDue();
-
-  /*!
-    @brief   Services automatic reporting with a caller-supplied frame timestamp.
-
-    @param   timestamp  Microseconds in the selected timestamp mode's epoch.
-                        Scheduling and rate limits still use millis().
-
-    @code
-      device.writeIfDue(1723600000000000ULL);
-    @endcode
-  */
-  void writeIfDue(unsigned long long timestamp);
+  void writeIfDue(unsigned long long timestamp = BLAECK_NOW);
 
   // ----- Tick -----
 

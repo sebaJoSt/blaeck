@@ -579,6 +579,8 @@ bool Blaeck::_writeDeviceNotice(byte deviceId, byte event)
 
 void Blaeck::_writeSignalNow(int signalIndex, unsigned long long timestamp)
 {
+  if (timestamp == BLAECK_NOW)
+    timestamp = getTimeStamp();
   if (signalIndex >= 0 && signalIndex < _signalIndex)
   {
     DeviceEntry *d = _deviceEntry(Signals[signalIndex].DeviceId);
@@ -648,16 +650,10 @@ void BlaeckDeviceRef::writeRestarted()
     _core->_writeDeviceRestarted(_deviceId);
 }
 
-void BlaeckDeviceRef::writeAll()
-{
-  if (_core != nullptr)
-    _core->_writeDeviceSignals(_deviceId, _core->getTimeStamp());
-}
-
 void BlaeckDeviceRef::writeAll(unsigned long long timestamp)
 {
   if (_core != nullptr)
-    _core->_writeDeviceSignals(_deviceId, timestamp);
+    _core->_writeDeviceSignals(_deviceId, timestamp == BLAECK_NOW ? _core->getTimeStamp() : timestamp);
 }
 
 #if BLAECK_ENABLE_STATE_CHANNELS
@@ -763,159 +759,6 @@ int Blaeck::_registerSignalCommon(byte deviceId, const char *ram, const __FlashS
   SignalCount = _signalIndex;
   _schemaHash = _computeSchemaHash();
   return added;
-}
-
-BlaeckBoolSignalRef BlaeckDeviceBase::addSignal(const char *signalName, bool *value)
-{
-  return BlaeckBoolSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_bool, value));
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const char *signalName, byte *value)
-{
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_byte, value));
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const char *signalName, short *value)
-{
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_short, value));
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const char *signalName, unsigned short *value)
-{
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_ushort, value));
-}
-
-// int and unsigned int are registered by their real width: 2 bytes on AVR, 4 elsewhere.
-// The same #ifdef appears on every int registration below.
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const char *signalName, int *value)
-{
-#ifdef __AVR__
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_int, value));
-#else
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_long, value));
-#endif
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const char *signalName, unsigned int *value)
-{
-#ifdef __AVR__
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_uint, value));
-#else
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_ulong, value));
-#endif
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const char *signalName, long *value)
-{
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_long, value));
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const char *signalName, unsigned long *value)
-{
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_ulong, value));
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const char *signalName, float *value)
-{
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_float, value));
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const char *signalName, double *value)
-{
-#ifdef __AVR__
-  /*On the Uno and other ATMEGA based boards, the double implementation occupies 4 bytes
-  and is exactly the same as the float, with no gain in precision.*/
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_float, value));
-#else
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_double, value));
-#endif
-}
-
-BlaeckTextSignalRef BlaeckDeviceBase::addSignal(const char *signalName, const char *value)
-{
-  // Address is void * for every type; a string is only read.
-  return BlaeckTextSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_string, const_cast<char *>(value)));
-}
-
-BlaeckTextSignalRef BlaeckDeviceBase::addSignal(const char *signalName, const __FlashStringHelper *value)
-{
-  return BlaeckTextSignalRef(_core, (int16_t)_registerSignal(
-      signalName, Blaeck_string, const_cast<__FlashStringHelper *>(value), true));
-}
-
-BlaeckBoolSignalRef BlaeckDeviceBase::addSignal(const __FlashStringHelper *signalName, bool *value)
-{
-  return BlaeckBoolSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_bool, value));
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const __FlashStringHelper *signalName, byte *value)
-{
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_byte, value));
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const __FlashStringHelper *signalName, short *value)
-{
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_short, value));
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const __FlashStringHelper *signalName, unsigned short *value)
-{
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_ushort, value));
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const __FlashStringHelper *signalName, int *value)
-{
-#ifdef __AVR__
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_int, value));
-#else
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_long, value));
-#endif
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const __FlashStringHelper *signalName, unsigned int *value)
-{
-#ifdef __AVR__
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_uint, value));
-#else
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_ulong, value));
-#endif
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const __FlashStringHelper *signalName, long *value)
-{
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_long, value));
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const __FlashStringHelper *signalName, unsigned long *value)
-{
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_ulong, value));
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const __FlashStringHelper *signalName, float *value)
-{
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_float, value));
-}
-
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(const __FlashStringHelper *signalName, double *value)
-{
-#ifdef __AVR__
-  /*On the Uno and other ATMEGA based boards, the double implementation occupies 4 bytes
-  and is exactly the same as the float, with no gain in precision.*/
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_float, value));
-#else
-  return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_double, value));
-#endif
-}
-
-BlaeckTextSignalRef BlaeckDeviceBase::addSignal(const __FlashStringHelper *signalName, const char *value)
-{
-  return BlaeckTextSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_string, const_cast<char *>(value)));
-}
-
-BlaeckTextSignalRef BlaeckDeviceBase::addSignal(const __FlashStringHelper *signalName, const __FlashStringHelper *value)
-{
-  return BlaeckTextSignalRef(_core, (int16_t)_registerSignal(
-      signalName, Blaeck_string, const_cast<__FlashStringHelper *>(value), true));
 }
 
 void Blaeck::clearAllSignals()
@@ -1740,18 +1583,6 @@ bool Blaeck::_storeString(detail::StoredString &slot, BlaeckString value)
   if (_debugStream != nullptr)
     _debugStream->println(F("No RAM for configuration text; previous value retained."));
   return false;
-}
-
-void BlaeckDeviceBase::writeCommandState(const char *command)
-{
-  if (_core != nullptr)
-    _core->_writeCommandState(command, false);
-}
-
-void BlaeckDeviceBase::writeCommandState(const __FlashStringHelper *command)
-{
-  if (_core != nullptr)
-    _core->_writeCommandState(reinterpret_cast<const char *>(command), true);
 }
 
 void Blaeck::_writeCommandState(const char *command, bool inFlash)
@@ -2657,92 +2488,6 @@ int Blaeck::_registerStateChannel(byte deviceId, const char *channelName, const 
   return -1;
 }
 
-BlaeckTextStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, BlaeckTextTag)
-{
-  return BlaeckTextStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr));
-}
-
-BlaeckBoolStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, BlaeckBoolTag)
-{
-  return BlaeckBoolStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_bool, nullptr));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, BlaeckNumericTag type)
-{
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, _tagType(type), nullptr));
-}
-
-BlaeckTextStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, const char *value)
-{
-  return BlaeckTextStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_string, value));
-}
-
-BlaeckBoolStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, bool *value)
-{
-  return BlaeckBoolStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_bool, value));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, byte *value)
-{
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_byte, value));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, short *value)
-{
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_short, value));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, unsigned short *value)
-{
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_ushort, value));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, int *value)
-{
-#ifdef __AVR__
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_int, value));
-#else
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_long, value));
-#endif
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, unsigned int *value)
-{
-#ifdef __AVR__
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_uint, value));
-#else
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_ulong, value));
-#endif
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, long *value)
-{
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_long, value));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, unsigned long *value)
-{
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_ulong, value));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, float *value)
-{
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_float, value));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, double *value)
-{
-#ifdef __AVR__
-  /*On the Uno and other ATMEGA based boards, the double implementation occupies 4 bytes
-  and is exactly the same as the float, with no gain in precision. Registering it as a
-  double would have the value writer copy 8 bytes out of a 4-byte union member, sending
-  four bytes of stale memory as the top half of the number.*/
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_float, value));
-#else
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_double, value));
-#endif
-}
-
 bool Blaeck::_flashStringEqualsName(const __FlashStringHelper *flashName, const char *name)
 {
   if (flashName == nullptr || name == nullptr)
@@ -2803,11 +2548,6 @@ int Blaeck::_findStateChannel(byte deviceId, const char *channelName) const
   return -1;
 }
 
-void BlaeckDeviceBase::writeState(const char *channelName, const char *text)
-{
-  _writeStateText(channelName, false, text, false);
-}
-
 void Blaeck::_writeStateText(byte deviceId, const char *channelName, bool nameInFlash, const char *text, bool textInFlash)
 {
   int channelIndex = _stateChannelForPush(deviceId, channelName, true, nameInFlash);
@@ -2828,13 +2568,6 @@ void Blaeck::_writeStateText(byte deviceId, const char *channelName, bool nameIn
   }
 
   _writeStateFrame(channelIndex, text, nullptr, 0, textInFlash);
-}
-
-// Sends the channel's current value, read from its variable or getter. The only way to push
-// a channel that has a variable.
-void BlaeckDeviceBase::writeState(const char *channelName)
-{
-  _writeStateCurrent(channelName, false);
 }
 
 void Blaeck::_writeStateCurrent(byte deviceId, const char *channelName, bool nameInFlash)
@@ -2958,56 +2691,6 @@ void Blaeck::_writeStateNumber(byte deviceId, const char *channelName, long s, u
     memcpy(const_cast<void *>(e.stateValue), pushed, len);
 
   _writeStateFrame(channelIndex, nullptr, pushed, len);
-}
-
-void BlaeckDeviceBase::writeState(const char *channelName, bool value)
-{
-  _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value);
-}
-
-void BlaeckDeviceBase::writeState(const char *channelName, byte value)
-{
-  _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value);
-}
-
-void BlaeckDeviceBase::writeState(const char *channelName, short value)
-{
-  _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value);
-}
-
-void BlaeckDeviceBase::writeState(const char *channelName, unsigned short value)
-{
-  _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value);
-}
-
-void BlaeckDeviceBase::writeState(const char *channelName, int value)
-{
-  _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value);
-}
-
-void BlaeckDeviceBase::writeState(const char *channelName, unsigned int value)
-{
-  _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value);
-}
-
-void BlaeckDeviceBase::writeState(const char *channelName, long value)
-{
-  _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value);
-}
-
-void BlaeckDeviceBase::writeState(const char *channelName, unsigned long value)
-{
-  _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value);
-}
-
-void BlaeckDeviceBase::writeState(const char *channelName, float value)
-{
-  _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value);
-}
-
-void BlaeckDeviceBase::writeState(const char *channelName, double value)
-{
-  _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value);
 }
 
 void Blaeck::_writeStateFrame(int channelIndex, const char *text, const byte *pushed, byte pushedLen, bool textInFlash)
@@ -3377,22 +3060,6 @@ void Blaeck::writeStateChannelsFrame(unsigned long msg_id)
   _frameClose();
 }
 #else
-// BLAECK_ENABLE_STATE_CHANNELS=0: the API compiles but stores nothing, and the catalog
-// answers empty.
-BlaeckTextStateRef BlaeckDeviceBase::addStateChannel(const char *, BlaeckTextTag) { return BlaeckTextStateRef(_core, -1); }
-BlaeckBoolStateRef BlaeckDeviceBase::addStateChannel(const char *, BlaeckBoolTag) { return BlaeckBoolStateRef(_core, -1); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *, BlaeckNumericTag) { return BlaeckNumericStateRef(_core, -1); }
-BlaeckTextStateRef BlaeckDeviceBase::addStateChannel(const char *, const char *) { return BlaeckTextStateRef(_core, -1); }
-BlaeckBoolStateRef BlaeckDeviceBase::addStateChannel(const char *, bool *) { return BlaeckBoolStateRef(_core, -1); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *, byte *) { return BlaeckNumericStateRef(_core, -1); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *, short *) { return BlaeckNumericStateRef(_core, -1); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *, unsigned short *) { return BlaeckNumericStateRef(_core, -1); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *, int *) { return BlaeckNumericStateRef(_core, -1); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *, unsigned int *) { return BlaeckNumericStateRef(_core, -1); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *, long *) { return BlaeckNumericStateRef(_core, -1); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *, unsigned long *) { return BlaeckNumericStateRef(_core, -1); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *, float *) { return BlaeckNumericStateRef(_core, -1); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const char *, double *) { return BlaeckNumericStateRef(_core, -1); }
 void Blaeck::clearAllStateChannels() {}
 // Used by the F() addStateChannel() overloads, which exist either way.
 int Blaeck::_registerStateChannel(byte, const char *, const __FlashStringHelper *, dataType, const void *, bool) { return -1; }
@@ -3401,18 +3068,6 @@ void Blaeck::_writeStateCurrent(byte, const char *, bool) {}
 void Blaeck::_writeStateNumber(byte, const char *, long, unsigned long, double, bool) {}
 void Blaeck::writeStateChannels() { this->writeStateChannels(0); }
 void Blaeck::writeStateChannels(unsigned long msg_id) { this->_writeEmptyFrame(0x90, msg_id); }
-void BlaeckDeviceBase::writeState(const char *, const char *) {}
-void BlaeckDeviceBase::writeState(const char *) {}
-void BlaeckDeviceBase::writeState(const char *, bool) {}
-void BlaeckDeviceBase::writeState(const char *, byte) {}
-void BlaeckDeviceBase::writeState(const char *, short) {}
-void BlaeckDeviceBase::writeState(const char *, unsigned short) {}
-void BlaeckDeviceBase::writeState(const char *, int) {}
-void BlaeckDeviceBase::writeState(const char *, unsigned int) {}
-void BlaeckDeviceBase::writeState(const char *, long) {}
-void BlaeckDeviceBase::writeState(const char *, unsigned long) {}
-void BlaeckDeviceBase::writeState(const char *, float) {}
-void BlaeckDeviceBase::writeState(const char *, double) {}
 #endif
 
 #if BLAECK_ENABLE_EVENTS
@@ -3523,11 +3178,6 @@ int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const 
   _warnTableFull(F("withEventChannels"), _eventChannelCapacity, channelName);
   _rejectedEventChannelCount++;
   return -1;
-}
-
-BlaeckEventChannelRef BlaeckDeviceBase::addEventChannel(const char *channelName, BlaeckString eventTypes)
-{
-  return BlaeckEventChannelRef(_core, (int16_t)_registerEventChannel(channelName, nullptr, eventTypes));
 }
 
 void Blaeck::_addEventTypesCsv(uint16_t channelIndex, const detail::StoredString &eventTypes)
@@ -3871,8 +3521,6 @@ void Blaeck::_writeEvent(byte deviceId, const char *channelName, BlaeckString ev
   _frameClose();
 }
 #else
-// BLAECK_ENABLE_EVENTS=0: the API compiles but stores nothing, and the catalog answers empty.
-BlaeckEventChannelRef BlaeckDeviceBase::addEventChannel(const char *, BlaeckString) { return BlaeckEventChannelRef(_core, -1); }
 bool Blaeck::_addEventType(byte, const char *, BlaeckString) { return false; }
 void Blaeck::clearAllEventChannels() {}
 // Used by the F() addEventChannel() overload, which exists either way.
@@ -4146,180 +3794,6 @@ void Blaeck::_writeEmptyFrame(byte msgKey, unsigned long msg_id)
   _frameClose();
 }
 
-void BlaeckDeviceBase::write(const char *signalName, bool value)
-{
-  this->write(signalName, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(const char *signalName, byte value)
-{
-  this->write(signalName, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(const char *signalName, short value)
-{
-  this->write(signalName, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(const char *signalName, unsigned short value)
-{
-  this->write(signalName, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(const char *signalName, int value)
-{
-  this->write(signalName, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(const char *signalName, unsigned int value)
-{
-  this->write(signalName, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(const char *signalName, long value)
-{
-  this->write(signalName, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(const char *signalName, unsigned long value)
-{
-  this->write(signalName, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(const char *signalName, float value)
-{
-  this->write(signalName, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(const char *signalName, double value)
-{
-  this->write(signalName, value, _timeStamp());
-}
-
-
-void BlaeckDeviceBase::write(const char *signalName, bool value, unsigned long long timestamp)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    this->write(index, value, timestamp);
-  }
-}
-void BlaeckDeviceBase::write(const char *signalName, byte value, unsigned long long timestamp)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    this->write(index, value, timestamp);
-  }
-}
-void BlaeckDeviceBase::write(const char *signalName, short value, unsigned long long timestamp)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    this->write(index, value, timestamp);
-  }
-}
-void BlaeckDeviceBase::write(const char *signalName, unsigned short value, unsigned long long timestamp)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    this->write(index, value, timestamp);
-  }
-}
-void BlaeckDeviceBase::write(const char *signalName, int value, unsigned long long timestamp)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    this->write(index, value, timestamp);
-  }
-}
-void BlaeckDeviceBase::write(const char *signalName, unsigned int value, unsigned long long timestamp)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    this->write(index, value, timestamp);
-  }
-}
-void BlaeckDeviceBase::write(const char *signalName, long value, unsigned long long timestamp)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    this->write(index, value, timestamp);
-  }
-}
-void BlaeckDeviceBase::write(const char *signalName, unsigned long value, unsigned long long timestamp)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    this->write(index, value, timestamp);
-  }
-}
-void BlaeckDeviceBase::write(const char *signalName, float value, unsigned long long timestamp)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    this->write(index, value, timestamp);
-  }
-}
-void BlaeckDeviceBase::write(const char *signalName, double value, unsigned long long timestamp)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    this->write(index, value, timestamp);
-  }
-}
-
-void BlaeckDeviceBase::write(int signalIndex, bool value)
-{
-  this->write(signalIndex, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(int signalIndex, byte value)
-{
-  this->write(signalIndex, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(int signalIndex, short value)
-{
-  this->write(signalIndex, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(int signalIndex, unsigned short value)
-{
-  this->write(signalIndex, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(int signalIndex, int value)
-{
-  this->write(signalIndex, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(int signalIndex, unsigned int value)
-{
-  this->write(signalIndex, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(int signalIndex, long value)
-{
-  this->write(signalIndex, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(int signalIndex, unsigned long value)
-{
-  this->write(signalIndex, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(int signalIndex, float value)
-{
-  this->write(signalIndex, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(int signalIndex, double value)
-{
-  this->write(signalIndex, value, _timeStamp());
-}
-
-
-
-
-
-
-
-
-
-
-
 void BlaeckDeviceBase::write(int signalIndex, bool value, unsigned long long timestamp)
 {
   if (_core != nullptr && _core->_storeSigned(signalIndex, value))
@@ -4371,41 +3845,10 @@ void BlaeckDeviceBase::write(int signalIndex, double value, unsigned long long t
     _core->_writeSignalNow(signalIndex, timestamp);
 }
 
-void BlaeckDeviceBase::write(const char *signalName, const char *value)
-{
-  this->write(signalName, value, _timeStamp());
-}
-void BlaeckDeviceBase::write(const char *signalName, const char *value, unsigned long long timestamp)
-{
-  int index = findSignalIndex(signalName);
-  if (index >= 0)
-  {
-    this->write(index, value, timestamp);
-  }
-}
-void BlaeckDeviceBase::write(int signalIndex, const char *value)
-{
-  this->write(signalIndex, value, _timeStamp());
-}
 void BlaeckDeviceBase::write(int signalIndex, const char *value, unsigned long long timestamp)
 {
   if (_core != nullptr)
     _core->_writeSignalText(signalIndex, value, false, timestamp);
-}
-
-void BlaeckDeviceBase::write(const char *signalName, const __FlashStringHelper *value)
-{
-  write(findSignalIndex(signalName), value, _timeStamp());
-}
-
-void BlaeckDeviceBase::write(const char *signalName, const __FlashStringHelper *value, unsigned long long timestamp)
-{
-  write(findSignalIndex(signalName), value, timestamp);
-}
-
-void BlaeckDeviceBase::write(int signalIndex, const __FlashStringHelper *value)
-{
-  write(signalIndex, value, _timeStamp());
 }
 
 void BlaeckDeviceBase::write(int signalIndex, const __FlashStringHelper *value, unsigned long long timestamp)
@@ -4427,14 +3870,9 @@ void Blaeck::_writeSignalText(int signalIndex, const void *value, bool inFlash, 
   }
 }
 
-void Blaeck::writeAll()
-{
-  this->writeAll(getTimeStamp());
-}
-
 void Blaeck::writeAll(unsigned long long timestamp)
 {
-  this->writeAll(0, timestamp);
+  this->writeAll(0, timestamp == BLAECK_NOW ? getTimeStamp() : timestamp);
 }
 
 void Blaeck::writeAll(unsigned long msg_id, unsigned long long timestamp)
@@ -4458,14 +3896,11 @@ void Blaeck::tick()
   writeIfDue();
 }
 
-void Blaeck::writeIfDue()
-{
-  // Keep rollover tracking alive even when no signal needs reporting.
-  writeIfDue(getTimeStamp());
-}
-
 void Blaeck::writeIfDue(unsigned long long timestamp)
 {
+  // Read on every call, which also keeps rollover tracking alive when nothing is due.
+  if (timestamp == BLAECK_NOW)
+    timestamp = getTimeStamp();
   const uint32_t now = static_cast<uint32_t>(millis());
   const uint32_t elapsed = now - _lastIntervalMs;
   const bool initialInterval = _timedActivated && _timedFirstTime;
@@ -5144,263 +4579,177 @@ void Blaeck::validatePlatformSizes()
 // These sit outside the BLAECK_ENABLE_*
 // blocks, so they call the real function or its stub, whichever was compiled.
 
-BlaeckTextStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, BlaeckTextTag)
-{
-  return BlaeckTextStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_string, nullptr));
-}
-
-BlaeckBoolStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, BlaeckBoolTag)
-{
-  return BlaeckBoolStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_bool, nullptr));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, BlaeckNumericTag type)
-{
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, _tagType(type), nullptr));
-}
-
-BlaeckTextStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, const char *value)
-{
-  return BlaeckTextStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_string, value));
-}
-
-BlaeckTextStateRef BlaeckDeviceBase::addStateChannel(const char *channelName, const __FlashStringHelper *value)
-{
-  return BlaeckTextStateRef(_core, (int16_t)_registerStateChannel(channelName, nullptr, Blaeck_string, value, true));
-}
-
-BlaeckTextStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, const __FlashStringHelper *value)
-{
-  return BlaeckTextStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_string, value, true));
-}
-
-BlaeckBoolStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, bool *value)
-{
-  return BlaeckBoolStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_bool, value));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, byte *value)
-{
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_byte, value));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, short *value)
-{
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_short, value));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, unsigned short *value)
-{
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_ushort, value));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, int *value)
-{
-#ifdef __AVR__
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_int, value));
-#else
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_long, value));
-#endif
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, unsigned int *value)
-{
-#ifdef __AVR__
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_uint, value));
-#else
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_ulong, value));
-#endif
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, long *value)
-{
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_long, value));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, unsigned long *value)
-{
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_ulong, value));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, float *value)
-{
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_float, value));
-}
-
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(const __FlashStringHelper *channelName, double *value)
-{
-#ifdef __AVR__
-  // A double is 4 bytes on AVR, so it is declared as float.
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_float, value));
-#else
-  return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(nullptr, channelName, Blaeck_double, value));
-#endif
-}
-
-void BlaeckDeviceBase::writeState(const __FlashStringHelper *channelName, const char *text)
-{
-  _writeStateText(reinterpret_cast<const char *>(channelName), true, text, false);
-}
-
-void BlaeckDeviceBase::writeState(const char *channelName, const __FlashStringHelper *text)
-{
-  _writeStateText(channelName, false, reinterpret_cast<const char *>(text), true);
-}
-
-void BlaeckDeviceBase::writeState(const __FlashStringHelper *channelName, const __FlashStringHelper *text)
-{
-  _writeStateText(reinterpret_cast<const char *>(channelName), true, reinterpret_cast<const char *>(text), true);
-}
-
-void BlaeckDeviceBase::writeState(const __FlashStringHelper *channelName, bool value)
-{
-  _writeStateNumber(reinterpret_cast<const char *>(channelName), (long)value, (unsigned long)value, (double)value, true);
-}
-
-void BlaeckDeviceBase::writeState(const __FlashStringHelper *channelName, byte value)
-{
-  _writeStateNumber(reinterpret_cast<const char *>(channelName), (long)value, (unsigned long)value, (double)value, true);
-}
-
-void BlaeckDeviceBase::writeState(const __FlashStringHelper *channelName, short value)
-{
-  _writeStateNumber(reinterpret_cast<const char *>(channelName), (long)value, (unsigned long)value, (double)value, true);
-}
-
-void BlaeckDeviceBase::writeState(const __FlashStringHelper *channelName, unsigned short value)
-{
-  _writeStateNumber(reinterpret_cast<const char *>(channelName), (long)value, (unsigned long)value, (double)value, true);
-}
-
-void BlaeckDeviceBase::writeState(const __FlashStringHelper *channelName, int value)
-{
-  _writeStateNumber(reinterpret_cast<const char *>(channelName), (long)value, (unsigned long)value, (double)value, true);
-}
-
-void BlaeckDeviceBase::writeState(const __FlashStringHelper *channelName, unsigned int value)
-{
-  _writeStateNumber(reinterpret_cast<const char *>(channelName), (long)value, (unsigned long)value, (double)value, true);
-}
-
-void BlaeckDeviceBase::writeState(const __FlashStringHelper *channelName, long value)
-{
-  _writeStateNumber(reinterpret_cast<const char *>(channelName), (long)value, (unsigned long)value, (double)value, true);
-}
-
-void BlaeckDeviceBase::writeState(const __FlashStringHelper *channelName, unsigned long value)
-{
-  _writeStateNumber(reinterpret_cast<const char *>(channelName), (long)value, (unsigned long)value, (double)value, true);
-}
-
-void BlaeckDeviceBase::writeState(const __FlashStringHelper *channelName, float value)
-{
-  _writeStateNumber(reinterpret_cast<const char *>(channelName), (long)value, (unsigned long)value, (double)value, true);
-}
-
-void BlaeckDeviceBase::writeState(const __FlashStringHelper *channelName, double value)
-{
-  _writeStateNumber(reinterpret_cast<const char *>(channelName), (long)value, (unsigned long)value, (double)value, true);
-}
-
-void BlaeckDeviceBase::writeState(const __FlashStringHelper *channelName)
-{
-  _writeStateCurrent(reinterpret_cast<const char *>(channelName), true);
-}
-
-BlaeckEventChannelRef BlaeckDeviceBase::addEventChannel(const __FlashStringHelper *channelName, BlaeckString eventTypes)
-{
-  return BlaeckEventChannelRef(_core, (int16_t)_registerEventChannel(nullptr, channelName, eventTypes));
-}
-
-bool BlaeckDeviceBase::addEventType(const __FlashStringHelper *channelName, BlaeckString eventType)
-{
-  // The buffer only needs to last for the lookup.
-  char n[Blaeck::MAX_EVENT_NAME_COUNT];
-  Blaeck::copyFlashName(channelName, n, sizeof(n));
-  return addEventType(n, eventType);
-}
-
-void BlaeckDeviceBase::writeEvent(const __FlashStringHelper *channelName, BlaeckString eventType)
-{
-  char n[Blaeck::MAX_EVENT_NAME_COUNT];
-  Blaeck::copyFlashName(channelName, n, sizeof(n));
-  writeEvent(n, eventType);
-}
-
 // ----- BlaeckDeviceBase: calls into the board -----
-
-int BlaeckDeviceBase::_registerSignal(const char *signalName, dataType type, void *address, bool textInFlash)
-{
-  return _core != nullptr ? _core->_registerSignal(_deviceId, signalName, type, address, textInFlash) : -1;
-}
-
-int BlaeckDeviceBase::_registerSignal(const __FlashStringHelper *signalName, dataType type, void *address, bool textInFlash)
-{
-  return _core != nullptr ? _core->_registerSignal(_deviceId, signalName, type, address, textInFlash) : -1;
-}
 
 int BlaeckDeviceBase::_registerCommand(const char *command, BlaeckCommandHandler handler, uint8_t kind)
 {
   return _core != nullptr ? _core->_registerCommand(_deviceId, command, handler, kind) : -1;
 }
 
-int BlaeckDeviceBase::_registerStateChannel(const char *channelName, const __FlashStringHelper *flashName,
-                                            dataType valueType, const void *value, bool textInFlash)
+// ----- BlaeckDeviceBase: calls taking a name -----
+// A name is RAM or F() text alike; Blaeck's calls below take the two apart.
+
+int BlaeckDeviceBase::_registerSignal(BlaeckString signalName, dataType type, void *address, bool textInFlash)
 {
-  return _core != nullptr
-             ? _core->_registerStateChannel(_deviceId, channelName, flashName, valueType, value, textInFlash)
-             : -1;
+  if (_core == nullptr)
+    return -1;
+  return signalName.inFlash()
+             ? _core->_registerSignal(_deviceId, reinterpret_cast<const __FlashStringHelper *>(signalName.data()),
+                                      type, address, textInFlash)
+             : _core->_registerSignal(_deviceId, signalName.data(), type, address, textInFlash);
 }
 
-int BlaeckDeviceBase::_registerEventChannel(const char *channelName, const __FlashStringHelper *flashName,
-                                            BlaeckString eventTypes)
+int BlaeckDeviceBase::_registerStateChannel(BlaeckString channelName, dataType valueType, const void *value, bool textInFlash)
 {
-  return _core != nullptr ? _core->_registerEventChannel(_deviceId, channelName, flashName, eventTypes) : -1;
+  if (_core == nullptr)
+    return -1;
+  return _core->_registerStateChannel(_deviceId, channelName.inFlash() ? nullptr : channelName.data(),
+                                      channelName.inFlash() ? reinterpret_cast<const __FlashStringHelper *>(channelName.data()) : nullptr,
+                                      valueType, value, textInFlash);
 }
 
-void BlaeckDeviceBase::_writeStateText(const char *name, bool nameInFlash, const char *text, bool textInFlash)
+int BlaeckDeviceBase::_registerEventChannel(BlaeckString channelName, BlaeckString eventTypes)
+{
+  if (_core == nullptr)
+    return -1;
+  return _core->_registerEventChannel(_deviceId, channelName.inFlash() ? nullptr : channelName.data(),
+                                      channelName.inFlash() ? reinterpret_cast<const __FlashStringHelper *>(channelName.data()) : nullptr,
+                                      eventTypes);
+}
+
+void BlaeckDeviceBase::_writeStateText(BlaeckString channelName, const char *text, bool textInFlash)
 {
   if (_core != nullptr)
-    _core->_writeStateText(_deviceId, name, nameInFlash, text, textInFlash);
+    _core->_writeStateText(_deviceId, channelName.data(), channelName.inFlash(), text, textInFlash);
 }
 
-void BlaeckDeviceBase::_writeStateCurrent(const char *name, bool nameInFlash)
+void BlaeckDeviceBase::_writeStateCurrent(BlaeckString channelName)
 {
   if (_core != nullptr)
-    _core->_writeStateCurrent(_deviceId, name, nameInFlash);
+    _core->_writeStateCurrent(_deviceId, channelName.data(), channelName.inFlash());
 }
 
-void BlaeckDeviceBase::_writeStateNumber(const char *channelName, long s, unsigned long u, double d, bool nameInFlash)
+void BlaeckDeviceBase::_writeStateNumber(BlaeckString channelName, long s, unsigned long u, double d)
 {
   if (_core != nullptr)
-    _core->_writeStateNumber(_deviceId, channelName, s, u, d, nameInFlash);
+    _core->_writeStateNumber(_deviceId, channelName.data(), s, u, d, channelName.inFlash());
 }
 
-unsigned long long BlaeckDeviceBase::_timeStamp()
-{
-  return _core != nullptr ? _core->getTimeStamp() : 0;
-}
+// int and unsigned int are registered by their real width: 2 bytes on AVR, 4 elsewhere. On AVR
+// a double is a float, with no gain in precision, so it is registered as one.
+#ifdef __AVR__
+static const dataType BLAECK_INT_TYPE = Blaeck_int;
+static const dataType BLAECK_UINT_TYPE = Blaeck_uint;
+static const dataType BLAECK_DOUBLE_TYPE = Blaeck_float;
+#else
+static const dataType BLAECK_INT_TYPE = Blaeck_long;
+static const dataType BLAECK_UINT_TYPE = Blaeck_ulong;
+static const dataType BLAECK_DOUBLE_TYPE = Blaeck_double;
+#endif
 
-// The board's lookups. The logic stays in Blaeck, next to the tables.
-int BlaeckDeviceBase::findSignalIndex(const char *signalName)
-{
-  return _core != nullptr ? _core->_findSignalIndex(_deviceId, signalName) : -1;
-}
+BlaeckBoolSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, bool *value) { return BlaeckBoolSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_bool, value)); }
+BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, byte *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_byte, value)); }
+BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, short *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_short, value)); }
+BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, unsigned short *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_ushort, value)); }
+BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, int *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, BLAECK_INT_TYPE, value)); }
+BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, unsigned int *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, BLAECK_UINT_TYPE, value)); }
+BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, long *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_long, value)); }
+BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, unsigned long *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_ulong, value)); }
+BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, float *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_float, value)); }
+BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, double *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, BLAECK_DOUBLE_TYPE, value)); }
+// Address is void * for every type; a string is only read.
+BlaeckTextSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, const char *value) { return BlaeckTextSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_string, const_cast<char *>(value))); }
+BlaeckTextSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, const __FlashStringHelper *value) { return BlaeckTextSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_string, const_cast<__FlashStringHelper *>(value), true)); }
 
-int BlaeckDeviceBase::findSignalIndex(const __FlashStringHelper *signalName)
-{
-  return _core != nullptr ? _core->_findSignalIndex(_deviceId, signalName) : -1;
-}
+BlaeckTextStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, BlaeckTextTag) { return BlaeckTextStateRef(_core, (int16_t)_registerStateChannel(channelName)); }
+BlaeckBoolStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, BlaeckBoolTag) { return BlaeckBoolStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_bool)); }
+BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, BlaeckNumericTag type) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, _tagType(type))); }
+BlaeckTextStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, const char *value) { return BlaeckTextStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_string, value)); }
+BlaeckTextStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, const __FlashStringHelper *value) { return BlaeckTextStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_string, value, true)); }
+BlaeckBoolStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, bool *value) { return BlaeckBoolStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_bool, value)); }
+BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, byte *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_byte, value)); }
+BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, short *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_short, value)); }
+BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, unsigned short *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_ushort, value)); }
+BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, int *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, BLAECK_INT_TYPE, value)); }
+BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, unsigned int *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, BLAECK_UINT_TYPE, value)); }
+BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, long *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_long, value)); }
+BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, unsigned long *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_ulong, value)); }
+BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, float *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_float, value)); }
+BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, double *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, BLAECK_DOUBLE_TYPE, value)); }
 
-bool BlaeckDeviceBase::addEventType(const char *channelName, BlaeckString eventType)
-{
-  return _core != nullptr && _core->_addEventType(_deviceId, channelName, eventType);
-}
+void BlaeckDeviceBase::writeState(BlaeckString channelName, const char *text) { _writeStateText(channelName, text, false); }
+void BlaeckDeviceBase::writeState(BlaeckString channelName, const __FlashStringHelper *text) { _writeStateText(channelName, reinterpret_cast<const char *>(text), true); }
+void BlaeckDeviceBase::writeState(BlaeckString channelName) { _writeStateCurrent(channelName); }
+void BlaeckDeviceBase::writeState(BlaeckString channelName, bool value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
+void BlaeckDeviceBase::writeState(BlaeckString channelName, byte value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
+void BlaeckDeviceBase::writeState(BlaeckString channelName, short value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
+void BlaeckDeviceBase::writeState(BlaeckString channelName, unsigned short value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
+void BlaeckDeviceBase::writeState(BlaeckString channelName, int value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
+void BlaeckDeviceBase::writeState(BlaeckString channelName, unsigned int value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
+void BlaeckDeviceBase::writeState(BlaeckString channelName, long value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
+void BlaeckDeviceBase::writeState(BlaeckString channelName, unsigned long value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
+void BlaeckDeviceBase::writeState(BlaeckString channelName, float value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
+void BlaeckDeviceBase::writeState(BlaeckString channelName, double value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
 
-void BlaeckDeviceBase::writeEvent(const char *channelName, BlaeckString eventType)
+void BlaeckDeviceBase::writeCommandState(BlaeckString command)
 {
   if (_core != nullptr)
-    _core->_writeEvent(_deviceId, channelName, eventType);
+    _core->_writeCommandState(command.data(), command.inFlash());
 }
+
+BlaeckEventChannelRef BlaeckDeviceBase::addEventChannel(BlaeckString channelName, BlaeckString eventTypes)
+{
+  return BlaeckEventChannelRef(_core, (int16_t)_registerEventChannel(channelName, eventTypes));
+}
+
+// Blaeck looks event channels up by RAM name, so an F() name is copied for the lookup.
+bool BlaeckDeviceBase::addEventType(BlaeckString channelName, BlaeckString eventType)
+{
+  if (_core == nullptr)
+    return false;
+  if (!channelName.inFlash())
+    return _core->_addEventType(_deviceId, channelName.data(), eventType);
+  char name[Blaeck::MAX_EVENT_NAME_COUNT];
+  Blaeck::copyFlashName(reinterpret_cast<const __FlashStringHelper *>(channelName.data()), name, sizeof(name));
+  return _core->_addEventType(_deviceId, name, eventType);
+}
+
+void BlaeckDeviceBase::writeEvent(BlaeckString channelName, BlaeckString eventType)
+{
+  if (_core == nullptr)
+    return;
+  if (!channelName.inFlash())
+  {
+    _core->_writeEvent(_deviceId, channelName.data(), eventType);
+    return;
+  }
+  char name[Blaeck::MAX_EVENT_NAME_COUNT];
+  Blaeck::copyFlashName(reinterpret_cast<const __FlashStringHelper *>(channelName.data()), name, sizeof(name));
+  _core->_writeEvent(_deviceId, name, eventType);
+}
+
+int BlaeckDeviceBase::findSignalIndex(BlaeckString signalName)
+{
+  if (_core == nullptr)
+    return -1;
+  return signalName.inFlash()
+             ? _core->_findSignalIndex(_deviceId, reinterpret_cast<const __FlashStringHelper *>(signalName.data()))
+             : _core->_findSignalIndex(_deviceId, signalName.data());
+}
+
+// By name: looked up, then written by index, which ignores an index of -1. BLAECK_NOW
+// becomes the current time only once the value is sent.
+void BlaeckDeviceBase::write(BlaeckString signalName, bool value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
+void BlaeckDeviceBase::write(BlaeckString signalName, byte value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
+void BlaeckDeviceBase::write(BlaeckString signalName, short value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
+void BlaeckDeviceBase::write(BlaeckString signalName, unsigned short value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
+void BlaeckDeviceBase::write(BlaeckString signalName, int value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
+void BlaeckDeviceBase::write(BlaeckString signalName, unsigned int value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
+void BlaeckDeviceBase::write(BlaeckString signalName, long value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
+void BlaeckDeviceBase::write(BlaeckString signalName, unsigned long value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
+void BlaeckDeviceBase::write(BlaeckString signalName, float value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
+void BlaeckDeviceBase::write(BlaeckString signalName, double value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
+void BlaeckDeviceBase::write(BlaeckString signalName, const char *value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
+void BlaeckDeviceBase::write(BlaeckString signalName, const __FlashStringHelper *value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
 
 } // namespace blaeck
