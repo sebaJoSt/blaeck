@@ -93,6 +93,9 @@ Blaeck::~Blaeck()
   // Free what the entries own before the tables, which hold the pointers. The tables free
   // their chunks when they are destroyed.
   _freeSignalOwned();
+  // An event channel's name is a heap copy unless it came from flash, and nothing else
+  // releases it. Every other owner has a destructor of its own.
+  clearAllEvents();
   _bufFree();
 }
 
