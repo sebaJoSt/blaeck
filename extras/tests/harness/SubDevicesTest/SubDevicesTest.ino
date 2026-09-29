@@ -114,10 +114,10 @@ void onSimSilent()
   done("SIM_SILENT");
 }
 
-void onSimRestart(const char *command, const char *const *params, byte paramCount)
+void onSimRestart()
 {
   simBootMs = millis();
-  done(command);
+  done("SIM_RESTART");
 }
 
 void onSimAuto(const char *command, const char *const *params, byte paramCount)
@@ -156,11 +156,11 @@ void setup()
   device.onCommand("SIM_AUTO", onSimAuto);
   device.addSwitch(F("SIM_SILENT"), &simSilent, onSimSilent)
       .withDisplayName(F("Pump silent"));
-  device.onButtonCommand("SIM_RESTART", onSimRestart)
+  device.addButton("SIM_RESTART", onSimRestart)
       .withDisplayName(F("Pump restart"));
 
   pump.addSensor(F("PumpLink"), pumpLink, sizeof(pumpLink));
-  pump.addEventChannel(F("PumpAlarms"), F("restarted"));
+  pump.addEvent(F("PumpAlarms"), F("restarted"));
 }
 
 void loop()

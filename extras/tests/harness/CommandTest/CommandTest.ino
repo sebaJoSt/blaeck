@@ -8,7 +8,7 @@
     N   number    addNumberInput(), bounded by withRange()
     S   switch    addSwitch(), 0 or 1
     L   select    addSelect(), one of a named list
-    B   button    onButtonCommand(), no value at all
+    B   button    addButton(), no value at all
     T   text      addTextInput(), bounded by its buffer
     R   sensor    addSensor(), which a host cannot set
 
@@ -117,20 +117,13 @@ void onLabel() { Accept("T_label", tLabel); }
 // The value is masked in a host's input box, not on the wire and not here.
 void onSecret() { Accept("T_secret", tSecret); }
 
-void onPing(const char *command, const char *const *params, byte paramCount)
+void onPing()
 {
-  (void)params;
-  (void)paramCount;
   snprintf(status, sizeof(status), "alive, %lu accepted", Accepted + 1);
-  Accept(command, "pressed");
+  Accept("B_ping", "pressed");
 }
 
-void onReboot(const char *command, const char *const *params, byte paramCount)
-{
-  (void)params;
-  (void)paramCount;
-  Accept(command, "pressed");
-}
+void onReboot() { Accept("B_reboot", "pressed"); }
 
 // The board this was built for, so a recording says which one produced it. A harness runs
 // on every core the library supports, and the widths below are what differ.
@@ -213,8 +206,8 @@ void setup()
   device.addSelect(F("L_range"), &lRange, F("1V,10V,100V"), onRange);
 
   // ---- B: buttons, which carry no value --------------------------------------------------
-  device.onButtonCommand("B_ping", onPing);
-  device.onButtonCommand("B_reboot", onReboot)
+  device.addButton("B_ping", onPing);
+  device.addButton("B_reboot", onReboot)
       .withDeviceClass(F("restart"))
       .diagnostic()
       .disabledByDefault();

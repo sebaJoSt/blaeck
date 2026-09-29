@@ -6,7 +6,7 @@
     Plain    onCommand()        You parse the parameters yourself. Not listed, so
                                 there is no dashboard control.
 
-    Button   onButtonCommand()  A press with no value. Listed, so Loggbok can
+    Button   addButton()        A press with no value. Listed, so Loggbok can
                                 publish it and Home Assistant shows a button.
 
     Switch   addSwitch()        Not a command you handle, but a value a host sets:
@@ -92,7 +92,7 @@ char status[40] = "";
 
 void onSwitchLED(const char *command, const char *const *params, byte paramCount);
 void onLED();
-void onPing(const char *command, const char *const *params, byte paramCount);
+void onPing();
 void onPrint(const char *command, const char *const *params, byte paramCount);
 void setLed(bool on);
 
@@ -120,7 +120,7 @@ void setup()
 
   // A switch a host sets; onLED() runs after it did. A button carries no value.
   device.addSwitch(F("LED"), &ledState, onLED);
-  device.onButtonCommand("Ping", onPing);
+  device.addButton("Ping", onPing);
 
   // Where <Ping> answers. tick() sends it whenever the text changes.
   device.addSensor(F("Status"), status, sizeof(status)).withIcon(F("mdi:message-text"));
@@ -182,11 +182,8 @@ void onLED()
    to Home Assistant. device.Terminal.println() is only text feedback for a serial
    monitor or TCP terminal.
 */
-void onPing(const char *command, const char *const *params, byte paramCount)
+void onPing()
 {
-  (void)command;
-  (void)params;
-  (void)paramCount;
   // %lu is fine on AVR; only float formatting (%f) is left out of printf there.
   unsigned long seconds = millis() / 1000UL;
   snprintf(status, sizeof(status), "alive, running for %lu s", seconds);

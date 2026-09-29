@@ -1,6 +1,6 @@
 """Fire each event the harness can fire, and see which produced a frame.
 
-An event on a channel or type that was never declared is dropped in silence, so the
+An event or type that was never declared is dropped in silence, so the
 board's own output cannot tell the two apart - only the absence of an 0x85 on the wire
 can. Each case says which it expects.
 """
@@ -16,10 +16,10 @@ PORT = sys.argv[1]
 
 # (command, expect a frame, why)
 CASES = [
-    ("<E_ok>",         True,  "declared channel, declared type"),
+    ("<E_ok>",         True,  "declared event, declared type"),
     ("<E_appended>",   True,  "type appended at runtime by addEventType"),
     ("<E_badtype>",    False, "type was never declared"),
-    ("<E_badchannel>", False, "channel was never declared"),
+    ("<E_badchannel>", False, "event was never declared"),
     ("<E_disabled>",   True,  "disabledByDefault is how a host files it, not whether it is sent"),
     ("<E_case>",       False, "type differs only in case"),
 ]

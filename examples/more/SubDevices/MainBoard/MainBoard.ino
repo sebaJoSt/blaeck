@@ -159,7 +159,7 @@ void setup()
       .withRange(0.0f, 100.0f, 1.0f)
       .withUnit(F("%"));
   pump.addSensor(F("Link"), link, sizeof(link));
-  pump.addEventChannel(F("Alarms"), F("restarted"));
+  pump.addEvent(F("Alarms"), F("restarted"));
 }
 
 void loop()

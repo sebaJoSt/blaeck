@@ -28,7 +28,7 @@ error is retained. `end()` closes the transport; it does not reset the instance 
 another `begin()`.
 
 RAM is the only limit. On AVR, with the default settings, a signal costs 12 bytes, an event type
-6, an event channel 13, a device 10, a property about 40 and a command 66 - the largest there is.
+6, an event 13, a device 10, a property about 40 and a command or button 66 - the largest there is.
 A signal with a unit, icon or other description takes 18 bytes more. Every eight entries of a
 table share about 4 bytes of bookkeeping, and the last group of eight may hold up to seven
 unused slots. Each configuration string passed as ordinary RAM text is copied, at about its
@@ -44,7 +44,7 @@ and the debug stream.
 
 ## Configuration text
 
-Ordinary strings work throughout the API. Names, metadata, command state links, press payloads
+Ordinary strings work throughout the API. Names, metadata, options
 and event types supplied through registration or configuration calls are copied when stored.
 Their buffers can then be changed or discarded. `F()` remains optional and avoids these copies.
 An allocation failure leaves an existing setting unchanged and is reported by `hasRejections()`,
@@ -78,8 +78,7 @@ Blaeck registration rejections:
 
 It is safe on the Blaeck stream because no data has been written yet at the end of `setup()`.
 
-To ask in code: `hasRejections()` for any table at all, or `hasRejectedSignals()`,
-`hasRejectedCommands()` and `hasRejectedEventChannels()` for one.
+To ask in code: `hasRejections()`, for any table at all.
 
 ## Naming the device
 
@@ -108,14 +107,13 @@ and a name built at runtime has to live in a global buffer.
 
 ## Compile-time settings
 
-The rest are `#define`s. Three of them switch a feature off, which reclaims the flash and SRAM
+The rest are `#define`s. Two of them switch a feature off, which reclaims the flash and SRAM
 it would have cost:
 
 | Define | Set to 0 to drop |
 |---|---|
 | `BLAECK_ENABLE_SIGNAL_META` | Everything a signal declares about itself. Saves 2 bytes of SRAM per signal on AVR, and 18 per described signal |
-| `BLAECK_ENABLE_COMMAND_META` | Everything a button declares beyond its name |
-| `BLAECK_ENABLE_EVENTS` | Events |
+| `BLAECK_ENABLE_IOT` | The IoT part: inputs, sensors, buttons and events. The entity list goes out empty; signals and plain commands work as before |
 
 Your sketch needs no `#ifdef` around any of it. The calls still compile and simply store
 nothing, so the same sketch builds either way.

@@ -69,16 +69,16 @@ talking over a UART, with a checksum, a tolerance for missed replies, restart de
 ## Registering on a device
 
 `addDevice()` returns a handle, and the handle has the same registration calls as the board:
-`addSignal()`, the inputs and `addSensor()`, `addEventChannel()`, `addEventType()`,
-`onCommand()` and `onButtonCommand()`. What you register through the handle belongs to the
+`addSignal()`, the inputs and `addSensor()`, `addEvent()`, `addEventType()`,
+`onCommand()` and `addButton()`. What you register through the handle belongs to the
 device; what you register through the board stays on the board.
 
 The writes that take a name look it up in the same place: `pump.write("Flow", value)`,
 `pump.writeProperty(...)` and `pump.writeEvent(...)` find the pump's entries, `device.write(...)`
 the board's.
 
-Signal and event channel names only have to be unique within the board or within one device.
-The board and two zones can each have a `Temperature` signal or an `Alarm` event channel; a host
+Signal and event names only have to be unique within the board or within one device.
+The board and two zones can each have a `Temperature` signal or an `Alarm` event; a host
 shows them under their own device. Don't repeat the device's name in its entries: a host already
 shows "Pump controller" in front of `Flow`. Input, sensor, button and command names are the
 exception - they are unique across the whole board, because a host sets or sends them by name.
@@ -151,4 +151,4 @@ defaults.
 ## Memory
 
 A board holds at most 254 devices. On AVR each device takes 13 bytes of SRAM plus the names it
-copies, and each signal, command and channel carries one byte for its device.
+copies, and each signal, property, event, button and command carries one byte for its device.

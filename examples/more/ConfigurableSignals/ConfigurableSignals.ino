@@ -37,13 +37,8 @@ struct BlaeckSignal
 } sine[MAXIMUM_SIGNALS + 1];
 // Index 0 is unused; signal numbers start at 1.
 
-// A press payload is text, so the count has to be spelled out to go in one. These two
-// macros do that spelling, which keeps the payloads correct when MAXIMUM_SIGNALS changes.
-#define STRINGIFY(x) #x
-#define TOSTRING(x) STRINGIFY(x)
-
-// Bounds for the activate/deactivate buttons. Stored as command-owned state so
-// Home Assistant shows the range the next button press will apply to.
+// Bounds for the activate/deactivate buttons. Number inputs, so Home Assistant shows the range
+// the next button press will apply to.
 byte signalFirst = 1;
 byte signalLast = MAXIMUM_SIGNALS;
 
@@ -72,8 +67,8 @@ inline void EepromCommit() { EEPROM.commit(); }
 
 void onSetSignalFirst(const char *command, const char *const *params, byte paramCount);
 void onSetSignalLast(const char *command, const char *const *params, byte paramCount);
-void onSignalActivate(const char *command, const char *const *params, byte paramCount);
-void onSignalDeactivate(const char *command, const char *const *params, byte paramCount);
+void onSignalActivate();
+void onSignalDeactivate();
 void ApplySignalRange(bool activate, byte lo, byte hi);
 void PersistActivatedSignals();
 
@@ -108,21 +103,17 @@ void setup()
       .withRange(1.0f, (float)MAXIMUM_SIGNALS, 1.0f)
       .withMode(BLAECK_NUMBER_MODE_BOX)
       .withDisplayName(F("Range to"));
-  device.onButtonCommand("SIGNAL_ACTIVATE", onSignalActivate)
+  device.addButton("SIGNAL_ACTIVATE", onSignalActivate)
       .withDisplayName(F("Activate range"));
-  device.onButtonCommand("SIGNAL_DEACTIVATE", onSignalDeactivate)
+  device.addButton("SIGNAL_DEACTIVATE", onSignalDeactivate)
       .withDisplayName(F("Deactivate range"));
 
-  // The same two handlers again, this time with the arguments already filled in. A press
-  // payload is what makes a preset possible: the label says what it does and the press
-  // sends the range, so no dashboard control is needed to pick one. It belongs to the
-  // command name, so each preset is its own command over code that already exists.
-  device.onButtonCommand("SIGNAL_ACTIVATE_ALL", onSignalActivate)
-      .withPressPayload(F("1," TOSTRING(MAXIMUM_SIGNALS)))
+  // Presets: a press carries no value, so a fixed range goes in a lambda. The label says what
+  // it does, so no dashboard control is needed to pick one.
+  device.addButton("SIGNAL_ACTIVATE_ALL", []() { ApplySignalRange(true, 1, MAXIMUM_SIGNALS); })
       .withDisplayName(F("Activate all signals"))
       .withIcon(F("mdi:select-all"));
-  device.onButtonCommand("SIGNAL_DEACTIVATE_ALL", onSignalDeactivate)
-      .withPressPayload(F("1," TOSTRING(MAXIMUM_SIGNALS)))
+  device.addButton("SIGNAL_DEACTIVATE_ALL", []() { ApplySignalRange(false, 1, MAXIMUM_SIGNALS); })
       .withDisplayName(F("Deactivate all signals"))
       .withIcon(F("mdi:select-off"));
 

@@ -101,17 +101,38 @@ WIDTHS = {0: 1, 1: 1, 2: 2, 3: 2, 4: 2, 5: 2, 6: 4, 7: 4, 8: 4, 9: 8, 10: None}
 
 
 def parse_entities(p):
-    """name -> (value kind, access bits, DTYPE) for every property entry of the list."""
+    """name -> (value kind, access bits, DTYPE) for every property entry of the list, and
+    name -> ("event" or "button", flags, None) for the other kinds."""
     out = {}
     i = 0
     while i < len(p):
         kind = p[i + 1]
-        if kind != 0:
-            sys.exit(f"Only properties expected in the entity list yet, got kind {kind}")
         i += 2
         end = p.index(b"\0", i)
         name = p[i:end].decode()
         i = end + 1
+        if kind == 1:  # event: flags, icon?, device class?, then its types
+            flags = int.from_bytes(p[i:i + 2], "little")
+            i += 2
+            for bit in (0, 2):
+                if flags & (1 << bit):
+                    i = p.index(b"\0", i) + 1
+            count = int.from_bytes(p[i:i + 2], "little")
+            i += 2
+            for _ in range(count):
+                i = p.index(b"\0", i) + 1
+            out[name] = ("event", flags, None)
+            continue
+        if kind == 2:  # button: flags, display name?, icon?, device class?
+            flags = int.from_bytes(p[i:i + 2], "little")
+            i += 2
+            for bit in (0, 1, 2):
+                if flags & (1 << bit):
+                    i = p.index(b"\0", i) + 1
+            out[name] = ("button", flags, None)
+            continue
+        if kind != 0:
+            sys.exit(f"Unknown entry kind {kind}")
         value_kind = p[i]
         flags = int.from_bytes(p[i + 1:i + 5], "little")
         dtype = p[i + 5]
@@ -145,6 +166,9 @@ EXPECTED_ENTITIES = {
     "T_label": (3, 3, 10),
     "R_uptime": (0, 1, 7),
     "Status": (3, 1, 10),
+    # Buttons: flags. B_reboot has a device class (bit 2), diagnostic (2 << 3), disabled (bit 5).
+    "B_ping": ("button", 0x00, None),
+    "B_reboot": ("button", 0x34, None),
 }
 
 

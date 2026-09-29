@@ -128,15 +128,14 @@ length of any copied strings.
 
 ## When a signal does not fit
 
-The signal table has a fixed size. If you register more signals than it holds, the extra ones
-are dropped - see [Configuration](configuration.md) for how to make it bigger.
+The signal table grows as signals are added, so the only limit is RAM. When the board runs out,
+the signal is dropped - see [Configuration](configuration.md) for what each one costs.
 
 Ask whether that happened:
 
 ```cpp
-if (device.hasRejectedSignals())
+if (device.hasRejections())
 {
-  Serial.print("Signals dropped: ");
-  Serial.println(device.getRejectedSignalCount());
+  device.printRejections(&Serial);
 }
 ```

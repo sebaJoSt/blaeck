@@ -136,7 +136,7 @@ void setup()
       .withIcon(F("mdi:tag"))
       .config();
   device.addTextInput(F("Annotation"), annotation, sizeof(annotation));
-  device.onButtonCommand("STATUS", onStatus)
+  device.addButton("STATUS", onStatus)
       .withDisplayName(F("Request status"))
       .diagnostic();
 
@@ -163,7 +163,7 @@ void setup()
       .diagnostic();
 
   // addEventType() does the same one name at a time, for a list built conditionally.
-  device.addEventChannel(F("Activity"), F("idle_warning,resumed"))
+  device.addEvent(F("Activity"), F("idle_warning,resumed"))
       .withIcon(F("mdi:bell-alert"));
 
   // Silent unless a registration was rejected. The debug stream gives details.
@@ -297,7 +297,7 @@ void onDeviceLabel()
   writeStatus(status, sizeof(status));
 }
 
-void onStatus(const char *command, const char *const *params, byte paramCount)
+void onStatus()
 {
   writeStatus(statusOnDemand, sizeof(statusOnDemand));
 }

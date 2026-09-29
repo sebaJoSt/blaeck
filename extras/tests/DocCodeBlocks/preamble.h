@@ -97,21 +97,11 @@ struct
   unsigned long uptimeMs;
 } reading = {0};
 
-// --- Handlers, so a command example has something to point at ---
-inline void onSetFreq(const char *command, const char *const *params, byte paramCount) {}
-inline void onSetAmp(const char *command, const char *const *params, byte paramCount) {}
-inline void onSetWave(const char *command, const char *const *params, byte paramCount) {}
-inline void onSetEnable(const char *command, const char *const *params, byte paramCount) {}
-inline void onStatus(const char *command, const char *const *params, byte paramCount) {}
+// --- Handlers, so a command or button example has something to point at ---
 inline void onLED(const char *command, const char *const *params, byte paramCount) {}
-inline void onReboot(const char *command, const char *const *params, byte paramCount) {}
-inline void onFactoryReset(const char *command, const char *const *params, byte paramCount) {}
-inline void onSetLabel(const char *command, const char *const *params, byte paramCount) {}
-inline void onSetApiKey(const char *command, const char *const *params, byte paramCount) {}
-inline void onSetTemp(const char *command, const char *const *params, byte paramCount) {}
-inline void onSetRelay(const char *command, const char *const *params, byte paramCount) {}
-inline void onCalibrate(const char *command, const char *const *params, byte paramCount) {}
-inline void onDutActivate(const char *command, const char *const *params, byte paramCount) {}
 inline void onSwitchLED(const char *command, const char *const *params, byte paramCount) {}
-inline void onSetPumpSpeed(const char *command, const char *const *params, byte paramCount) {}
+inline void onStatus() {}
+inline void onReboot() {}
+inline void onFactoryReset() {}
+inline void onCalibrate() {}
 inline void onAny(const char *command, const char *const *params, byte count) {}

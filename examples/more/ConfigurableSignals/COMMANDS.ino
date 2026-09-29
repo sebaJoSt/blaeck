@@ -12,27 +12,15 @@ void onSignalLast()
   EepromCommit();
 }
 
-void onSignalActivate(const char *command, const char *const *params, byte paramCount)
+// The bounds SignalFirst and SignalLast hold. The "all signals" presets pass their own range.
+void onSignalActivate()
 {
-  (void)command;
-  // Two buttons run this. "Activate range" presses with nothing and applies the bounds
-  // SignalFirst and SignalLast hold; "Activate all signals" presses with the payload it
-  // declared and applies that. A button's parameters are the one kind the library passes
-  // through unchecked - there is no declared signature to check them against - so both
-  // paths end at the same clamping.
-  if (paramCount >= 2)
-    ApplySignalRange(true, (byte)atoi(params[0]), (byte)atoi(params[1]));
-  else
-    ApplySignalRange(true, signalFirst, signalLast);
+  ApplySignalRange(true, signalFirst, signalLast);
 }
 
-void onSignalDeactivate(const char *command, const char *const *params, byte paramCount)
+void onSignalDeactivate()
 {
-  (void)command;
-  if (paramCount >= 2)
-    ApplySignalRange(false, (byte)atoi(params[0]), (byte)atoi(params[1]));
-  else
-    ApplySignalRange(false, signalFirst, signalLast);
+  ApplySignalRange(false, signalFirst, signalLast);
 }
 
 // Applies the bounds it is given. Only the signals inside the range change, so

@@ -59,15 +59,16 @@ may not start with `#` or `BLAECK.`.
 
 ## Buttons
 
-A button is a command a host offers as a control. A press carries no value:
+A button is a press a host offers as a control. It carries no value, so its function takes no
+parameters:
 
 ```cpp
-void onStatus(const char *command, const char *const *params, byte paramCount)
+void onStatus()
 {
   reportStatus();
 }
 
-device.onButtonCommand("STATUS", onStatus)
+device.addButton("STATUS", onStatus)
     .withDisplayName(F("Request status"))
     .diagnostic();
 ```
@@ -80,11 +81,14 @@ device.onButtonCommand("STATUS", onStatus)
 | `config()` | Files it as a setting |
 | `diagnostic()` | Files it as something about the board rather than what it does |
 | `disabledByDefault()` | Registered, but switched off until someone enables it |
-| `withPressPayload(F("1,40"))` | Fixed parameters a press sends |
 
-With a press payload, the handler reads `params[0]` and `params[1]` as it would from any other
-sender. Nothing checks a press payload, so a typo in it is only found by what the handler does
-with it.
+A host presses it by sending its name, `<STATUS>`. Parameters sent with a press are ignored.
+For a press with fixed arguments, pass a lambda:
+
+```cpp
+device.addButton("ACTIVATE_ALL", []() { activateRange(1, 40); })
+    .withDisplayName(F("Activate all"));
+```
 
 Ordinary configuration strings are copied; their buffers can be reused after the call.
 

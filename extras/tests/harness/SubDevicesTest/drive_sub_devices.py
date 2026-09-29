@@ -193,17 +193,14 @@ def run(port):
                                  device_record(1, 0, "Pump controller", "Simulated", "1.0",
                                                [("Flow", FLOAT), ("Pressure", FLOAT)])), devices)
 
-    commands = frames(link.send("<BLAECK.WRITE_COMMANDS>", frame_with(0xA0)), 0xA0)[-1][2]
-    check("POLL stays on the board", owner_before(commands, "POLL", 2) == BOARD)
-
     # In the entity list, the entry kind sits between the DeviceID and the name.
     entities = frames(link.send("<BLAECK.WRITE_ENTITIES>", frame_with(0x90)), 0x90)[-1][2]
     check("the SET_PUMP_SPEED input and the PumpLink sensor belong to the pump",
           owner_before(entities, "SET_PUMP_SPEED", 1) == PUMP and owner_before(entities, "PumpLink", 1) == PUMP)
     check("the SIM_SILENT switch stays on the board", owner_before(entities, "SIM_SILENT", 1) == BOARD)
-
-    events = frames(link.send("<BLAECK.WRITE_EVENT_CHANNELS>", frame_with(0x80)), 0x80)[-1][2]
-    check("PumpAlarms belongs to the pump", owner_before(events, "PumpAlarms") == PUMP)
+    check("PumpAlarms belongs to the pump", owner_before(entities, "PumpAlarms", 1) == PUMP)
+    check("the SIM_RESTART button stays on the board", owner_before(entities, "SIM_RESTART", 1) == BOARD)
+    check("the plain POLL command is not listed", b"POLL\0" not in entities)
 
     link.send("<SET_PUMP_SPEED,40>", done("SET_PUMP_SPEED"))
     items = link.send("<POLL>", done("POLL"))
@@ -256,7 +253,8 @@ def run(port):
     check("pump restart: a restart notice for the pump only",
           [r[2] for r in restarts] == [notice(1, 1)], [r[2] for r in restarts])
     alarms = frames(items, 0x85)
-    check("pump restart: the event comes from the pump", bool(alarms) and alarms[-1][2][:1] == PUMP)
+    # The pump's PumpAlarms is the only event, and restarted its only type.
+    check("pump restart: PumpAlarms reports restarted", bool(alarms) and alarms[-1][2] == bytes(4))
 
     print(f"{'FAILED' if checks.failed else 'PASSED'}: {checks.failed} failure(s)")
     return 1 if checks.failed else 0

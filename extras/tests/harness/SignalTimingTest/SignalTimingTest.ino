@@ -136,30 +136,27 @@ void onTimestampMode()
   Serial.println(F("CMD TimestampMode"));
 }
 
-void onFirePush(const char *command, const char *const *params, byte paramCount)
+void onFirePush()
 {
-  (void)params;
-  (void)paramCount;
+  const char *command = "Fire_push";
   Pushed++;
   device.write("Pushed", Pushed);
   Serial.print(F("CMD "));
   Serial.println(command);
 }
 
-void onFireExplicitTs(const char *command, const char *const *params, byte paramCount)
+void onFireExplicitTs()
 {
-  (void)params;
-  (void)paramCount;
+  const char *command = "Fire_explicit_ts";
   ExplicitTS++;
   device.write("ExplicitTS", ExplicitTS, EXPLICIT_TS_US);
   Serial.print(F("CMD "));
   Serial.println(command);
 }
 
-void onFireBurst(const char *command, const char *const *params, byte paramCount)
+void onFireBurst()
 {
-  (void)params;
-  (void)paramCount;
+  const char *command = "Fire_burst";
   for (byte i = 1; i <= 5; i++)
   {
     burstBase++;
@@ -170,19 +167,17 @@ void onFireBurst(const char *command, const char *const *params, byte paramCount
   Serial.println(command);
 }
 
-void onFireChange(const char *command, const char *const *params, byte paramCount)
+void onFireChange()
 {
-  (void)params;
-  (void)paramCount;
+  const char *command = "Fire_change";
   Changed++;
   Serial.print(F("CMD "));
   Serial.println(command);
 }
 
-void onFireSame(const char *command, const char *const *params, byte paramCount)
+void onFireSame()
 {
-  (void)params;
-  (void)paramCount;
+  const char *command = "Fire_same";
   device.write("Changed", Changed);
   Serial.print(F("CMD "));
   Serial.println(command);
@@ -213,11 +208,11 @@ void setup()
   device.addSelect(F("TimestampMode"), &TimestampModeIdx,
                    F("PC,MICROS,UNIX_calibrated,UNIX_no_callback"), onTimestampMode);
 
-  device.onButtonCommand("Fire_push", onFirePush);
-  device.onButtonCommand("Fire_explicit_ts", onFireExplicitTs);
-  device.onButtonCommand("Fire_burst", onFireBurst);
-  device.onButtonCommand("Fire_change", onFireChange);
-  device.onButtonCommand("Fire_same", onFireSame);
+  device.addButton("Fire_push", onFirePush);
+  device.addButton("Fire_explicit_ts", onFireExplicitTs);
+  device.addButton("Fire_burst", onFireBurst);
+  device.addButton("Fire_change", onFireChange);
+  device.addButton("Fire_same", onFireSame);
 
   PrintWidths();
   Serial.println(F("---- SignalTimingTest: 8 signals, 7 commands declared ----"));

@@ -27,7 +27,7 @@ void setup()
   device.begin(Serial);
 
   device.addSignal(F("Temperature"), &temperature);
-  device.addEventChannel(F("Alarm"), F("overheated,cooled_down"))
+  device.addEvent(F("Alarm"), F("overheated,cooled_down"))
       .withIcon(F("mdi:thermometer-alert"));
 }
 
@@ -50,7 +50,7 @@ void loop()
 }
 ```
 
-- `addEventChannel()` takes a name and every event that channel will ever report, as one
+- `addEvent()` takes a name and every type that event will ever report, as one
   comma-separated list.
 - `writeEvent()` reports one of them. It is fire and forget: a host may show it, and it is never
   logged.
@@ -63,7 +63,7 @@ Home Assistant shows an event entity that fires twice per overheating.
 
 The list is not optional, and its order matters.
 
-What travels on the wire is a pair of numbers: which channel, which type. A host reads them
+What travels on the wire is a pair of numbers: which event, which type. A host reads them
 against the list it was given, so position is what identifies a type. You may add to the end of
 a list. Reordering it, or removing an entry from the middle, changes what every later type
 means.
@@ -74,14 +74,14 @@ written.
 A type the board only has sometimes can be added on its own:
 
 ```cpp
-device.addEventChannel(F("Alarm"), F("overheated,cooled_down"));
+device.addEvent(F("Alarm"), F("overheated,cooled_down"));
 
 if (hasBatteryMonitor)
   device.addEventType(F("Alarm"), F("low_battery"));
 ```
 
-It returns false if the type is blank, is already on the list, names a channel that was never
-declared, or does not fit.
+It returns false if the type is blank, is already on the list, names an event that was never
+added, or does not fit.
 
 ## Saying how much
 
@@ -91,30 +91,33 @@ no way to attach a temperature to `overheated`.
 Where a number matters, something else carries it. Log it as a signal if you want it in the
 history, or make it a [sensor](properties.md) if it only has to be visible.
 
-## Describing a channel
+## Describing an event
 
 | Call | What it does |
 |---|---|
 | `withIcon(F("mdi:pulse"))` | A [Material Design Icons](https://pictogrammers.com/library/mdi/) name |
-| `withDeviceClass(F("doorbell"))` | What kind of thing the channel reports |
+| `withDeviceClass(F("doorbell"))` | `button`, `doorbell` or `motion`: what kind of thing the event reports |
 | `diagnostic()` | Marks it as information about the device rather than what it does |
 | `disabledByDefault()` | Registered, but switched off until someone enables it |
 
-Ordinary channel names, type lists and metadata strings are copied; their buffers can be
-reused after registration.
+Ordinary event names, type lists and metadata strings are copied; their buffers can be reused
+after registration.
 
-## When a channel or type does not fit
+An event name has to be unique only among the events of its board or sub-device, so it may
+share a name with a signal, a sensor or a button.
 
-Channels and types take RAM as they are added; see [Configuration](configuration.md) for what
+## When an event or type does not fit
+
+Events and types take RAM as they are added; see [Configuration](configuration.md) for what
 each costs. Ordinary type strings need copied storage too; types from the same comma-separated
 list share one copy.
 
 ```cpp
-if (device.hasRejectedEventChannels())
+if (device.hasRejections())
 {
   device.printRejections(&Serial);
 }
 ```
 
-That covers both tables. A dropped type is the quieter failure of the two: the channel still
-works, and one of the things it was meant to report simply never arrives.
+The summary counts events and types apart. A dropped type is the quieter failure of the two:
+the event still works, and one of the things it was meant to report simply never arrives.

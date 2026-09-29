@@ -228,31 +228,23 @@ public:
   const blaeck::blaeck_detail::PropertyEntry &propertyMeta(int index) const { return _properties[index]; }
   int propertyIndex(blaeck::BlaeckString name) const { return _findProperty(name); }
   void sendEntities() { writeEntities(0); }
-#if BLAECK_ENABLE_EVENTS
+#if BLAECK_ENABLE_IOT
   const blaeck::blaeck_detail::EventChannelEntry &eventMeta(int index) const { return _eventChannels[index]; }
   const blaeck::blaeck_detail::EventTypeEntry &eventType(int index) const { return _eventTypes[index]; }
   int eventIndex(const char *name) const { return _findEventChannel(0, name); }
 #endif
   void cleanCatalogs()
   {
-    _commandCatalogDirty = false;
 #if BLAECK_ENABLE_SIGNAL_META
     _signalConfigDirty = false;
 #endif
     _entityCatalogDirty = false;
-#if BLAECK_ENABLE_EVENTS
-    _eventCatalogDirty = false;
-#endif
   }
   bool dirtyCatalogs() const
   {
-    bool dirty = _commandCatalogDirty;
+    bool dirty = _entityCatalogDirty;
 #if BLAECK_ENABLE_SIGNAL_META
     dirty |= _signalConfigDirty;
-#endif
-    dirty |= _entityCatalogDirty;
-#if BLAECK_ENABLE_EVENTS
-    dirty |= _eventCatalogDirty;
 #endif
     return dirty;
   }
@@ -275,6 +267,8 @@ static void onPing(const char *, const char *const *params, byte count)
 {
   pings.push_back(count > 0 ? params[0] : "");
 }
+static int presses;
+static void onPress() { ++presses; }
 
 static void assertLibraryIdentity(const std::string &frames)
 {
@@ -614,12 +608,11 @@ static void diagnosticMessages()
     assert(debug.text.find("Dropped 'Flash': no room for another signal.") != std::string::npos);
     assert(debug.text.find("begin(Serial)") == std::string::npos);
     device.onCommand("BLAECK.RESERVED", handler);
-    assert(device.getRejectedCommandCount() == 1);
 
     debug.text.clear();
     assert(device.printRejections(&debug));
     assert(debug.text.find("2 signal registrations rejected.") != std::string::npos);
-    assert(debug.text.find("1 command registrations rejected.") != std::string::npos);
+    assert(debug.text.find("1 command and button registrations rejected.") != std::string::npos);
     assert(debug.text.find("invalid or conflicting names") != std::string::npos);
     assert(debug.text.find("begin(Serial)") == std::string::npos);
   }
@@ -639,7 +632,7 @@ static void diagnosticMessages()
     case 1: device.onCommand("COMMAND", handler); break;
     case 2: device.addSensor(F("Value"), &value); break;
     case 3:
-    case 4: device.addEventChannel(F("Activity"), F("started")); break;
+    case 4: device.addEvent(F("Activity"), F("started")); break;
     }
     failAfter = -1;
     assert(device.hasRejections());
@@ -838,11 +831,9 @@ static void chunkedTables()
   for (int i = 0; i < 10; ++i)
     device.addDevice(("D" + std::to_string(i)).c_str());
 
-#if BLAECK_ENABLE_EVENTS
-  device.addEventChannel(F("Activity"), F("a,b,c,d,e,f,g,h,i,j"));
+  device.addEvent(F("Activity"), F("a,b,c,d,e,f,g,h,i,j"));
   for (int i = 0; i < 10; ++i)
     device.addEventType(F("Activity"), ("extra" + std::to_string(i)).c_str());
-#endif
   assert(!device.hasRejections());
   assert(debug.text.find("no room") == std::string::npos);
 }
@@ -914,15 +905,6 @@ static void commandBufferBoundaries(bool tcp, bool buffered)
   receive("<BLAECK.GET_DEVICES>");
   device.read();
   io.output.clear();
-#if BLAECK_ENABLE_COMMAND_META
-  receive("<BLAECK.WRITE_COMMANDS>");
-  const std::string catalog = commandFramePayload(io.output, 0xA0, 0);
-  assert(catalog.size() >= 3);
-  uint16_t advertised;
-  memcpy(&advertised, catalog.data() + 1, 2); // after the DeviceID
-  assert(advertised == capacity - 1);
-  io.output.clear();
-#endif
 
   for (size_t length : {capacity - 1, capacity, capacity + 257})
   {
@@ -1192,8 +1174,6 @@ static void flashNumericWrites()
   assert(value == 0);
 }
 
-static const char *flashTestGetter() { return "Getter"; }
-
 static void storedConfigurationStrings()
 {
   using blaeck::BlaeckString;
@@ -1229,6 +1209,9 @@ static void storedConfigurationStrings()
   assert(saved == nullptr);
 }
 
+#if BLAECK_ENABLE_IOT
+static const char *flashTestGetter() { return "Getter"; }
+
 static void ordinaryConfiguration(bool buffered)
 {
   using blaeck::BlaeckString;
@@ -1240,7 +1223,7 @@ static void ordinaryConfiguration(bool buffered)
   byte selected = 1;
   char unit[] = "V", icon[] = "mdi:pulse", label[] = "Voltage";
   char options[] = "Low,High";
-  char payload[] = "1,2", eventTypes[] = "start,stop", extraType[] = "reset";
+  char eventTypes[] = "start,stop", extraType[] = "reset";
   char deviceClass[] = "voltage";
   auto signal = device.addSignal("Value", &value);
   signal.withUnit(unit).withDeviceClass(deviceClass).withIcon(icon).withDisplayName(label);
@@ -1248,18 +1231,18 @@ static void ordinaryConfiguration(bool buffered)
   auto number = device.addNumberInput("SET", &value).withRange(0, 10, 1);
   number.withUnit(unit).withDeviceClass(deviceClass).withIcon(icon).withDisplayName(label);
   device.addSelect("SELECT", &selected, options);
-  device.onButtonCommand("PRESS", onPing).withPressPayload(payload).withIcon(icon);
+  device.addButton("PRESS", onPress).withIcon(icon);
   device.addSensor("Getter", flashTestGetter);
   auto sensor = device.addSensor("Voltage", &value);
   sensor.withUnit(unit).withDeviceClass(deviceClass).withIcon(icon);
   device.addSensor("LevelState", &selected, options).withDeviceClass("enum");
-  auto event = device.addEventChannel("Action", eventTypes);
+  auto event = device.addEvent("Action", eventTypes);
   event.withIcon(icon).withDeviceClass("button");
   const bool added = device.addEventType("Action", extraType);
-  assert(added == bool(BLAECK_ENABLE_EVENTS));
+  assert(added);
   assert(!device.hasRejections());
 
-  unit[0] = icon[0] = label[0] = options[0] = payload[0] = eventTypes[0] = extraType[0] =
+  unit[0] = icon[0] = label[0] = options[0] = eventTypes[0] = extraType[0] =
       deviceClass[0] = 'X';
   device.writeSignalConfig();
 #if BLAECK_ENABLE_SIGNAL_META
@@ -1267,14 +1250,9 @@ static void ordinaryConfiguration(bool buffered)
     assert(stream.data.output.find(std::string(text) + '\0') != std::string::npos);
 #endif
   stream.data.output.clear();
-  device.writeCommands();
-#if BLAECK_ENABLE_COMMAND_META
-  for (const char *text : {"PRESS", "mdi:pulse", "1,2"})
-    assert(stream.data.output.find(std::string(text) + '\0') != std::string::npos);
-#endif
-  stream.data.output.clear();
   device.sendEntities();
-  for (const char *text : {"SET", "V", "voltage", "mdi:pulse", "Voltage", "Low,High", "SELECT", "Getter"})
+  for (const char *text : {"SET", "V", "voltage", "mdi:pulse", "Voltage", "Low,High", "SELECT", "Getter",
+                           "PRESS", "Action", "button", "start", "stop", "reset"})
     assert(stream.data.output.find(std::string(text) + '\0') != std::string::npos);
   char option[8];
   assert(device.getSelectOptionNameAt("SELECT", 1, option, sizeof(option)));
@@ -1284,12 +1262,6 @@ static void ordinaryConfiguration(bool buffered)
   assert(device.getSelectOptionIndexOf("SELECT", "Low") == 0);
   assert(device.getSelectOptionIndexOf("SELECT", "Missing") == -1);
   assert(device.getSelectOptionIndexOf("SET", "Low") == -1);
-  stream.data.output.clear();
-  device.writeEventChannels();
-#if BLAECK_ENABLE_EVENTS
-  const auto catalog = commandFramePayload(stream.data.output, 0x80, 0);
-  for (const char *text : {"Action", "mdi:pulse", "button", "start", "stop", "reset"})
-    assert(catalog.find(std::string(text) + '\0') != std::string::npos);
   assert(BlaeckString(device.eventType(0).text).data() == BlaeckString(device.eventType(1).text).data());
   const size_t beforeEvent = allocations;
   stream.data.output.clear();
@@ -1300,7 +1272,6 @@ static void ordinaryConfiguration(bool buffered)
   assert(stream.data.output == ordinaryEvent && !ordinaryEvent.empty());
   assert(allocations == beforeEvent);
   assert(!device.addEventType(F("Action"), F("reset")));
-#endif
   stream.data.output.clear();
   device.cleanCatalogs();
   const size_t beforeSame = allocations;
@@ -1320,17 +1291,48 @@ static void ordinaryConfiguration(bool buffered)
   assert(device.propertyMeta(3).presentation->unit == nullptr && device.propertyMeta(3).presentation->icon == nullptr);
   assert(!device.hasRejections());
   device.clearAllCommandHandlers();
-  device.clearAllEventChannels();
+  device.clearAllEvents();
   device.clearAllSignals();
-#if BLAECK_ENABLE_COMMAND_META
-  assert(device.commandMeta(0).pressPayload == nullptr && device.commandMeta(0).icon == nullptr);
-#endif
-#if BLAECK_ENABLE_EVENTS
+  assert(device.commandMeta(0).press == nullptr && device.commandMeta(0).icon == nullptr);
   assert(device.eventMeta(0).deviceClass == nullptr && device.eventType(0).text == nullptr);
   assert(device.eventType(2).text == nullptr);
-#endif
 }
 
+#else
+// BLAECK_ENABLE_IOT=0: inputs, sensors, events and buttons store nothing and are no rejection;
+// the entity list goes out empty, and a button's name is unknown. Signals and plain commands work.
+static void iotOff()
+{
+  FakeStream stream;
+  ConfigurationProbe device;
+  device.begin(stream);
+  float value = 1;
+  device.addSignal("Value", &value);
+  device.onCommand("Ping", onPing);
+  device.addNumberInput("SET", &value);
+  device.addSensor("Voltage", &value);
+  device.addButton("PRESS", onPress);
+  device.addEvent(F("Action"), F("start"));
+  assert(!device.addEventType("Action", "stop"));
+  assert(!device.hasRejections());
+  assert(device.propertyIndex("SET") == -1);
+  stream.data.output.clear();
+  device.sendEntities();
+  assert(commandFramePayload(stream.data.output, 0x90, 0).empty());
+  stream.data.output.clear();
+  device.writeEvent("Action", "start");
+  assert(stream.data.output.empty());
+  presses = 0;
+  command(device, stream, "<PRESS>");
+  assert(presses == 0);
+  assert(static_cast<byte>(commandFramePayload(stream.data.output, 0xA5, 0)[9]) == BLAECK_ACK_UNKNOWN);
+  pings.clear();
+  command(device, stream, "<Ping,1>");
+  assert(pings.size() == 1);
+}
+#endif
+
+#if BLAECK_ENABLE_IOT
 static void configurationAllocationFailures()
 {
   using blaeck::BlaeckString;
@@ -1342,7 +1344,7 @@ static void configurationAllocationFailures()
   auto signal = device.addSignal("Signal", &value).withUnit(F("V"));
   auto number = device.addNumberInput("SET", &value).withRange(0, 10, 1).withUnit(F("V"));
   auto sensor = device.addSensor(F("State"), &value).withUnit(F("V"));
-  auto event = device.addEventChannel(F("Event"), F("start")).withIcon(F("mdi:pulse"));
+  auto event = device.addEvent(F("Event"), F("start")).withIcon(F("mdi:pulse"));
   device.cleanCatalogs();
   const size_t before = allocations;
   failAfter = 0;
@@ -1350,7 +1352,7 @@ static void configurationAllocationFailures()
   number.withUnit("Replacement");
   sensor.withUnit("Replacement");
   event.withIcon("Replacement");
-  device.addEventChannel(F("Rejected"), "start,stop");
+  device.addEvent(F("Rejected"), "start,stop");
   assert(!device.addEventType("Event", "stop"));
   device.addSensor(F("RejectedSensor"), &value);
   failAfter = -1;
@@ -1361,16 +1363,15 @@ static void configurationAllocationFailures()
   assert(BlaeckString(device.propertyMeta(0).presentation->unit) == "V");
   assert(BlaeckString(device.propertyMeta(1).presentation->unit) == "V");
   assert(device.propertyIndex("RejectedSensor") == -1);
-#if BLAECK_ENABLE_EVENTS
   assert(BlaeckString(device.eventMeta(0).icon) == "mdi:pulse");
   assert(device.eventIndex("Rejected") == -1);
-#endif
   assert(allocations != before || device.hasRejections());
   assert(device.hasRejections());
   Capture rejections;
   assert(device.printRejections(&rejections));
   assert(rejections.text.find("input and sensor registrations rejected") != std::string::npos);
 }
+#endif
 
 static void beginOnlyOnce()
 {
@@ -1606,21 +1607,24 @@ static void subDevices(bool buffered)
   unset.addSignal("Lost", &orphan);
   unset.onCommand("LOST", handler);
   unset.addSensor(F("Lost"), &orphan);
-  unset.addEventChannel(F("Lost"), F("x"));
+  unset.addEvent(F("Lost"), F("x"));
   unset.write("Lost", 1.0f);
   unset.writeProperty(F("Lost"));
   unset.writeEvent(F("Lost"), F("x"));
   assert(device.SignalCount == 3 && unset.findSignalIndex("Lost") == -1);
-  assert(!device.hasRejectedSignals() && !device.hasRejectedCommands());
+  debug.text.clear();
+  assert(device.printRejections(&debug));
+  assert(debug.text.find("signal registrations") == std::string::npos);
+  assert(debug.text.find("command and button registrations") == std::string::npos);
   device.addSignal(F("Orphan"), &orphan);
 
   // Inputs and sensors registered through a device's handle belong to that device.
   char pumpStatus[8] = "idle";
   pump.addNumberInput("PUMP_SPEED", &speed).withRange(0.0f, 100.0f, 1.0f);
   pump.addSwitch("PUMP_ON", &pumpOn);
-  device.onButtonCommand("BOARD_RESET", handler);
+  device.addButton("BOARD_RESET", onPress);
   pump.addSensor(F("PumpStatus"), pumpStatus, sizeof(pumpStatus));
-  fan.addEventChannel(F("FanAlarm"), F("stall"));
+  fan.addEvent(F("FanAlarm"), F("stall"));
 
   // The board's restart notice is a C1 for device 0.
   device.read();
@@ -1637,21 +1641,14 @@ static void subDevices(bool buffered)
                        deviceRecord(2, 0, "Fan", "n/a", "n/a") + signalList()));
   stream.data.output.clear();
 
-  command(device, stream, "<BLAECK.WRITE_COMMANDS>");
-  std::string payload = commandFramePayload(stream.data.output, 0xA0, 0);
-  assert(ownerOf(payload, "BOARD_RESET", 2) == owner(0));
-  stream.data.output.clear();
-
   // In the entity list, the entry kind sits between the DeviceID and the name.
   command(device, stream, "<BLAECK.WRITE_ENTITIES>");
-  payload = commandFramePayload(stream.data.output, 0x90, 0);
+  std::string payload = commandFramePayload(stream.data.output, 0x90, 0);
   assert(ownerOf(payload, "PUMP_SPEED", 1) == owner(1));
   assert(ownerOf(payload, "PUMP_ON", 1) == owner(1));
   assert(ownerOf(payload, "PumpStatus", 1) == owner(1));
-  stream.data.output.clear();
-
-  command(device, stream, "<BLAECK.WRITE_EVENT_CHANNELS>");
-  assert(ownerOf(commandFramePayload(stream.data.output, 0x80, 0), "FanAlarm") == owner(2));
+  assert(ownerOf(payload, "FanAlarm", 1) == owner(2));
+  assert(ownerOf(payload, "BOARD_RESET", 1) == owner(0));
   stream.data.output.clear();
 
   // Names are found within the handle's own device only. A 0x95 carries the property's index.
@@ -1661,8 +1658,9 @@ static void subDevices(bool buffered)
   pump.writeProperty(F("PumpStatus"));
   assert(commandFramePayload(stream.data.output, 0x95, 0).substr(0, 2) == std::string("\x02\x00", 2));
   stream.data.output.clear();
+  // A 0x85 carries the event's index among the events and its type's index.
   fan.writeEvent(F("FanAlarm"), F("stall"));
-  assert(commandFramePayload(stream.data.output, 0x85, 0).substr(0, 1) == owner(2));
+  assert(commandFramePayload(stream.data.output, 0x85, 0) == std::string(4, '\0'));
   stream.data.output.clear();
 
   // A device restart is reported for that device only.
@@ -1704,7 +1702,10 @@ static void subDevices(bool buffered)
   const std::string note = "write() dropped for 'Flow': 'Pump' is marked missing (once until markPresent()).";
   assert(debug.text.find(note) != std::string::npos);
   assert(debug.text.find(note) == debug.text.rfind(note));
-  assert(!device.hasRejectedSignals()); // a dropped write is no rejection
+  // A dropped write is no rejection.
+  debug.text.clear();
+  device.printRejections(&debug);
+  assert(debug.text.find("signal registrations") == std::string::npos);
 
   // The list reports the state too.
   command(device, stream, "<BLAECK.GET_DEVICES>");
@@ -1835,7 +1836,6 @@ static uint16_t crc16(const std::string &data)
   return crc;
 }
 
-#if BLAECK_ENABLE_STATE_CHANNELS
 // Owner bytes of every catalog entry with this name, in catalog order.
 static std::vector<std::string> ownersOf(const std::string &payload, const char *name, size_t gap = 0)
 {
@@ -1848,7 +1848,6 @@ static std::vector<std::string> ownersOf(const std::string &payload, const char 
   }
   return owners;
 }
-#endif
 
 // A left-out timestamp is taken from the timestamp mode when the value is sent; 0 is a timestamp too.
 static void defaultTimestamps()
@@ -1914,9 +1913,9 @@ static void sameNamesAcrossDevices()
   assert(debug.text.find("Dropped 'Status': an input or sensor has the name already.") != std::string::npos);
   assert(device.hasRejections());
 
-  // Event channels and their types are per device, too.
-  device.addEventChannel(F("Alarm"), F("overheated"));
-  zoneA.addEventChannel("Alarm", F("dry_run"));
+  // Events and their types are per device, too.
+  device.addEvent(F("Alarm"), F("overheated"));
+  zoneA.addEvent("Alarm", F("dry_run"));
   assert(zoneA.addEventType(F("Alarm"), F("blocked")));
 
   byte aSpeed = 10, bSpeed = 20;
@@ -1945,6 +1944,7 @@ static void sameNamesAcrossDevices()
   payload = commandFramePayload(stream.data.output, 0x90, 0);
   assert(ownerOf(payload, "Status", 1) == owner(0));
   assert(ownerOf(payload, "SpeedA", 1) == owner(1) && ownerOf(payload, "SpeedB", 1) == owner(2));
+  assert((ownersOf(payload, "Alarm", 1) == std::vector<std::string>{owner(0), owner(1)}));
   stream.data.output.clear();
 
   // Each handle reaches its own device's properties only: Status, SpeedA, SpeedB are 0, 1, 2.
@@ -1955,15 +1955,15 @@ static void sameNamesAcrossDevices()
   assert(speed[0] == 2 && speed[1] == 0 && static_cast<byte>(speed.back()) == 20);
   stream.data.output.clear();
 
-#if BLAECK_ENABLE_EVENTS
+  // Zone A's Alarm is the second event, and blocked its second type.
   zoneA.writeEvent(F("Alarm"), F("blocked"));
-  assert(commandFramePayload(stream.data.output, 0x85, 0).substr(0, 1) == owner(1));
+  assert(commandFramePayload(stream.data.output, 0x85, 0) == std::string("\x01\x00\x01\x00", 4));
   stream.data.output.clear();
   debug.text.clear();
   device.writeEvent("Alarm", F("dry_run")); // a type of zone A's Alarm, not the board's
   assert(stream.data.output.empty());
-  assert(debug.text.find("type not declared") != std::string::npos);
-#endif
+  assert(debug.text.find("Event dropped, type not added with addEvent() or addEventType(): Alarm")
+         != std::string::npos);
 
   // Explicit writes by name go to the handle's signal.
   const std::vector<int> widths = {4, 4, 4};
@@ -2042,6 +2042,62 @@ static bool readRunning() { return true; }
 static const char *readStatus() { return "ok"; }
 
 // Inputs and sensors: the entity list, a host's writes and their checks, change reports and names.
+// Events and buttons in the entity list, after the properties; a press; the 0x85 layout.
+static void eventsAndButtons()
+{
+  FakeStream stream;
+  Capture debug;
+  ConfigurationProbe device;
+  device.begin(stream).withDebugStream(&debug);
+  float value = 0;
+  device.addSensor(F("Level"), &value);
+  device.addEvent(F("Door"), F("open,closed")).withIcon(F("mdi:door")).diagnostic();
+  device.addButton("STATUS", onPress)
+      .withDisplayName(F("Status"))
+      .withDeviceClass(F("identify"))
+      .config()
+      .disabledByDefault();
+  device.onCommand("PLAIN", onPing);
+  assert(!device.hasRejections());
+
+  stream.data.output.clear();
+  device.sendEntities();
+  const std::string list = commandFramePayload(stream.data.output, 0x90, 0);
+  const std::string event = std::string("\x00\x01" "Door\0" "\x03\x00" "mdi:door\0" "\x02\x00" "open\0" "closed\0", 32);
+  const std::string button = std::string("\x00\x02" "STATUS\0" "\x2D\x00" "Status\0" "identify\0", 27);
+  assert(list.size() > event.size() + button.size());
+  assert(list.substr(list.size() - event.size() - button.size()) == event + button);
+  assert(list.find("PLAIN") == std::string::npos);
+
+  // A press runs the function; parameters sent with it are ignored.
+  presses = 0;
+  command(device, stream, "<STATUS>");
+  assert(presses == 1);
+  assert(static_cast<byte>(commandFramePayload(stream.data.output, 0xA5, 0)[9]) == BLAECK_ACK_OK);
+  stream.data.output.clear();
+  command(device, stream, "<STATUS,1>");
+  assert(presses == 2);
+  stream.data.output.clear();
+
+  // A button's name is taken for inputs and sensors; a command of that name replaces it.
+  device.addSensor(F("STATUS"), &value);
+  assert(device.propertyIndex("STATUS") == -1);
+  assert(debug.text.find("Dropped 'STATUS': a button or command has the name already.") != std::string::npos);
+  device.cleanCatalogs();
+  device.onCommand("STATUS", onPing);
+  assert(device.dirtyCatalogs());
+  device.sendEntities();
+  assert(commandFramePayload(stream.data.output, 0x90, 0).find("STATUS") == std::string::npos);
+  stream.data.output.clear();
+
+  // Without a function a button is refused.
+  device.addButton("NOTHING", nullptr);
+  assert(device.hasRejections());
+
+  device.writeEvent(F("Door"), F("closed"));
+  assert(commandFramePayload(stream.data.output, 0x85, 0) == std::string("\x00\x00\x01\x00", 4));
+}
+
 static void properties()
 {
   hostMillis() = 0;
@@ -2262,7 +2318,7 @@ static void deviceCommands()
   stream.data.output.clear();
   // So a name may start with it.
   device.onCommand("@PING", onPing);
-  assert(!device.hasRejectedCommands());
+  assert(!device.hasRejections());
   command(device, stream, "<#9:@PING,1>");
   ackResult(stream.data.output, 9, "@PING,1", 0);
   stream.data.output.clear();
@@ -3136,9 +3192,13 @@ static void reportingFrameClassification(bool buffered)
 int main()
 {
   storedConfigurationStrings();
+#if BLAECK_ENABLE_IOT
   ordinaryConfiguration(false);
   ordinaryConfiguration(true);
   configurationAllocationFailures();
+#else
+  iotOff();
+#endif
   flashSignalText(false);
   flashSignalText(true);
   frameEscaping(false);
@@ -3187,6 +3247,7 @@ int main()
     subDevices(true);
     deviceCommands();
     properties();
+    eventsAndButtons();
     deviceNoticesBeforeHost();
     sameNamesAcrossDevices();
     defaultTimestamps();

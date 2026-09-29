@@ -126,14 +126,6 @@ void Blaeck::_flushCatalogs()
   if (_entityCatalogDirty)
     this->writeEntities(0);
 
-#if BLAECK_ENABLE_EVENTS
-if (_eventCatalogDirty)
-    this->writeEventChannels(0);
-#endif
-
-  if (_commandCatalogDirty)
-    this->writeCommands(0);
-
 #if BLAECK_ENABLE_SIGNAL_META
   if (_signalConfigDirty)
     this->writeSignalConfig(0);
@@ -147,7 +139,6 @@ void Blaeck::_resetSignalCatalog()
   _signalIndex = 0;
   SignalCount = 0;
   _schemaHash = 0;
-  _signalRegistrationFailed = false;
   _rejectedSignalCount = 0;
   _rejectedSignalPolicyCount = 0;
 #if BLAECK_ENABLE_SIGNAL_META
@@ -166,12 +157,8 @@ bool Blaeck::hasRejections() const
   if (_rejectedSignalMetaCount > 0)
     return true;
 #endif
-  if (_rejectedPropertyCount > 0)
+  if (_rejectedPropertyCount > 0 || _rejectedEventChannelCount > 0 || _rejectedEventTypeCount > 0)
     return true;
-#if BLAECK_ENABLE_EVENTS
-  if (_rejectedEventChannelCount > 0 || _rejectedEventTypeCount > 0)
-    return true;
-#endif
   return false;
 }
 
@@ -205,17 +192,15 @@ bool Blaeck::printRejections(Print *out)
   if (_rejectedSignalCount > 0)
     _printRejectionLine(out, F("signal"), _rejectedSignalCount);
   if (_rejectedCommandCount > 0)
-    _printRejectionLine(out, F("command"), _rejectedCommandCount);
+    _printRejectionLine(out, F("command and button"), _rejectedCommandCount);
   if (_rejectedDeviceCount > 0)
     _printRejectionLine(out, F("device"), _rejectedDeviceCount);
   if (_rejectedPropertyCount > 0)
     _printRejectionLine(out, F("input and sensor"), _rejectedPropertyCount);
-#if BLAECK_ENABLE_EVENTS
   if (_rejectedEventChannelCount > 0)
-    _printRejectionLine(out, F("event channel"), _rejectedEventChannelCount);
+    _printRejectionLine(out, F("event"), _rejectedEventChannelCount);
   if (_rejectedEventTypeCount > 0)
     _printRejectionLine(out, F("event type"), _rejectedEventTypeCount);
-#endif
   out->println(F("  Possible causes include invalid or conflicting names, "
                  "invalid event types, or insufficient memory."));
   out->println(F("  Enable withDebugStream() before registration for details."));
@@ -467,7 +452,6 @@ int Blaeck::_registerSignalCommon(byte deviceId, const char *ram, const __FlashS
       _warnNoRoom(F("signal"), flash);
     else
       _warnNoRoom(F("signal"), ram);
-    _signalRegistrationFailed = true;
     _rejectedSignalCount++;
     // -1 makes a handle that ignores every call.
     return -1;
@@ -505,7 +489,6 @@ void Blaeck::clearAllSignals()
   _signalIndex = 0;
   SignalCount = _signalIndex;
   _schemaHash = 0;
-  _signalRegistrationFailed = false;
   _rejectedSignalCount = 0;
   _rejectedSignalPolicyCount = 0;
 #if BLAECK_ENABLE_SIGNAL_META
@@ -1081,20 +1064,10 @@ void Blaeck::read()
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
         this->writeDevices(msg_id);
       }
-      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_COMMANDS)))
-      {
-        _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
-        this->writeCommands(msg_id);
-      }
       else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_ENTITIES)))
       {
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
         this->writeEntities(msg_id);
-      }
-      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_EVENT_CHANNELS)))
-      {
-        _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
-        this->writeEventChannels(msg_id);
       }
       else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_ACTIVATE)))
       {
@@ -1150,9 +1123,15 @@ void Blaeck::setBeforeWriteCallback(void (*callback)())
   _beforeWriteCallback = callback;
 }
 
-int Blaeck::_registerCommand(byte deviceId, const char *command, BlaeckCommandHandler handler, uint8_t kind)
+int Blaeck::_registerCommand(byte deviceId, const char *command, BlaeckCommandHandler handler,
+                             BlaeckButtonFunction press)
 {
-  if (command == nullptr || handler == nullptr || command[0] == '\0')
+#if !BLAECK_ENABLE_IOT
+  // Buttons belong to the IoT part; without it they store nothing.
+  if (press != nullptr)
+    return -1;
+#endif
+  if (command == nullptr || (handler == nullptr && press == nullptr) || command[0] == '\0')
   {
     _rejectedCommandCount++;
     return -1;
@@ -1167,98 +1146,80 @@ int Blaeck::_registerCommand(byte deviceId, const char *command, BlaeckCommandHa
     _rejectedCommandCount++;
     return -1;
   }
-  // '#' starts a received command's message id, so a name starting with it could never be matched.
-  if (command[0] == '#')
-  {
-    if (_debugStream != nullptr)
-    {
-      _debugStream->print(F("Command name starts with '#', which marks a message id: "));
-      _debugStream->println(command);
-    }
-    _rejectedCommandCount++;
-    return -1;
-  }
-  // Names starting with BLAECK. are reserved for the built-ins.
-  if (strncmp(command, "BLAECK.", 7) == 0)
-  {
-    if (_debugStream != nullptr)
-    {
-      _debugStream->print(F("Command name uses the reserved BLAECK. namespace: "));
-      _debugStream->println(command);
-    }
-    _rejectedCommandCount++;
-    return -1;
-  }
-
-  // An input or sensor answers to the name already.
+  // Empty, reserved, starting with '#' or held by an input or sensor.
   if (_nameRefused(BlaeckString(command), true))
   {
     _rejectedCommandCount++;
     return -1;
   }
 
+  // Registering a name again replaces the entry, wherever it was.
+  int slot = -1;
   for (uint16_t i = 0; i < _commandSlots(); i++)
   {
     if (_commandHandlers[i].inUse && strcmp(_commandHandlers[i].command, command) == 0)
     {
-      _commandHandlers[i].handler = handler;
-      _resetCommandMeta(i, kind);
-      // Command names are unique per board, so registering one through another device's
-      // handle moves it there.
-      _commandHandlers[i].deviceId = deviceId;
-      // The entry was reset, so the host's copy of the catalog is out of date.
-      _commandCatalogDirty = true;
-      return (int)i;
+      slot = (int)i;
+      break;
     }
   }
-
-  if (!_roomFor(_commandHandlers))
+  if (slot < 0)
   {
-    _warnNoRoom(F("command"), command);
-    _rejectedCommandCount++;
-    return -1;
-  }
-  for (uint16_t i = 0; i < _commandSlots(); i++)
-  {
-    if (!_commandHandlers[i].inUse)
+    if (!_roomFor(_commandHandlers))
     {
-      strncpy(_commandHandlers[i].command, command, MAX_COMMAND_NAME_COUNT - 1);
-      _commandHandlers[i].command[MAX_COMMAND_NAME_COUNT - 1] = '\0';
-      _commandHandlers[i].handler = handler;
-      _commandHandlers[i].inUse = true;
-      _commandHandlers[i].deviceId = deviceId;
-      _resetCommandMeta(i, kind);
-      _commandCatalogDirty = true;
-      return (int)i;
+      _warnNoRoom(F("command"), command);
+      _rejectedCommandCount++;
+      return -1;
+    }
+    for (uint16_t i = 0; i < _commandSlots(); i++)
+    {
+      if (!_commandHandlers[i].inUse)
+      {
+        slot = (int)i;
+        break;
+      }
+    }
+    if (slot < 0)
+    {
+      _warnNoRoom(F("command"), command);
+      _rejectedCommandCount++;
+      return -1;
     }
   }
 
-  _warnNoRoom(F("command"), command);
-  _rejectedCommandCount++;
-  return -1;
+  CommandHandlerEntry &e = _commandHandlers[slot];
+  // Only buttons are listed, so only a button coming or going changes the entity list.
+  if (e.press != nullptr || press != nullptr)
+    _entityCatalogDirty = true;
+  _resetCommand(e);
+  strncpy(e.command, command, MAX_COMMAND_NAME_COUNT - 1);
+  e.command[MAX_COMMAND_NAME_COUNT - 1] = '\0';
+  e.handler = handler;
+  e.press = press;
+  e.inUse = true;
+  // Names are unique per board, so registering one through another device's handle moves it
+  // there.
+  e.deviceId = deviceId;
+  return slot;
 }
 
-// Registering a name again replaces the command, so its metadata starts empty.
-void Blaeck::_resetCommandMeta(uint16_t handlerIndex, uint8_t kind)
+// Empties an entry, so nothing carries over from an earlier registration.
+void Blaeck::_resetCommand(CommandHandlerEntry &e)
 {
-#if BLAECK_ENABLE_COMMAND_META
-  CommandHandlerEntry &e = _commandHandlers[handlerIndex];
-  e.kind = kind;
+  e.inUse = false;
+  e.handler = nullptr;
+  e.press = nullptr;
+  e.command[0] = '\0';
   e.category = BLAECK_CAT_NONE;
-  // Reset with the rest, so nothing carries over from an earlier registration.
+  e.disabledByDefault = false;
   e.displayName = nullptr;
   e.deviceClass = nullptr;
   e.icon = nullptr;
-  e.pressPayload = nullptr;
-#else
-  (void)handlerIndex;
-  (void)kind;
-#endif
 }
 
 void BlaeckDeviceBase::onCommand(const char *command, BlaeckCommandHandler handler)
 {
-  _registerCommand(command, handler, BLAECK_CMD_PLAIN);
+  _registerCommand(command, handler, nullptr);
 }
 
 void Blaeck::onAnyCommand(BlaeckAnyCommandHandler handler)
@@ -1270,13 +1231,9 @@ void Blaeck::clearAllCommandHandlers()
 {
   for (uint16_t i = 0; i < _commandSlots(); i++)
   {
-    if (_commandHandlers[i].inUse)
-      _commandCatalogDirty = true;
-
-    _commandHandlers[i].inUse = false;
-    _commandHandlers[i].handler = nullptr;
-    _commandHandlers[i].command[0] = '\0';
-    _resetCommandMeta(i, BLAECK_CMD_PLAIN);
+    if (_commandHandlers[i].press != nullptr)
+      _entityCatalogDirty = true;
+    _resetCommand(_commandHandlers[i]);
   }
   _anyCommandHandler = nullptr;
 }
@@ -1292,9 +1249,16 @@ bool Blaeck::_storeString(detail::StoredString &slot, BlaeckString value)
   return false;
 }
 
-BlaeckButtonCommandRef BlaeckDeviceBase::onButtonCommand(const char *command, BlaeckCommandHandler handler)
+BlaeckButtonRef BlaeckDeviceBase::addButton(const char *name, BlaeckButtonFunction press)
 {
-  return BlaeckButtonCommandRef(_core, (int16_t)_registerCommand(command, handler, BLAECK_CMD_BUTTON));
+  // A button always has a function; without one it would be a plain command.
+  if (press == nullptr)
+  {
+    if (_core != nullptr)
+      _core->_rejectedCommandCount++;
+    return BlaeckButtonRef(_core, -1);
+  }
+  return BlaeckButtonRef(_core, (int16_t)_registerCommand(name, nullptr, press));
 }
 
 uint16_t Blaeck::_flashCsvOptionCount(BlaeckString csv)
@@ -1757,23 +1721,23 @@ void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
 
   for (uint16_t i = 0; !matched && i < _commandSlots(); i++)
   {
-    if (_commandHandlers[i].inUse &&
-        _commandHandlers[i].handler != nullptr &&
-        strcmp(_commandHandlers[i].command, _parsedCommand) == 0)
+    const CommandHandlerEntry &e = _commandHandlers[i];
+    if (e.inUse && strcmp(e.command, _parsedCommand) == 0)
     {
       matched = true;
       // Refused for a missing device, so its handler doesn't forward to nothing.
-      if (_deviceMissing(_commandHandlers[i].deviceId))
+      if (_deviceMissing(e.deviceId))
         ackReason = BLAECK_ACK_DEVICE_NOT_RESPONDING;
       else
         ackReason = BLAECK_ACK_OK;
       if (ackReason == BLAECK_ACK_OK)
       {
         ackStatus = 0;
-        _commandHandlers[i].handler(
-            _parsedCommand,
-            (const char *const *)_parsedParamPtrs,
-            _parsedParamCount);
+        // A button ignores any parameters sent with the press.
+        if (e.press != nullptr)
+          e.press();
+        else
+          e.handler(_parsedCommand, (const char *const *)_parsedParamPtrs, _parsedParamCount);
       }
       break;
     }
@@ -1874,7 +1838,7 @@ bool Blaeck::_flashStringEqualsName(const __FlashStringHelper *flashName, const 
   }
 }
 
-#if BLAECK_ENABLE_EVENTS
+#if BLAECK_ENABLE_IOT
 int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const __FlashStringHelper *flashName, BlaeckString eventTypes)
 {
   char probe[2];
@@ -1886,12 +1850,12 @@ int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const 
     return -1;
   }
 
-  // A channel needs at least one event type, and none may be blank.
+  // An event needs at least one type, and none may be blank.
   if (eventTypes == nullptr || _flashCsvOptionCount(eventTypes) == 0)
   {
     if (_debugStream != nullptr)
     {
-      _debugStream->print(F("Event channel needs at least one event type: "));
+      _debugStream->print(F("Event needs at least one event type: "));
       _debugStream->println(channelName);
     }
     _rejectedEventChannelCount++;
@@ -1902,7 +1866,7 @@ int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const 
   {
     if (_debugStream != nullptr)
     {
-      _debugStream->print(F("Event channel has a blank event type: "));
+      _debugStream->print(F("Event has a blank event type: "));
       _debugStream->println(channelName);
     }
     _rejectedEventChannelCount++;
@@ -1913,7 +1877,7 @@ int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const 
   {
     if (_debugStream != nullptr)
     {
-      _debugStream->print(F("Channel name too long for event channel table: "));
+      _debugStream->print(F("Event name too long: "));
       _debugStream->println(channelName);
     }
     _rejectedEventChannelCount++;
@@ -1929,7 +1893,7 @@ int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const 
     _eventChannels[existing].deviceClass = nullptr;
     _eventChannels[existing].diagnostic = false;
     _eventChannels[existing].disabledByDefault = false;
-    _eventCatalogDirty = true;
+    _entityCatalogDirty = true;
     return existing;
   }
 
@@ -1943,9 +1907,9 @@ int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const 
   if (!_roomFor(_eventChannels))
   {
     if (flashName != nullptr)
-      _warnNoRoom(F("event channel"), flashName);
+      _warnNoRoom(F("event"), flashName);
     else
-      _warnNoRoom(F("event channel"), channelName);
+      _warnNoRoom(F("event"), channelName);
     _rejectedEventChannelCount++;
     return -1;
   }
@@ -1958,7 +1922,7 @@ int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const 
       {
         if (_debugStream != nullptr)
         {
-          _debugStream->print(F("Event channel name allocation failed: "));
+          _debugStream->print(F("No RAM for the event name: "));
           _debugStream->println(channelName);
         }
         _rejectedEventChannelCount++;
@@ -1971,12 +1935,12 @@ int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const 
       _eventChannels[i].inUse = true;
       _eventChannels[i].deviceId = deviceId;
       _addEventTypesCsv(i, storedTypes);
-      _eventCatalogDirty = true;
+      _entityCatalogDirty = true;
       return (int)i;
     }
   }
 
-  _warnNoRoom(F("event channel"), channelName);
+  _warnNoRoom(F("event"), channelName);
   _rejectedEventChannelCount++;
   return -1;
 }
@@ -2073,12 +2037,12 @@ bool Blaeck::_addEventType(byte deviceId, const char *channelName, BlaeckString 
   if (eventType == nullptr)
     return false;
 
-  // A blank type is refused, as in addEventChannel().
+  // A blank type is refused, as in addEvent().
   if (_flashCsvHasBlankField(eventType))
   {
     if (_debugStream != nullptr)
     {
-      _debugStream->print(F("Blank event type dropped on channel: "));
+      _debugStream->print(F("Blank event type dropped on event: "));
       _debugStream->println(channelName != nullptr ? channelName : "");
     }
     _rejectedEventTypeCount++;
@@ -2090,7 +2054,7 @@ bool Blaeck::_addEventType(byte deviceId, const char *channelName, BlaeckString 
   {
     if (_debugStream != nullptr)
     {
-      _debugStream->print(F("Event type dropped, channel not declared with addEventChannel(): "));
+      _debugStream->print(F("Event type dropped, no event added with addEvent(): "));
       _debugStream->println(channelName != nullptr ? channelName : "");
     }
     _rejectedEventTypeCount++;
@@ -2102,7 +2066,7 @@ bool Blaeck::_addEventType(byte deviceId, const char *channelName, BlaeckString 
   {
     if (_debugStream != nullptr)
     {
-      _debugStream->print(F("Duplicate event type ignored on channel: "));
+      _debugStream->print(F("Duplicate event type ignored on event: "));
       _debugStream->println(channelName);
     }
     return false;
@@ -2124,16 +2088,16 @@ bool Blaeck::_addEventType(byte deviceId, const char *channelName, BlaeckString 
   _eventTypes[_eventTypeCount].field = WHOLE_STRING;
   _eventTypeCount++;
   // A new type changes the catalog.
-  _eventCatalogDirty = true;
+  _entityCatalogDirty = true;
   return true;
 }
 
-void Blaeck::clearAllEventChannels()
+void Blaeck::clearAllEvents()
 {
   for (uint16_t i = 0; i < _eventChannelSlots(); i++)
   {
     if (_eventChannels[i].inUse)
-      _eventCatalogDirty = true;
+      _entityCatalogDirty = true;
 
     _setChannelName(_eventChannels[i].name, _eventChannels[i].nameInFlash, nullptr, nullptr);
     _eventChannels[i] = EventChannelEntry{};
@@ -2210,75 +2174,10 @@ bool Blaeck::_flashStringEquals(const __FlashStringHelper *a, const __FlashStrin
   }
 }
 
-void Blaeck::writeEventChannels()
-{
-  this->writeEventChannels(0);
-}
-
-void Blaeck::writeEventChannels(unsigned long msg_id)
-{
-  this->writeEventChannelsFrame(msg_id);
-}
-
-void Blaeck::writeEventChannelsFrame(unsigned long msg_id)
-{
-  _eventCatalogDirty = false;
-
-  // Layout: Event Channel List (0x80) in the protocol spec.
-  if (!_frameOpen(0x80, msg_id))
-    return;
-
-  for (uint16_t i = 0; i < _eventChannelSlots(); i++)
-  {
-    EventChannelEntry &e = _eventChannels[i];
-    if (!e.inUse)
-      continue;
-
-    uint16_t flags = 0;
-    if (e.icon != nullptr)
-      flags |= 0x0001;
-    if (e.diagnostic)
-      flags |= 0x0002;
-    if (e.deviceClass != nullptr)
-      flags |= 0x0004;
-    if (e.disabledByDefault)
-      flags |= 0x0008;
-
-    _emitDeviceId(e.deviceId);
-    if (e.nameInFlash)
-      _emitFlashStr0(reinterpret_cast<const __FlashStringHelper *>(e.name));
-    else
-      _emitStr0(e.name);
-    _emitByte((byte)(flags & 0xFF));
-    _emitByte((byte)((flags >> 8) & 0xFF));
-
-    if (flags & 0x0001)
-      _emitFlashStr0(e.icon);
-    if (flags & 0x0004)
-      _emitFlashStr0(e.deviceClass);
-
-    uint16_t typeCount = 0;
-    for (uint16_t t = 0; t < _eventTypeCount; t++)
-    {
-      if (_eventTypes[t].channelIndex == i)
-        typeCount++;
-    }
-    _emitByte((byte)(typeCount & 0xFF));
-    _emitByte((byte)((typeCount >> 8) & 0xFF));
-
-    for (uint16_t t = 0; t < _eventTypeCount; t++)
-    {
-      if (_eventTypes[t].channelIndex == i)
-        _emitEventType0(_eventTypes[t]);
-    }
-  }
-
-  _frameClose();
-}
-
 void Blaeck::_writeEvent(byte deviceId, const char *channelName, BlaeckString eventType)
 {
-  // Layout: Event (0x85) in the protocol spec. The indices refer to the event channel list.
+  // Layout: Event (0x85) in the protocol spec. The event's index counts the events of the
+  // entity list, which lists them in table order.
   if (!_mayWriteFrame())
     return;
 
@@ -2290,7 +2189,7 @@ void Blaeck::_writeEvent(byte deviceId, const char *channelName, BlaeckString ev
   {
     if (_debugStream != nullptr)
     {
-      _debugStream->print(F("Event dropped, channel not declared with addEventChannel(): "));
+      _debugStream->print(F("Event dropped, not added with addEvent(): "));
       _debugStream->println(channelName != nullptr ? channelName : "");
     }
     return;
@@ -2301,28 +2200,30 @@ void Blaeck::_writeEvent(byte deviceId, const char *channelName, BlaeckString ev
   {
     if (_debugStream != nullptr)
     {
-      _debugStream->print(F("Event dropped, type not declared with addEventType() on channel: "));
+      _debugStream->print(F("Event dropped, type not added with addEvent() or addEventType(): "));
       _debugStream->println(channelName);
     }
     return;
   }
 
+  uint16_t position = 0;
+  for (int i = 0; i < channelIndex; i++)
+    if (_eventChannels[(uint16_t)i].inUse)
+      position++;
+
   if (!_frameOpen(0x85, 0))
     return;
-  _emitDeviceId(_eventChannels[channelIndex].deviceId);
-  _emitByte((byte)(channelIndex & 0xFF));
-  _emitByte((byte)((channelIndex >> 8) & 0xFF));
+  _emitByte((byte)(position & 0xFF));
+  _emitByte((byte)((position >> 8) & 0xFF));
   _emitByte((byte)(eventIndex & 0xFF));
   _emitByte((byte)((eventIndex >> 8) & 0xFF));
   _frameClose();
 }
 #else
 bool Blaeck::_addEventType(byte, const char *, BlaeckString) { return false; }
-void Blaeck::clearAllEventChannels() {}
-// Used by the F() addEventChannel() overload, which exists either way.
+void Blaeck::clearAllEvents() {}
+// Used by addEvent(), which exists either way.
 int Blaeck::_registerEventChannel(byte, const char *, const __FlashStringHelper *, BlaeckString) { return -1; }
-void Blaeck::writeEventChannels() { this->writeEventChannels(0); }
-void Blaeck::writeEventChannels(unsigned long msg_id) { this->_writeEmptyFrame(0x80, msg_id); }
 void Blaeck::_writeEvent(byte, const char *, BlaeckString) {}
 #endif
 
@@ -2384,23 +2285,6 @@ void Blaeck::writeSignalConfig(unsigned long msg_id)
 // BLAECK_ENABLE_SIGNAL_META=0: the catalog answers empty.
 void Blaeck::writeSignalConfig() { this->writeSignalConfig(0); }
 void Blaeck::writeSignalConfig(unsigned long msg_id) { this->_writeEmptyFrame(0xF0, msg_id); }
-#endif
-
-#if BLAECK_ENABLE_COMMAND_META
-void Blaeck::writeCommands()
-{
-  this->writeCommands(0);
-}
-void Blaeck::writeCommands(unsigned long msg_id)
-{
-  _commandCatalogDirty = false;
-  this->writeCommandsFrame(msg_id);
-}
-#else
-// BLAECK_ENABLE_COMMAND_META=0: commands work, and the catalog answers empty.
-void Blaeck::writeCommands() { this->writeCommands(0); }
-// Clear the dirty flag, or _flushCatalogs() would resend the empty catalog on every read().
-void Blaeck::writeCommands(unsigned long msg_id) { _commandCatalogDirty = false; this->_writeEmptyFrame(0xA0, msg_id); }
 #endif
 
 // A catalog with no entries.
@@ -2762,13 +2646,6 @@ void Blaeck::writeRestarted(unsigned long msg_id)
     // declares. The entity list matters most, since its values are back at their defaults.
     // This runs from read(), so setup() has finished declaring by then.
     this->writeEntities(msg_id);
-
-#if BLAECK_ENABLE_EVENTS
-    this->writeEventChannels(msg_id);
-#endif
-
-    this->writeCommands(msg_id);
-
     this->writeSignalConfig(msg_id);
   }
 }
@@ -2982,61 +2859,6 @@ void Blaeck::writeSignalConfigFrame(unsigned long msg_id)
 }
 #endif
 
-#if BLAECK_ENABLE_COMMAND_META
-void Blaeck::writeCommandsFrame(unsigned long msg_id)
-{
-  // Layout: Command List (0xA0) in the protocol spec. Every command is listed, plain ones too.
-  if (!_frameOpen(0xA0, msg_id))
-    return;
-
-  for (uint16_t i = 0; i < _commandSlots(); i++)
-  {
-    CommandHandlerEntry &e = _commandHandlers[i];
-    if (!e.inUse)
-      continue;
-
-    uint32_t flags = 0;
-    // Entity category in bits 5-6.
-    flags |= (uint32_t)((e.category & 0x03) << 5);
-    if (e.disabledByDefault)
-      flags |= 0x4000;
-    if (e.displayName != nullptr)
-      flags |= 0x0100;
-    if (e.deviceClass != nullptr)
-      flags |= 0x0800;
-    if (e.icon != nullptr)
-      flags |= 0x1000;
-    // Buttons only.
-    if (e.kind == BLAECK_CMD_BUTTON && e.pressPayload != nullptr)
-      flags |= 0x2000;
-
-    // The longest command the device can receive, so a host knows how much room is left for
-    // parameters.
-    uint16_t payloadMax = (uint16_t)(MAXIMUM_CHAR_COUNT - 1);
-    _emitDeviceId(e.deviceId);
-    _emitByte((byte)(payloadMax & 0xFF));
-    _emitByte((byte)((payloadMax >> 8) & 0xFF));
-    _emitStr0(e.command);
-    _emitByte(e.kind);
-    _emitByte((byte)(flags & 0xFF));
-    _emitByte((byte)((flags >> 8) & 0xFF));
-    _emitByte((byte)((flags >> 16) & 0xFF));
-    _emitByte((byte)((flags >> 24) & 0xFF));
-
-    if (flags & 0x0100)
-      _emitFlashStr0(e.displayName);
-    if (flags & 0x0800)
-      _emitFlashStr0(e.deviceClass);
-    if (flags & 0x1000)
-      _emitFlashStr0(e.icon);
-    if (flags & 0x2000)
-      _emitFlashStr0(e.pressPayload);
-  }
-
-  _frameClose();
-}
-#endif
-
 void Blaeck::setTimestampMode(BlaeckTimestampMode mode)
 {
   _timestampMode = mode;
@@ -3142,9 +2964,10 @@ void Blaeck::validatePlatformSizes()
 
 // ----- BlaeckDeviceBase: calls into the board -----
 
-int BlaeckDeviceBase::_registerCommand(const char *command, BlaeckCommandHandler handler, uint8_t kind)
+int BlaeckDeviceBase::_registerCommand(const char *command, BlaeckCommandHandler handler,
+                                       BlaeckButtonFunction press)
 {
-  return _core != nullptr ? _core->_registerCommand(_deviceId, command, handler, kind) : -1;
+  return _core != nullptr ? _core->_registerCommand(_deviceId, command, handler, press) : -1;
 }
 
 // ----- BlaeckDeviceBase: calls taking a name -----
@@ -3195,12 +3018,12 @@ BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, doub
 BlaeckTextSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, const char *value) { return BlaeckTextSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_string, const_cast<char *>(value))); }
 BlaeckTextSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, const __FlashStringHelper *value) { return BlaeckTextSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_string, const_cast<__FlashStringHelper *>(value), true)); }
 
-BlaeckEventChannelRef BlaeckDeviceBase::addEventChannel(BlaeckString channelName, BlaeckString eventTypes)
+BlaeckEventRef BlaeckDeviceBase::addEvent(BlaeckString channelName, BlaeckString eventTypes)
 {
-  return BlaeckEventChannelRef(_core, (int16_t)_registerEventChannel(channelName, eventTypes));
+  return BlaeckEventRef(_core, (int16_t)_registerEventChannel(channelName, eventTypes));
 }
 
-// Blaeck looks event channels up by RAM name, so an F() name is copied for the lookup.
+// Blaeck looks events up by RAM name, so an F() name is copied for the lookup.
 bool BlaeckDeviceBase::addEventType(BlaeckString channelName, BlaeckString eventType)
 {
   if (_core == nullptr)
@@ -3415,6 +3238,12 @@ int Blaeck::_registerProperty(byte deviceId, BlaeckString name, uint8_t kind, bo
                               void *address, void (*getter)(), uint8_t getterType, uint16_t textSize,
                               BlaeckString options, BlaeckPropertyCallback onChange)
 {
+#if !BLAECK_ENABLE_IOT
+  // Without the IoT part there are no properties; the rest is dropped from the build.
+  (void)deviceId, (void)kind, (void)writable, (void)type, (void)address, (void)getter;
+  (void)getterType, (void)textSize, (void)options, (void)onChange, (void)name;
+  return -1;
+#endif
   if (_nameRefused(name, false))
   {
     ++_rejectedPropertyCount;
@@ -3556,6 +3385,11 @@ static bool _isIntegerType(dataType type)
 
 byte Blaeck::_receiveProperty(uint16_t index)
 {
+#if !BLAECK_ENABLE_IOT
+  // Without the IoT part there are no properties; the rest is dropped from the build.
+  (void)index;
+  return BLAECK_ACK_UNKNOWN;
+#endif
   PropertyEntry &p = _properties[index];
   if (_deviceMissing(p.deviceId))
     return BLAECK_ACK_DEVICE_NOT_RESPONDING;
@@ -3634,6 +3468,11 @@ byte Blaeck::_receiveProperty(uint16_t index)
 
 bool Blaeck::_writePropertyFrame(uint16_t index)
 {
+#if !BLAECK_ENABLE_IOT
+  // Without the IoT part there are no properties; the rest is dropped from the build.
+  (void)index;
+  return false;
+#endif
   if (!_mayWriteFrame() || index >= _propertyCount)
     return false;
   // A host must know the property before a value of it arrives.
@@ -3704,6 +3543,10 @@ static bool _propertyChanged(const ReportingState &r, dataType type, const byte 
 
 void Blaeck::_writeChangedProperties()
 {
+#if !BLAECK_ENABLE_IOT
+  // Without the IoT part there are no properties; the rest is dropped from the build.
+  return;
+#endif
   const uint32_t now = static_cast<uint32_t>(millis());
   for (uint16_t i = 0; i < _propertyCount; ++i)
   {
@@ -3747,6 +3590,11 @@ void Blaeck::_writePropertyByName(byte deviceId, BlaeckString name)
   _writePropertyFrame((uint16_t)index);
 }
 
+void Blaeck::writeEntities()
+{
+  writeEntities(0);
+}
+
 void Blaeck::writeEntities(unsigned long msg_id)
 {
   _entityCatalogDirty = false;
@@ -3755,10 +3603,11 @@ void Blaeck::writeEntities(unsigned long msg_id)
 
 void Blaeck::writeEntitiesFrame(unsigned long msg_id)
 {
-  // Layout: Entity List (0x90) in the protocol spec. Properties for now; events and buttons
-  // join the list later.
+  // Layout: Entity List (0x90) in the protocol spec: the properties, then the events, then the
+  // buttons, each kind in table order.
   if (!_frameOpen(0x90, msg_id))
     return;
+#if BLAECK_ENABLE_IOT
   for (uint16_t i = 0; i < _propertyCount; ++i)
   {
     const PropertyEntry &p = _properties[i];
@@ -3819,6 +3668,77 @@ void Blaeck::writeEntitiesFrame(unsigned long msg_id)
     if (flags & blaeck_detail::PROPERTY_HAS_DISPLAY_PRECISION)
       _emitByte(pr->displayPrecision);
   }
+
+  for (uint16_t i = 0; i < _eventChannelSlots(); i++)
+  {
+    const EventChannelEntry &e = _eventChannels[i];
+    if (!e.inUse)
+      continue;
+
+    uint16_t flags = 0;
+    if (e.icon != nullptr)
+      flags |= 0x0001;
+    if (e.diagnostic)
+      flags |= 0x0002;
+    if (e.deviceClass != nullptr)
+      flags |= 0x0004;
+    if (e.disabledByDefault)
+      flags |= 0x0008;
+
+    _emitDeviceId(e.deviceId);
+    _emitByte(1); // EntryKind: event
+    if (e.nameInFlash)
+      _emitFlashStr0(reinterpret_cast<const __FlashStringHelper *>(e.name));
+    else
+      _emitStr0(e.name);
+    _emitByte((byte)(flags & 0xFF));
+    _emitByte((byte)((flags >> 8) & 0xFF));
+    if (flags & 0x0001)
+      _emitFlashStr0(e.icon);
+    if (flags & 0x0004)
+      _emitFlashStr0(e.deviceClass);
+
+    uint16_t typeCount = 0;
+    for (uint16_t t = 0; t < _eventTypeCount; t++)
+      if (_eventTypes[t].channelIndex == i)
+        typeCount++;
+    _emitByte((byte)(typeCount & 0xFF));
+    _emitByte((byte)((typeCount >> 8) & 0xFF));
+    for (uint16_t t = 0; t < _eventTypeCount; t++)
+      if (_eventTypes[t].channelIndex == i)
+        _emitEventType0(_eventTypes[t]);
+  }
+
+  for (uint16_t i = 0; i < _commandSlots(); i++)
+  {
+    const CommandHandlerEntry &e = _commandHandlers[i];
+    // Plain commands are not listed.
+    if (!e.inUse || e.press == nullptr)
+      continue;
+
+    uint16_t flags = (uint16_t)((e.category & 0x03) << 3);
+    if (e.displayName != nullptr)
+      flags |= 0x0001;
+    if (e.icon != nullptr)
+      flags |= 0x0002;
+    if (e.deviceClass != nullptr)
+      flags |= 0x0004;
+    if (e.disabledByDefault)
+      flags |= 0x0020;
+
+    _emitDeviceId(e.deviceId);
+    _emitByte(2); // EntryKind: button
+    _emitStr0(e.command);
+    _emitByte((byte)(flags & 0xFF));
+    _emitByte((byte)((flags >> 8) & 0xFF));
+    if (flags & 0x0001)
+      _emitFlashStr0(e.displayName);
+    if (flags & 0x0002)
+      _emitFlashStr0(e.icon);
+    if (flags & 0x0004)
+      _emitFlashStr0(e.deviceClass);
+  }
+#endif
   if (!_frameClose())
     return;
   // The list carried each current value, so none is due again until it changes.

@@ -307,8 +307,8 @@ device.setBufferedWrites(true);
 ## The catalogs
 
 A value on the wire names its signal by position, not by name. So before any of it means
-anything, a host has to have the list of signals, and the entity list, commands and event
-channels with it.
+anything, a host has to have the list of signals in the device list, and the entity list with
+the inputs, sensors, events and buttons.
 
 Your sketch does not have to send these. They go out when the device starts, again whenever a
 host asks, and again whenever you change what the device declares - always ahead of the next

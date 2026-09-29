@@ -72,14 +72,15 @@ static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
               "BLAECK_COMMAND_MAX_CHARS_DEFAULT must be between 1 and 65535 bytes.");
 
 
-// The four switches below each remove one feature to save SRAM and flash on small boards.
-// The API stays, so a sketch compiles either way, and the matching catalog request is
-// answered with an empty frame so a host does not wait for it.
+// The switches below each remove one feature to save SRAM and flash on small boards. The API
+// stays, so a sketch compiles either way, and the matching catalog request is answered with an
+// empty frame so a host does not wait for it.
 
-// Button metadata: what a button declares beyond its name, sent in the 0xA0 Command List. Off,
-// buttons are listed without it.
-#ifndef BLAECK_ENABLE_COMMAND_META
-  #define BLAECK_ENABLE_COMMAND_META 1
+// The IoT part: inputs, sensors, buttons and events, listed in the 0x90 Entity List. Off, their
+// add… calls store nothing and the entity list goes out empty. Signals and plain commands work
+// either way.
+#ifndef BLAECK_ENABLE_IOT
+  #define BLAECK_ENABLE_IOT 1
 #endif
 
 // Signal metadata: withUnit(), withIcon() and the rest of addSignal()'s handle, sent in the
@@ -88,20 +89,12 @@ static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
   #define BLAECK_ENABLE_SIGNAL_META 1
 #endif
 
-// Events: addEventChannel(), addEventType() and writeEvent(), with the 0x80 Event Channel
-// List and 0x85 events.
-#ifndef BLAECK_ENABLE_EVENTS
-  #define BLAECK_ENABLE_EVENTS 1
-#endif
-
 // The built-in commands. read() matches against these names, and the build fails if one is
 // too long for the parse buffer. A new built-in has to be added to the list below as well.
 #define BLAECK_BUILTIN_WRITE_SIGNAL_CONFIG "BLAECK.WRITE_SIGNAL_CONFIG"
 #define BLAECK_BUILTIN_WRITE_DATA "BLAECK.WRITE_DATA"
 #define BLAECK_BUILTIN_GET_DEVICES "BLAECK.GET_DEVICES"
-#define BLAECK_BUILTIN_WRITE_COMMANDS "BLAECK.WRITE_COMMANDS"
 #define BLAECK_BUILTIN_WRITE_ENTITIES "BLAECK.WRITE_ENTITIES"
-#define BLAECK_BUILTIN_WRITE_EVENT_CHANNELS "BLAECK.WRITE_EVENT_CHANNELS"
 #define BLAECK_BUILTIN_ACTIVATE "BLAECK.ACTIVATE"
 #define BLAECK_BUILTIN_DEACTIVATE "BLAECK.DEACTIVATE"
 #define BLAECK_BUILTIN_PAUSE_WRITES "BLAECK.PAUSE_WRITES"
@@ -117,9 +110,7 @@ static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
   X(BLAECK_BUILTIN_WRITE_SIGNAL_CONFIG) \
   X(BLAECK_BUILTIN_WRITE_DATA)          \
   X(BLAECK_BUILTIN_GET_DEVICES)         \
-  X(BLAECK_BUILTIN_WRITE_COMMANDS)      \
-  X(BLAECK_BUILTIN_WRITE_ENTITIES)     \
-  X(BLAECK_BUILTIN_WRITE_EVENT_CHANNELS)\
+  X(BLAECK_BUILTIN_WRITE_ENTITIES)      \
   X(BLAECK_BUILTIN_ACTIVATE)            \
   X(BLAECK_BUILTIN_DEACTIVATE)          \
   X(BLAECK_BUILTIN_PAUSE_WRITES)        \
@@ -291,16 +282,13 @@ enum BlaeckTimestampMode
   BLAECK_RTC = BLAECK_UNIX // Deprecated alias
 };
 
-// paramCount is 0 only for a command or a button sent without parameters.
+// paramCount is 0 for a command sent without parameters.
 typedef void (*BlaeckCommandHandler)(const char *command, const char *const *params, byte paramCount);
 typedef void (*BlaeckAnyCommandHandler)(const char *command, const char *const *params, byte paramCount);
 
-// What kind of control a command is, as listed in the command catalog.
-enum BlaeckCommandKind
-{
-  BLAECK_CMD_PLAIN = 0,  // onCommand(): listed, but not offered as a control
-  BLAECK_CMD_BUTTON = 4  // no value
-};
+// Runs on each press of a button. A press carries no value; fixed arguments go in a lambda:
+// addButton("ACTIVATE_ALL", []() { activateRange(1, 40); }).
+typedef void (*BlaeckButtonFunction)();
 
 // Where a host files a control or value. CONFIG is a device setting, DIAGNOSTIC is information
 // about the device. Either keeps it off a host's default views.
@@ -364,8 +352,8 @@ class BlaeckNumericSignalRef;
 class BlaeckTextSignalRef;
 class BlaeckBoolSignalRef;
 class BlaeckCommandRefBase;
-class BlaeckButtonCommandRef;
-class BlaeckEventChannelRef;
+class BlaeckButtonRef;
+class BlaeckEventRef;
 class BlaeckPropertyRef;
 class BlaeckNumberPropertyRef;
 class BlaeckTextPropertyRef;
@@ -450,23 +438,22 @@ inline bool flashStrEmpty(BlaeckString value)
 bool optionsAccepted(BlaeckString optionsCsv, Print *debug,
                      const char *name, bool nameInFlash);
 
+// A plain command from onCommand() or a button from addButton(). Both are found by name, so
+// they share one table; a button has press set and no handler.
 struct CommandHandlerEntry
 {
   char command[MAX_COMMAND_NAME_COUNT];
   BlaeckCommandHandler handler = nullptr;
+  BlaeckButtonFunction press = nullptr;
   bool inUse = false;
   // The device from addDevice() the command belongs to, 0 for the board itself.
   uint8_t deviceId = 0;
-#if BLAECK_ENABLE_COMMAND_META
-  uint8_t kind = BLAECK_CMD_PLAIN;
+  // Buttons only: how a host shows it.
   detail::StoredString deviceClass;
   detail::StoredString icon;
   detail::StoredString displayName;
-  // Buttons only: the arguments a press sends, or nullptr for none.
-  detail::StoredString pressPayload;
   uint8_t category = BLAECK_CAT_NONE;
   bool disabledByDefault = false;
-#endif
 };
 
 // A property's presentation, kept apart so that a property without any costs one pointer.
@@ -582,7 +569,7 @@ struct EventTypeEntry
 } // namespace blaeck_detail
 
 // The shared part of the button handle. A rejected registration returns a handle that ignores
-// every call. With BLAECK_ENABLE_COMMAND_META=0 the modifiers store nothing.
+// every call. With BLAECK_ENABLE_IOT=0 the modifiers store nothing.
 class BlaeckCommandRefBase
 {
 protected:
@@ -591,12 +578,12 @@ protected:
   // The entry this handle names, or nullptr when registration was rejected.
   blaeck_detail::CommandHandlerEntry * _entry() const;
 
-  // Marks the command catalog as changed, so it is sent again.
+  // Marks the entity list as changed, so it is sent again.
   void _markDirty() const;
 
   void _setDeviceClass(BlaeckString deviceClass)
   {
-#if BLAECK_ENABLE_COMMAND_META
+#if BLAECK_ENABLE_IOT
     if (blaeck_detail::flashStrEmpty(deviceClass))
       deviceClass = nullptr;
     if (auto *e = _entry())
@@ -615,7 +602,7 @@ protected:
 
   void _setIcon(BlaeckString icon)
   {
-#if BLAECK_ENABLE_COMMAND_META
+#if BLAECK_ENABLE_IOT
     if (blaeck_detail::flashStrEmpty(icon))
       icon = nullptr;
     if (auto *e = _entry())
@@ -632,28 +619,9 @@ protected:
 #endif
   }
 
-  void _setPressPayload(BlaeckString pressPayload)
-  {
-#if BLAECK_ENABLE_COMMAND_META
-    if (blaeck_detail::flashStrEmpty(pressPayload))
-      pressPayload = nullptr;
-    if (auto *e = _entry())
-    {
-      if (e->pressPayload != pressPayload)
-      {
-        if (!_storeString(e->pressPayload, pressPayload))
-          return;
-        _markDirty();
-      }
-    }
-#else
-    (void)pressPayload;
-#endif
-  }
-
   void _setDisplayName(BlaeckString displayName)
   {
-#if BLAECK_ENABLE_COMMAND_META
+#if BLAECK_ENABLE_IOT
     if (blaeck_detail::flashStrEmpty(displayName))
       displayName = nullptr;
     if (auto *e = _entry())
@@ -672,7 +640,7 @@ protected:
 
   void _setCategory(uint8_t category)
   {
-#if BLAECK_ENABLE_COMMAND_META
+#if BLAECK_ENABLE_IOT
     if (auto *e = _entry())
     {
       if (e->category != category)
@@ -688,7 +656,7 @@ protected:
 
   void _setDisabledByDefault(bool on)
   {
-#if BLAECK_ENABLE_COMMAND_META
+#if BLAECK_ENABLE_IOT
     if (auto *e = _entry())
     {
       if (e->disabledByDefault != on)
@@ -725,7 +693,7 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.onButtonCommand("STATUS", onStatus).withDisplayName(F("Request status"));
+      device.addButton("STATUS", onStatus).withDisplayName(F("Request status"));
     @endcode
   */
   TYPE &withDisplayName(BlaeckString displayName)
@@ -743,7 +711,7 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.onButtonCommand("CALIBRATE", onCalibrate).withIcon(F("mdi:tune"));
+      device.addButton("CALIBRATE", onCalibrate).withIcon(F("mdi:tune"));
     @endcode
   */
   TYPE &withIcon(BlaeckString icon)
@@ -760,7 +728,7 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.onButtonCommand("FACTORY_RESET", onFactoryReset).config();
+      device.addButton("FACTORY_RESET", onFactoryReset).config();
     @endcode
   */
   TYPE &config()
@@ -777,7 +745,7 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.onButtonCommand("REBOOT", onReboot).diagnostic();
+      device.addButton("REBOOT", onReboot).diagnostic();
     @endcode
   */
   TYPE &diagnostic()
@@ -795,7 +763,7 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.onButtonCommand("CALIBRATE", onCalibrate).disabledByDefault();
+      device.addButton("CALIBRATE", onCalibrate).disabledByDefault();
     @endcode
   */
   TYPE &disabledByDefault(bool on = true)
@@ -810,11 +778,11 @@ protected:
   TYPE &_self() { return *static_cast<TYPE *>(this); }
 };
 
-// The state modifiers, for every kind except a button, which has no state to report.
-class BlaeckButtonCommandRef : public BlaeckCommandRefShared<BlaeckButtonCommandRef>
+// The handle addButton() returns.
+class BlaeckButtonRef : public BlaeckCommandRefShared<BlaeckButtonRef>
 {
 public:
-  BlaeckButtonCommandRef(Blaeck *owner, int16_t index) : BlaeckCommandRefShared<BlaeckButtonCommandRef>(owner, index) {}
+  BlaeckButtonRef(Blaeck *owner, int16_t index) : BlaeckCommandRefShared<BlaeckButtonRef>(owner, index) {}
 
   /*!
     @brief   Says what pressing the button does: restart, identify or update.
@@ -828,38 +796,12 @@ public:
     @note    These buttons usually belong under diagnostic() as well.
 
     @code
-      device.onButtonCommand("REBOOT", onReboot).withDeviceClass(F("restart")).diagnostic();
+      device.addButton("REBOOT", onReboot).withDeviceClass(F("restart")).diagnostic();
     @endcode
   */
-  BlaeckButtonCommandRef &withDeviceClass(BlaeckString deviceClass)
+  BlaeckButtonRef &withDeviceClass(BlaeckString deviceClass)
   {
     _setDeviceClass(deviceClass);
-    return *this;
-  }
-
-  /*!
-    @brief   Sets fixed arguments that a press sends.
-
-    Without this a press sends none. With it, the handler gets these arguments in
-    params, as if they had been typed after the command name.
-
-    @param   pressPayload  Comma-separated arguments.
-    @return  The same handle, for chaining.
-
-    @warning Nothing checks the payload. A typo reaches the handler as written.
-
-    @note    One button has one payload. For another preset, register a second
-             command with the same handler.
-
-    @code
-      device.onButtonCommand("DUT_ACTIVATE_ALL", onDutActivate)
-          .withPressPayload(F("1,40"))
-          .withDisplayName(F("Activate all DUTs"));
-    @endcode
-  */
-  BlaeckButtonCommandRef &withPressPayload(BlaeckString pressPayload)
-  {
-    _setPressPayload(pressPayload);
     return *this;
   }
 };
@@ -1257,10 +1199,10 @@ private:
   friend class BlaeckDeviceBase;
 };
 
-class BlaeckEventChannelRef
+class BlaeckEventRef
 {
 public:
-  BlaeckEventChannelRef(Blaeck *owner, int16_t index) : _owner(owner), _index(index) {}
+  BlaeckEventRef(Blaeck *owner, int16_t index) : _owner(owner), _index(index) {}
 
   /*!
     @brief   Sets the icon a host shows next to the channel.
@@ -1269,10 +1211,10 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.addEventChannel(F("Activity"), F("idle,resumed")).withIcon(F("mdi:pulse"));
+      device.addEvent(F("Activity"), F("idle,resumed")).withIcon(F("mdi:pulse"));
     @endcode
   */
-  BlaeckEventChannelRef withIcon(BlaeckString icon);
+  BlaeckEventRef withIcon(BlaeckString icon);
 
   /*!
     @brief   Marks the channel as diagnostic.
@@ -1281,10 +1223,10 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.addEventChannel(F("Faults"), F("brownout,watchdog")).diagnostic();
+      device.addEvent(F("Faults"), F("brownout,watchdog")).diagnostic();
     @endcode
   */
-  BlaeckEventChannelRef diagnostic(bool on = true);
+  BlaeckEventRef diagnostic(bool on = true);
 
   /*!
     @brief   Sets what kind of events the channel reports: button, doorbell or motion.
@@ -1298,10 +1240,10 @@ public:
              long_press_end, multi_press_ongoing and multi_press_end, but needn't.
 
     @code
-      device.addEventChannel(F("Doorbell"), F("ring")).withDeviceClass(F("doorbell"));
+      device.addEvent(F("Doorbell"), F("ring")).withDeviceClass(F("doorbell"));
     @endcode
   */
-  BlaeckEventChannelRef withDeviceClass(BlaeckString deviceClass);
+  BlaeckEventRef withDeviceClass(BlaeckString deviceClass);
 
   /*!
     @brief   Asks a host to create the channel disabled, until someone enables it.
@@ -1313,10 +1255,10 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.addEventChannel(F("Debug"), F("trace")).disabledByDefault();
+      device.addEvent(F("Debug"), F("trace")).disabledByDefault();
     @endcode
   */
-  BlaeckEventChannelRef disabledByDefault(bool on = true);
+  BlaeckEventRef disabledByDefault(bool on = true);
 
 private:
   Blaeck *_owner;
@@ -1685,7 +1627,7 @@ public:
     @return  A handle for describing how a host shows the signal. It can be
              ignored, or kept in a global to change the signal later.
     @note    If there is no RAM for it, the signal is dropped and the handle ignores
-             every call; hasRejectedSignals() reports it. Describing a signal
+             every call; hasRejections() reports it. Describing a signal
              allocates memory, and if that fails the signal is still sent, just
              without the description.
 
@@ -1933,36 +1875,37 @@ public:
   void writeProperty(BlaeckString name);
 
   // ----- Events -----
-  // With BLAECK_ENABLE_EVENTS=0 these compile but do nothing.
+  // With BLAECK_ENABLE_IOT=0 these compile but do nothing.
 
   /*!
-    @brief   Adds an event channel, for reporting things that happen.
+    @brief   Adds an event, for reporting things that happen.
 
-    @param   channelName  The name a host shows. RAM text is copied; an F() literal stays in flash.
-    @param   eventTypes   The events the channel can report, comma-separated.
-    @return  A handle for describing how a host shows the channel.
+    @param   channelName  The name a host shows, unique among this device's events. RAM
+                          text is copied; an F() literal stays in flash.
+    @param   eventTypes   What the event can report, comma-separated.
+    @return  A handle for describing how a host shows the event.
 
-    @warning A channel with no event types, or with a blank one, is refused.
+    @warning An event with no types, or with a blank one, is refused.
 
     @code
-      device.addEventChannel(F("Activity"), F("idle_warning,resumed"))
+      device.addEvent(F("Activity"), F("idle_warning,resumed"))
           .withIcon(F("mdi:pulse"));
     @endcode
   */
-  BlaeckEventChannelRef addEventChannel(BlaeckString channelName, BlaeckString eventTypes);
+  BlaeckEventRef addEvent(BlaeckString channelName, BlaeckString eventTypes);
 
   /*!
-    @brief   Adds one more event type to an existing event channel.
+    @brief   Adds one more type to an existing event.
 
     For types that depend on the hardware fitted.
 
-    @param   channelName  A channel added with addEventChannel().
+    @param   channelName  An event added with addEvent().
     @param   eventType    The new type.
-    @return  False if the type is blank or a duplicate, the channel doesn't exist, or
+    @return  False if the type is blank or a duplicate, the event doesn't exist, or
              there is no RAM for it. Each is reported on the debug stream.
 
     @code
-      device.addEventChannel(F("Activity"), F("idle_warning,resumed"));
+      device.addEvent(F("Activity"), F("idle_warning,resumed"));
       if (hasBatteryMonitor)
         device.addEventType(F("Activity"), F("low_battery"));
     @endcode
@@ -1970,14 +1913,14 @@ public:
   bool addEventType(BlaeckString channelName, BlaeckString eventType);
 
   /*!
-    @brief   Reports an event on an event channel.
+    @brief   Reports an event.
 
     A host shows it, but it isn't logged as data.
 
-    @param   channelName  A channel added with addEventChannel().
-    @param   eventType    One of that channel's event types.
+    @param   channelName  An event added with addEvent().
+    @param   eventType    One of that event's types.
 
-    @warning An unknown channel or type is dropped, with a note on the debug stream.
+    @warning An unknown event or type is dropped, with a note on the debug stream.
              Types are case-sensitive.
 
     @code
@@ -2106,15 +2049,15 @@ public:
   /*!
     @brief   Registers a command whose parameters the handler reads as it likes.
 
-    A host lists the command but can't build a control for it. For a value a host sets,
-    use an input such as addNumberInput(); for a press, onButtonCommand().
+    A host doesn't list it; whoever sends it knows its name and parameters. For a value
+    a host sets, use an input such as addNumberInput(); for a press, addButton().
 
     @param   command  The command name. It can't start with `#` or `BLAECK.`.
     @param   handler  Called with the parameters as received.
 
-    @note    A command that can't be registered (no RAM, name too long or
-             reserved) is reported on the debug stream and counted in
-             hasRejectedCommands(). This applies to every command type.
+    @note    A command that can't be registered (no RAM, a name that is too long,
+             reserved or taken) is reported on the debug stream and in
+             hasRejections().
 
     @code
       device.onCommand("SwitchLED", onSwitchLED);
@@ -2123,19 +2066,22 @@ public:
   void onCommand(const char *command, BlaeckCommandHandler handler);
 
   /*!
-    @brief   Registers a command that is a button press.
+    @brief   Adds a button, which a host shows and presses.
 
-    It carries no value unless withPressPayload() gives it one.
+    A press carries no value. A host presses it by sending its name, `<STATUS>`;
+    parameters sent with it are ignored. With BLAECK_ENABLE_IOT=0 it is refused.
 
-    @param   command  The command name.
-    @param   handler  Called on each press.
-    @return  A handle for describing the control.
+    @param   name   The button's name, unique on the board among inputs, sensors,
+                    buttons and commands. It can't start with `#` or `BLAECK.`.
+    @param   press  Called on each press. For fixed arguments, a lambda:
+                    `[]() { activateRange(1, 40); }`.
+    @return  A handle for describing how a host shows the button.
 
     @code
-      device.onButtonCommand("STATUS", onStatus);
+      device.addButton("STATUS", onStatus);
     @endcode
   */
-  BlaeckButtonCommandRef onButtonCommand(const char *command, BlaeckCommandHandler handler);
+  BlaeckButtonRef addButton(const char *name, BlaeckButtonFunction press);
 
 protected:
   BlaeckDeviceBase(Blaeck *core, byte deviceId) : _core(core), _deviceId(deviceId) {}
@@ -2152,7 +2098,7 @@ private:
   // Blaeck's calls of the same names, for this device. A handle without a board registers
   // nothing (-1) and sends nothing.
   int _registerSignal(BlaeckString signalName, dataType type, void *address, bool textInFlash = false);
-  int _registerCommand(const char *command, BlaeckCommandHandler handler, uint8_t kind);
+  int _registerCommand(const char *command, BlaeckCommandHandler handler, BlaeckButtonFunction press);
   int _registerEventChannel(BlaeckString channelName, BlaeckString eventTypes);
   int _registerProperty(BlaeckString name, uint8_t kind, bool writable, dataType type, void *address,
                         void (*getter)(), uint8_t getterType, uint16_t textSize, BlaeckString options,
@@ -2274,7 +2220,7 @@ private:
   friend class BlaeckDeviceBase;
   friend class BlaeckSignalRefBase;
   friend class BlaeckCommandRefBase;
-  friend class BlaeckEventChannelRef;
+  friend class BlaeckEventRef;
   friend class BlaeckPropertyRefBase;
 };
 
@@ -2391,31 +2337,6 @@ public:
   void clearAllSignals();
 
   /*!
-    @brief   Reports whether any signal could not be added.
-
-    That happens when there wasn't enough RAM for it.
-
-    @return  True if at least one signal was dropped.
-
-    @code
-      if (device.hasRejectedSignals())
-        device.printRejections(&Serial);
-    @endcode
-  */
-  bool hasRejectedSignals() const { return _signalRegistrationFailed; }
-
-  /*!
-    @brief   Returns how many signals could not be added.
-
-    @return  How many were dropped.
-
-    @code
-      Serial.println(device.getRejectedSignalCount());
-    @endcode
-  */
-  uint16_t getRejectedSignalCount() const { return _rejectedSignalCount; }
-
-  /*!
     @brief   The number of signals added. Valid indexes run from 0 to SignalCount - 1.
 
     @note    Read it only. Assigning to it breaks the count.
@@ -2435,8 +2356,8 @@ public:
     sends it on its first call; call this only to send it earlier. If a host asks for
     the device list first, the list reports the restart instead, and this sends nothing.
 
-    The entity list, event channels, commands and signal descriptions follow it, so a
-    host that stayed connected gets them without asking.
+    The entity list and the signal descriptions follow it, so a host that stayed
+    connected gets them without asking.
 
     @code
       device.writeRestarted();
@@ -2502,47 +2423,36 @@ public:
   */
   void writeSignalConfig();
 
-  // ----- Commands -----
+  // ----- Entities -----
 
   /*!
-    @brief   Sends the list of commands the device accepts.
+    @brief   Sends the entity list: every input, sensor, event and button, with each
+             property's current value.
 
-    Typed commands include their kind, range and options, so a host can build a
-    control for each. The device also sends it at startup, after commands change,
-    and when a host sends <BLAECK.WRITE_COMMANDS>.
+    The device also sends it at startup, after the list changes, and when a host
+    sends <BLAECK.WRITE_ENTITIES>, so a sketch rarely needs to call it. With
+    BLAECK_ENABLE_IOT=0 the list goes out empty.
 
     @code
-      device.writeCommands();
+      device.writeEntities();
     @endcode
   */
-  void writeCommands();
+  void writeEntities();
 
   // ----- Events -----
-  // With BLAECK_ENABLE_EVENTS=0 these compile but do nothing.
+  // With BLAECK_ENABLE_IOT=0 these compile but do nothing.
 
   /*!
-    @brief   Removes every event channel and event type, so a new set can be added.
+    @brief   Removes every event and event type, so a new set can be added.
 
-    Both tables keep their size. The new list is sent to the host automatically.
-
-    @code
-      device.clearAllEventChannels();
-      device.addEventChannel(F("Activity"), F("idle_warning,resumed"));
-    @endcode
-  */
-  void clearAllEventChannels();
-
-  /*!
-    @brief   Sends the list of event channels and their types.
-
-    The device also sends it at startup, after the channels change, and when a host
-    sends <BLAECK.WRITE_EVENT_CHANNELS>, so a sketch rarely needs to call it.
+    The tables keep their memory. The new list is sent to the host automatically.
 
     @code
-      device.writeEventChannels();
+      device.clearAllEvents();
+      device.addEvent(F("Activity"), F("idle_warning,resumed"));
     @endcode
   */
-  void writeEventChannels();
+  void clearAllEvents();
 
   // ----- Data Write All -----
 
@@ -2666,7 +2576,7 @@ public:
   void onAnyCommand(BlaeckAnyCommandHandler handler);
 
   /*!
-    @brief   Removes every command, including onAnyCommand().
+    @brief   Removes every command and button, and onAnyCommand().
 
     The table keeps its memory for new ones, and the new list is sent to the host.
 
@@ -2676,29 +2586,6 @@ public:
     @endcode
   */
   void clearAllCommandHandlers();
-
-  /*!
-    @brief   Reports whether any command failed to register.
-
-    @return  True if at least one was dropped.
-
-    @code
-      if (device.hasRejectedCommands())
-        device.printRejections(&Serial);
-    @endcode
-  */
-  bool hasRejectedCommands() const { return _rejectedCommandCount > 0; }
-
-  /*!
-    @brief   Returns how many commands could not be registered.
-
-    @return  How many were dropped.
-
-    @code
-      Serial.println(device.getRejectedCommandCount());
-    @endcode
-  */
-  uint16_t getRejectedCommandCount() const { return _rejectedCommandCount; }
 
   /*!
     @brief   Compares a string in RAM with an F() literal, without copying either.
@@ -2762,36 +2649,6 @@ public:
   // Equality against a stored channel name, whichever memory it lives in.
   static bool _channelNameEquals(const char *stored, bool inFlash, const char *candidate);
   static bool _channelNameEqualsFlash(const char *stored, bool inFlash, const __FlashStringHelper *candidate);
-
-  /*!
-    @brief   Reports whether any event channel or event type could not be added.
-
-    printRejections() or the debug stream says which.
-
-    @return  True if at least one was dropped.
-
-    @code
-      if (device.hasRejectedEventChannels())
-        device.printRejections(&Serial);
-    @endcode
-  */
-  bool hasRejectedEventChannels() const
-  {
-    return _rejectedEventChannelCount > 0 || _rejectedEventTypeCount > 0;
-  }
-  /*!
-    @brief   Returns how many event channels and event types could not be added.
-
-    @return  Channels and types together.
-
-    @code
-      Serial.println(device.getRejectedEventChannelCount());
-    @endcode
-  */
-  uint16_t getRejectedEventChannelCount() const
-  {
-    return (uint16_t)(_rejectedEventChannelCount + _rejectedEventTypeCount);
-  }
 
   /*!
     @brief   Reports rejected declarations, configuration and signal-reporting failures.
@@ -3210,8 +3067,6 @@ protected:
   void writeRestarted(unsigned long messageID);
   void writeDevices(unsigned long messageID);
   void writeSignalConfig(unsigned long messageID);
-  void writeCommands(unsigned long messageID);
-  void writeEventChannels(unsigned long messageID);
 
 #if BLAECK_ENABLE_SIGNAL_META
   void writeSignalConfigFrame(unsigned long MessageID);
@@ -3230,32 +3085,27 @@ protected:
   int _findSignalIndex(byte deviceId, const __FlashStringHelper *signalName);
   bool _addEventType(byte deviceId, const char *channelName, BlaeckString eventType);
   void _writeEvent(byte deviceId, const char *channelName, BlaeckString eventType);
-  // Registers a command and returns its table index, or -1 if it was rejected (counted, and
-  // reported on the debug stream).
-  int _registerCommand(byte deviceId, const char *command, BlaeckCommandHandler handler, uint8_t kind);
-  // Resets an entry's metadata, so registering a name again starts from scratch.
-  void _resetCommandMeta(uint16_t handlerIndex, uint8_t kind);
-  // Adds an event channel and returns its index, or -1 if it was rejected. Adding an existing
+  // Registers a plain command (handler set) or a button (press set) and returns its table
+  // index, or -1 if it was rejected (counted, and reported on the debug stream).
+  int _registerCommand(byte deviceId, const char *command, BlaeckCommandHandler handler, BlaeckButtonFunction press);
+  // Empties an entry, so registering a name again starts from scratch.
+  static void _resetCommand(blaeck_detail::CommandHandlerEntry &e);
+  // Adds an event and returns its index, or -1 if it was rejected. Adding an existing
   // name reuses its slot and keeps its types. Exactly one of channelName and flashName is set;
   // a flash name is kept as a pointer, a RAM name is copied.
   int _registerEventChannel(byte deviceId, const char *channelName, const __FlashStringHelper *flashName, BlaeckString eventTypes);
   // Adds one event type per comma-separated field, in order.
   void _addEventTypesCsv(uint16_t channelIndex, const detail::StoredString &eventTypes);
-#if BLAECK_ENABLE_COMMAND_META
-  void writeCommandsFrame(unsigned long MessageID);
-#endif
   static void _percentDecodeInPlace(char *s);
   static long _flashCsvIndexOf(BlaeckString csv, const char *value);
-  // Number of fields in a comma-separated string. Outside the command-metadata guard
-  // because event channels use it too.
+  // Number of fields in a comma-separated string.
   static uint16_t _flashCsvOptionCount(BlaeckString csv);
 
   // True if any field is empty or only spaces. Such a list is refused, because dropping the
   // field would shift every later field's index.
   static bool _flashCsvHasBlankField(BlaeckString csv);
-#if BLAECK_ENABLE_EVENTS
-  void writeEventChannelsFrame(unsigned long MessageID);
-  // Index of a declared event channel, or -1 when the name was never declared.
+#if BLAECK_ENABLE_IOT
+  // Index of an added event, or -1 when the name was never added.
   int _findEventChannel(byte deviceId, const char *channelName) const;
   int _findEventChannel(byte deviceId, const __FlashStringHelper *channelName) const;
   // Position of an event type within its own channel's list, or -1 when that
@@ -3277,7 +3127,6 @@ protected:
   uint16_t _rejectedStringCount = 0;
   detail::ChunkList<Signal> Signals;
   int _signalIndex = 0;
-  bool _signalRegistrationFailed = false;
   uint16_t _rejectedSignalCount = 0;
   uint16_t _rejectedSignalPolicyCount = 0;
 #if BLAECK_ENABLE_SIGNAL_META
@@ -3361,13 +3210,8 @@ protected:
   static const byte MAX_PARSED_COMMAND_COUNT =
       MAX_COMMAND_NAME_COUNT > MAX_BUILTIN_COMMAND_COUNT ? MAX_COMMAND_NAME_COUNT
                                                          : MAX_BUILTIN_COMMAND_COUNT;
-  // Longest state and event channel names, terminator included. Defined even when those
-  // features are off, because the F() overloads still compile.
-#if defined(__AVR__)
-  static const byte MAX_STATE_NAME_COUNT = 16;
-#else
-  static const byte MAX_STATE_NAME_COUNT = 32;
-#endif
+  // Longest event name, terminator included. Defined even without the IoT part, because
+  // addEvent() still compiles.
 #if defined(__AVR__)
   static const byte MAX_EVENT_NAME_COUNT = 16;
 #else
@@ -3631,7 +3475,6 @@ protected:
   void _writeDeviceRestarted(byte id);
 
   // Set when a catalog has changed since it was last sent; _flushCatalogs() sends it.
-  bool _commandCatalogDirty = false;
 #if BLAECK_ENABLE_SIGNAL_META
   bool _signalConfigDirty = false;
 #endif
@@ -3646,12 +3489,12 @@ protected:
   static byte _dtypeCode(dataType t);
   // Compares a flash string with a RAM string.
   static bool _flashStringEqualsName(const __FlashStringHelper *flashName, const char *name);
-#if BLAECK_ENABLE_EVENTS
+#if BLAECK_ENABLE_IOT
   typedef blaeck_detail::EventChannelEntry EventChannelEntry;
   detail::ChunkList<EventChannelEntry> _eventChannels;
   uint16_t _eventChannelSlots() const { return _eventChannels.capacity(); }
 
-  // One table of event types for all channels. Each entry names its channel; a type's index
+  // One table of event types for all events. Each entry names its channel; a type's index
   // is its position among its channel's entries.
   typedef blaeck_detail::EventTypeEntry EventTypeEntry;
   static const byte WHOLE_STRING = blaeck_detail::WHOLE_STRING;
@@ -3676,13 +3519,11 @@ protected:
   uint16_t _parsedPrefixMsgId = 0;
   // Length of the prefix. The ack's hash covers what follows it.
   uint16_t _parsedPrefixLen = 0;
-#if BLAECK_ENABLE_EVENTS
-  bool _eventCatalogDirty = false;
-#endif
 
   // ── Properties ────────────────────────────────────────────────────
-  // Added in order and never removed, so a property's index is its position in the entity
-  // list, which 0x95 frames carry.
+  // Added in order and never removed, so a property's index is its position among the
+  // properties of the entity list, which 0x95 frames carry. _entityCatalogDirty covers
+  // events and buttons too.
   typedef blaeck_detail::PropertyEntry PropertyEntry;
   detail::ChunkList<PropertyEntry> _properties;
   uint16_t _propertyCount = 0;
@@ -3783,7 +3624,7 @@ protected:
   friend bool blaeck_detail::optionsAccepted(BlaeckString, Print *,
                                              const char *, bool);
   friend class BlaeckCommandRefBase;
-  friend class BlaeckEventChannelRef;
+  friend class BlaeckEventRef;
   friend class BlaeckPropertyRefBase;
   friend class BlaeckBeginRef;
   friend class BlaeckDeviceRef;
@@ -3866,7 +3707,7 @@ inline blaeck_detail::CommandHandlerEntry * BlaeckCommandRefBase::_entry() const
 inline void BlaeckCommandRefBase::_markDirty() const
 {
   if (_owner != nullptr)
-    _owner->_commandCatalogDirty = true;
+    _owner->_entityCatalogDirty = true;
 }
 
 inline void BlaeckSignalRefBase::_setInterval(BlaeckIntervalMode mode, double delta)
@@ -4022,16 +3863,16 @@ inline void BlaeckSignalRefBase::_setNameSuffix(uint8_t suffix)
   _owner->_schemaHash = _owner->_computeSchemaHash();
 }
 
-inline BlaeckEventChannelRef BlaeckEventChannelRef::withIcon(BlaeckString icon)
+inline BlaeckEventRef BlaeckEventRef::withIcon(BlaeckString icon)
 {
-#if BLAECK_ENABLE_EVENTS
+#if BLAECK_ENABLE_IOT
   if (_index >= 0 && _owner != nullptr)
     // Only a real change marks the catalog.
     if (_owner->_eventChannels[_index].icon != icon)
     {
       if (!_owner->_storeString(_owner->_eventChannels[_index].icon, icon))
         return *this;
-      _owner->_eventCatalogDirty = true;
+      _owner->_entityCatalogDirty = true;
     }
 #else
   (void)icon;
@@ -4042,14 +3883,14 @@ inline BlaeckEventChannelRef BlaeckEventChannelRef::withIcon(BlaeckString icon)
   return *this;
 }
 
-inline BlaeckEventChannelRef BlaeckEventChannelRef::diagnostic(bool on)
+inline BlaeckEventRef BlaeckEventRef::diagnostic(bool on)
 {
-#if BLAECK_ENABLE_EVENTS
+#if BLAECK_ENABLE_IOT
   if (_index >= 0 && _owner != nullptr)
     if (_owner->_eventChannels[_index].diagnostic != on)
     {
       _owner->_eventChannels[_index].diagnostic = on;
-      _owner->_eventCatalogDirty = true;
+      _owner->_entityCatalogDirty = true;
     }
 #else
   (void)on;
@@ -4057,15 +3898,15 @@ inline BlaeckEventChannelRef BlaeckEventChannelRef::diagnostic(bool on)
   return *this;
 }
 
-inline BlaeckEventChannelRef BlaeckEventChannelRef::withDeviceClass(BlaeckString deviceClass)
+inline BlaeckEventRef BlaeckEventRef::withDeviceClass(BlaeckString deviceClass)
 {
-#if BLAECK_ENABLE_EVENTS
+#if BLAECK_ENABLE_IOT
   if (_index >= 0 && _owner != nullptr)
     if (_owner->_eventChannels[_index].deviceClass != deviceClass)
     {
       if (!_owner->_storeString(_owner->_eventChannels[_index].deviceClass, deviceClass))
         return *this;
-      _owner->_eventCatalogDirty = true;
+      _owner->_entityCatalogDirty = true;
     }
 #else
   (void)deviceClass;
@@ -4073,14 +3914,14 @@ inline BlaeckEventChannelRef BlaeckEventChannelRef::withDeviceClass(BlaeckString
   return *this;
 }
 
-inline BlaeckEventChannelRef BlaeckEventChannelRef::disabledByDefault(bool on)
+inline BlaeckEventRef BlaeckEventRef::disabledByDefault(bool on)
 {
-#if BLAECK_ENABLE_EVENTS
+#if BLAECK_ENABLE_IOT
   if (_index >= 0 && _owner != nullptr)
     if (_owner->_eventChannels[_index].disabledByDefault != on)
     {
       _owner->_eventChannels[_index].disabledByDefault = on;
-      _owner->_eventCatalogDirty = true;
+      _owner->_entityCatalogDirty = true;
     }
 #else
   (void)on;

@@ -1,13 +1,10 @@
 /*
-  EventChannels.ino
+  Events.ino
 
-  Every kind of metadata an event channel can carry, one channel each, to compare how a
-  dashboard renders them.
+  Every kind of metadata an event can carry, one event each, to compare how a dashboard
+  renders them.
   An event is an occurrence, not a state: it carries no value and nothing to switch off again,
-  which is what separates it from a bool signal.
-
-  This sketch declares four event channels and ten types, which is why the begin() chain below
-  asks for them - on a small AVR the defaults would hold two channels and eight types.
+  which is what separates it from a bool sensor.
 
   What to look for once it is logging:
     Doorbell    device class doorbell, which requires a "ring" type - see the note below
@@ -30,7 +27,7 @@
 #define USE_TCP 0  // 0: Serial, 1: TCP
 #endif
 
-#define HOST_NAME "EventChannels"
+#define HOST_NAME "Events"
 
 #if USE_TCP
 // #define NETWORK_WITH_SERVICES  // Optional OTA and Bonjour; see WaveformGenerator/README.md.
@@ -40,8 +37,8 @@ NetworkSetup::Server server(23);
 
 Blaeck device;
 
-// Set true to declare a type only some builds have, to show addEventType() appending to a
-// channel whose list is not fully known at compile time.
+// Set true to declare a type only some builds have, to show addEventType() appending to an
+// event whose list is not fully known at compile time.
 #define HAS_OVERHEAT_SENSOR true
 
 // Signals retain pointers to these variables, so keep them alive for the device's lifetime.
@@ -74,33 +71,32 @@ void setup()
 
   // A doorbell must be able to report "ring". Home Assistant warns about a doorbell without it
   // today and stops accepting one in 2027.4.
-  device.addEventChannel(F("Doorbell"), F("ring"))
+  device.addEvent(F("Doorbell"), F("ring"))
       .withIcon(F("mdi:doorbell"))
       .withDeviceClass(F("doorbell"));
 
   // Home Assistant publishes standard names for a button, and says none of them are required:
   // declare only the interactions the hardware can actually produce. These four are a press
   // and a hold, each with a start and an end.
-  device.addEventChannel(F("Button"),
-                         F("press_start,press_end,long_press_start,long_press_end"))
+  device.addEvent(F("Button"), F("press_start,press_end,long_press_start,long_press_end"))
       .withIcon(F("mdi:gesture-tap-button"))
       .withDeviceClass(F("button"));
 
-  // A device class does not fix the type names - only doorbell requires one. A motion channel
+  // A device class does not fix the type names - only doorbell requires one. A motion event
   // reports whatever it declares.
-  device.addEventChannel(F("Motion"), F("motion_detected,motion_cleared"))
+  device.addEvent(F("Motion"), F("motion_detected,motion_cleared"))
       .withDeviceClass(F("motion"));
 
-  // No device class: a plain event channel, filed under Diagnostic and switched off until
+  // No device class: a plain event, filed under Diagnostic and switched off until
   // someone enables it.
-  device.addEventChannel(F("System"), F("started,config_changed"))
+  device.addEvent(F("System"), F("started,config_changed"))
       .withIcon(F("mdi:cog"))
       .diagnostic()
       .disabledByDefault();
 
-  // addEventType() appends to a channel already declared, for a list that is not fully known
+  // addEventType() appends to an event already declared, for a list that is not fully known
   // at compile time. It is the only way to build one conditionally: the types passed to
-  // addEventChannel() are a flash literal, so they cannot be assembled at runtime.
+  // addEvent() are a flash literal, so they cannot be assembled at runtime.
   if (HAS_OVERHEAT_SENSOR)
     device.addEventType(F("System"), F("overheated"));
 
@@ -152,8 +148,8 @@ void FireEvents()
     break;
   }
 
-  // A type the channel never declared is dropped by the device: writeEvent() resolves the name
-  // against the 0x80 catalog and sends nothing when it does not match.
+  // A type the event never declared is dropped by the device: writeEvent() looks the name up
+  // among the declared types and sends nothing when it does not match.
   // device.writeEvent(F("Motion"), F("motion_maybe"));
 
   if (sentEvent)

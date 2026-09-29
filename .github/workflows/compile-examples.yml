@@ -74,7 +74,7 @@ jobs:
             compile examples/more/ESP32C6BugBoard
             exit 0
           fi
-          for ex in Basic Signals Commands Properties EventChannels WriteModes WaveformGenerator; do
+          for ex in Basic Signals Commands Properties Events WriteModes WaveformGenerator; do
             compile "examples/$ex"
           done
           if [ "$TRANSPORT" = serial ]; then

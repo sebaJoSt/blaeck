@@ -159,7 +159,7 @@ Leave `USE_TCP` at `0` for Serial or set it to `1` for TCP and configure the inc
 Using `NetworkSetup.h` is optional. You can use your own networking libraries and setup instead.
 
 Start with **Basic**, then **Signals** and **Commands**. Follow with **Properties** and
-**EventChannels**, then **WaveformGenerator** to see the pieces working together.
+**Events**, then **WaveformGenerator** to see the pieces working together.
 
 | Example | What it teaches |
 |---|---|
@@ -167,7 +167,7 @@ Start with **Basic**, then **Signals** and **Commands**. Follow with **Propertie
 | [Signals](examples/Signals) | Numeric, boolean and text signals, metadata, and numbered arrays |
 | [Commands](examples/Commands) | Plain commands and buttons |
 | [Properties](examples/Properties) | Inputs a host sets and sensors it shows, without logging them |
-| [EventChannels](examples/EventChannels) | Declaring and reporting occurrences |
+| [Events](examples/Events) | Declaring and reporting occurrences |
 | [WaveformGenerator](examples/WaveformGenerator) | A complete, controllable waveform dashboard |
 | [WriteModes](examples/WriteModes) | Interval, on-change, and explicit signal writes |
 | [more / ConfigurableSignals](examples/more/ConfigurableSignals) | Choose which signals to log through commands and save the selection in EEPROM |

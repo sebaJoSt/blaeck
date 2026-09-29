@@ -1,9 +1,9 @@
 /*
   EventTest.ino
 
-  Every way an event channel can be declared and every way an event can fail to be sent.
+  Every way an event can be declared and every way an event can fail to be sent.
 
-  An event is fire and forget: a channel or type that was never declared is dropped in
+  An event is fire and forget: an event or type that was never declared is dropped in
   silence, and an event names both by position rather than by name, so the catalog has
   to reach the host first. Nothing about a lost event is visible from the sketch, which
   is what makes a driver on the other end of the port necessary.
@@ -87,21 +87,21 @@ void setup()
 
   device.addSignal(F("Uptime"), &Uptime).withUnit(F("s"));
 
-  // Plain, and the channel the driver sends most of its events to.
-  device.addEventChannel(F("Activity"), F("idle,resumed,stopped"));
+  // Plain, and the event the driver sends most of its events to.
+  device.addEvent(F("Activity"), F("idle,resumed,stopped"));
 
-  device.addEventChannel(F("Faults"), F("brownout,watchdog"))
+  device.addEvent(F("Faults"), F("brownout,watchdog"))
       .withIcon(F("mdi:alert"))
       .diagnostic();
 
-  device.addEventChannel(F("Doorbell"), F("ring"))
+  device.addEvent(F("Doorbell"), F("ring"))
       .withDeviceClass(F("doorbell"));
 
   // Declared but switched off until a host enables it.
-  device.addEventChannel(F("Rare"), F("seen"))
+  device.addEvent(F("Rare"), F("seen"))
       .disabledByDefault();
 
-  // Fixed triggers rather than one command taking a channel and a type: writeEvent()'s type
+  // Fixed triggers rather than one command taking an event and a type: writeEvent()'s type
   // has to be a flash literal, so there is nothing a runtime string could be passed to.
   device.onCommand("E_ok", onFireOk);
   device.onCommand("E_appended", onFireAppended);
@@ -182,18 +182,17 @@ void RunLocalChecks()
   bool appended = false;
   if (HasOptionalHardware)
     appended = device.addEventType(F("Faults"), F("overheat"));
-  Check(F("addEventType appends to a declared channel"), appended);
+  Check(F("addEventType appends to a declared event"), appended);
 
   Check(F("a duplicate type is refused"), !device.addEventType(F("Faults"), F("overheat")));
   Check(F("a blank type is refused"), !device.addEventType(F("Faults"), F("")));
-  Check(F("a type on an unknown channel is refused"), !device.addEventType(F("Nope"), F("x")));
+  Check(F("a type on an unknown event is refused"), !device.addEventType(F("Nope"), F("x")));
 
   // Two of the three refusals are counted, not three: a duplicate is already there, so it
-  // is ignored rather than dropped. The count covers channels and types together despite
-  // its name, so a number above two would be a channel that failed to register - a table
-  // sized too small - and there is no accessor that separates the two.
-  Check(F("both dropped types are counted, and nothing else"), device.getRejectedEventChannelCount() == 2);
-  Check(F("the flag is set, by those two"), device.hasRejectedEventChannels());
+  // is ignored rather than dropped. The summary must read "2 event type registrations
+  // rejected." and name nothing else.
+  Check(F("the dropped types are rejections"), device.hasRejections());
+  device.printRejections(&Serial);
 
   Serial.print(F("---- "));
   Serial.print(checks - failures);

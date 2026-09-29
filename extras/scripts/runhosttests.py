@@ -24,11 +24,8 @@ def main():
         subprocess.run([str(exe)], check=True, timeout=20)
         for defines, name in (
             (["-DBLAECK_TEST_SEPARATE_FLASH=1", "-Werror"], "separate-flash"),
-            (["-DBLAECK_TEST_SEPARATE_FLASH=1", "-Werror",
-              "-DBLAECK_ENABLE_COMMAND_META=0", "-DBLAECK_ENABLE_EVENTS=0",
-              "-DBLAECK_TEST_REPORTING_ONLY=1"], "flash-features-off"),
-            (["-DBLAECK_TEST_SEPARATE_FLASH=1", "-Werror", "-DBLAECK_ENABLE_COMMAND_META=0",
-              "-DBLAECK_TEST_REPORTING_ONLY=1"], "flash-command-meta-off"),
+            (["-DBLAECK_TEST_SEPARATE_FLASH=1", "-Werror", "-DBLAECK_ENABLE_IOT=0",
+              "-DBLAECK_TEST_REPORTING_ONLY=1"], "flash-iot-off"),
         ):
             flash_command = command[:]
             flash_command[1:1] = defines
