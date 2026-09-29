@@ -901,17 +901,23 @@ bool blaeck_detail::optionsAccepted(BlaeckString optionsCsv, Print *debug,
 // Store a value in a signal, converted to the signal's declared type. There are three
 // because no one C++ type holds all the others: a double on AVR is 4 bytes and can't hold a
 // long. False if there is no such signal, or it holds text.
+//
+// The integer cases go through the fixed-width type the protocol names, not the C++ one: a
+// board's int is registered as Blaeck_long, which is four bytes, while long on a 64-bit host
+// is eight. Writing through a long* there ran four bytes past a variable the size it says.
 #define BLAECK_STORE_CASES(v)                                                                  \
   switch (Signals[signalIndex].DataType)                                                       \
   {                                                                                            \
   case (Blaeck_bool):   *((bool *)Signals[signalIndex].Address)           = ((v) != 0); break; \
   case (Blaeck_byte):   *((byte *)Signals[signalIndex].Address)           = (byte)(v); break;  \
-  case (Blaeck_short):  *((short *)Signals[signalIndex].Address)          = (short)(v); break; \
-  case (Blaeck_ushort): *((unsigned short *)Signals[signalIndex].Address) = (unsigned short)(v); break; \
-  case (Blaeck_int):    *((int *)Signals[signalIndex].Address)            = (int)(v); break;   \
-  case (Blaeck_uint):   *((unsigned int *)Signals[signalIndex].Address)   = (unsigned int)(v); break; \
-  case (Blaeck_long):   *((long *)Signals[signalIndex].Address)           = (long)(v); break;  \
-  case (Blaeck_ulong):  *((unsigned long *)Signals[signalIndex].Address)  = (unsigned long)(v); break; \
+  case (Blaeck_short): case (Blaeck_int):                                                      \
+    { int16_t x = (int16_t)(v); memcpy(Signals[signalIndex].Address, &x, 2); } break;          \
+  case (Blaeck_ushort): case (Blaeck_uint):                                                    \
+    { uint16_t x = (uint16_t)(v); memcpy(Signals[signalIndex].Address, &x, 2); } break;        \
+  case (Blaeck_long):                                                                          \
+    { int32_t x = (int32_t)(v); memcpy(Signals[signalIndex].Address, &x, 4); } break;          \
+  case (Blaeck_ulong):                                                                         \
+    { uint32_t x = (uint32_t)(v); memcpy(Signals[signalIndex].Address, &x, 4); } break;        \
   case (Blaeck_float):  *((float *)Signals[signalIndex].Address)          = (float)(v); break; \
   case (Blaeck_double): *((double *)Signals[signalIndex].Address)         = (double)(v); break;\
   case (Blaeck_longlong): *((long long *)Signals[signalIndex].Address)    = (long long)(v); break; \
@@ -2709,19 +2715,19 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
     {
     case (Blaeck_bool):   boolCvt.val  = *((bool *)signal.Address);           _emitBytes(boolCvt.bval, 1);  break;
     case (Blaeck_byte):   _emitByte(*((byte *)signal.Address));                                              break;
-    case (Blaeck_short):  shortCvt.val = *((short *)signal.Address);          _emitBytes(shortCvt.bval, 2); break;
-    case (Blaeck_ushort): ushortCvt.val = *((unsigned short *)signal.Address); _emitBytes(ushortCvt.bval, 2); break;
-    case (Blaeck_int):    intCvt.val   = *((int *)signal.Address);            _emitBytes(intCvt.bval, 2);   break;
-    case (Blaeck_uint):   uintCvt.val  = *((unsigned int *)signal.Address);   _emitBytes(uintCvt.bval, 2);  break;
-    case (Blaeck_long):   lngCvt.val   = *((long *)signal.Address);           _emitBytes(lngCvt.bval, 4);   break;
-    case (Blaeck_ulong):  ulngCvt.val  = *((unsigned long *)signal.Address);  _emitBytes(ulngCvt.bval, 4);  break;
-    case (Blaeck_float):  fltCvt.val   = *((float *)signal.Address);          _emitBytes(fltCvt.bval, 4);   break;
-    case (Blaeck_double): dblCvt.val   = *((double *)signal.Address);         _emitBytes(dblCvt.bval, 8);   break;
+    // Read at the width the protocol names, as the snapshot branch above already does: a
+    // board's int is registered as Blaeck_long, four bytes, and reading it through a long*
+    // on a 64-bit host took eight. Every target is little-endian, so the bytes are the value.
+    case (Blaeck_short): case (Blaeck_ushort):
+    case (Blaeck_int): case (Blaeck_uint):
+    case (Blaeck_long): case (Blaeck_ulong):
+    case (Blaeck_float): case (Blaeck_double):
     case (Blaeck_longlong):
     {
       byte bytes[8];
-      memcpy(bytes, signal.Address, 8);
-      _emitBytes(bytes, 8);
+      const size_t size = _signalValueSize(signal.DataType);
+      memcpy(bytes, signal.Address, size);
+      _emitBytes(bytes, size);
       break;
     }
     case (Blaeck_string):

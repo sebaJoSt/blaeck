@@ -419,6 +419,26 @@ def prose_mismatches(tu, derived, base):
             if name in docs[base] and prose(c.raw_comment) != prose(docs[base][name].raw_comment)]
 
 
+def project_root(path):
+    """The library the given header belongs to: the nearest ancestor holding
+    library.properties, or its own directory if there is none."""
+    here = os.path.dirname(os.path.abspath(path))
+    while True:
+        if os.path.exists(os.path.join(here, "library.properties")):
+            return here
+        up = os.path.dirname(here)
+        if up == here:
+            return os.path.dirname(os.path.abspath(path))
+        here = up
+
+
+def inside(path, root):
+    try:
+        return not os.path.relpath(_norm(path), _norm(root)).startswith(os.pardir)
+    except ValueError:  # a different drive on Windows
+        return False
+
+
 def main(argv):
     extra = argv[argv.index("--") + 1:] if "--" in argv else []
     own = argv[:argv.index("--")] if "--" in argv else argv
@@ -439,11 +459,28 @@ def main(argv):
         print("%s: %s; check the supplied clang arguments" % (paths[0], error),
               file=sys.stderr)
         return 1
-    errors = [d for d in tu.diagnostics if d.severity >= ci.Diagnostic.Error]
+    # Only the library's own errors are the library's problem. A host standard library
+    # that will not parse as C++11 is the host's: libclang on Windows aims at MSVC by
+    # default, whose <string> needs a later standard, and failing on that reports
+    # nothing about this header while making the check unrunnable off Linux. The parse
+    # continues either way - -ferror-limit=0 - and an error that does reach this header
+    # is still caught below.
+    root = project_root(paths[0])
+    errors, foreign = [], 0
+    for d in tu.diagnostics:
+        if d.severity < ci.Diagnostic.Error:
+            continue
+        where = d.location.file.name if d.location.file else None
+        if where is None or inside(where, root):
+            errors.append(d)
+        else:
+            foreign += 1
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
         return 1
+    if foreign:
+        print("%d error(s) in headers outside %s, ignored." % (foreign, root), file=sys.stderr)
 
     if "--extract" in argv:
         # No destination to pass. The generated sketch does #include "preamble.h",

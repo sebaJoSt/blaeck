@@ -1770,8 +1770,8 @@ public:
 
     @param   name   The button's name, unique on the board among inputs, sensors,
                     buttons and commands. It can't start with `#` or `BLAECK.`.
-    @param   press  Called on each press. For fixed arguments, a lambda:
-                    `[]() { activateRange(1, 40); }`.
+    @param   press  Called on each press. A lambda binds fixed arguments, so one
+                    function can serve several buttons.
     @return  A handle for describing how a host shows the button.
 
     @code
