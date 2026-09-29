@@ -26,7 +26,7 @@ void onSetPumpSpeed(const char *command, const char *const *params, byte paramCo
 void setup()
 {
   Serial.begin(115200);
-  device.begin(Serial).withDevices(1);
+  device.begin(Serial);
   device.DeviceName = "Greenhouse";
 
   pump = device.addDevice(F("Pump controller"))
@@ -148,8 +148,7 @@ board kept running. Your sketch has to notice the restart; an uptime the device 
 simplest way. Send the device's values again afterwards, since they may be back at their
 defaults.
 
-## Table size and memory
+## Memory
 
-`withDevices()` on the `begin()` chain sets how many devices fit; the default depends on the
-board, 4 on a Mega, and at most 254. On AVR each device takes 13 bytes of SRAM plus the names it
+A board holds at most 254 devices. On AVR each device takes 13 bytes of SRAM plus the names it
 copies, and each signal, command and channel carries one byte for its device.

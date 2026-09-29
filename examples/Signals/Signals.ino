@@ -57,10 +57,10 @@ void setup()
 #if USE_TCP
   networkBegin(23);
   server.begin();
-  device.begin(server).withSignals(5 + SINE_COUNT)
+  device.begin(server)
       .withDebugStream(&device.Terminal);
 #else
-  device.begin(Serial).withSignals(5 + SINE_COUNT);
+  device.begin(Serial);
 #endif
 
   device.DeviceName = HOST_NAME;

@@ -88,10 +88,7 @@ void setup()
   Serial.begin(115200);
 
   // Sized explicitly for the six commands and two state channels this example declares.
-  device.begin(Serial)
-      .withSignals(MAXIMUM_SIGNALS)
-      .withCommands(6)
-      .withStateChannels(2);
+  device.begin(Serial);
 
   device.DeviceName = "ConfigurableSignals";
   device.DeviceFWVersion = FW_VERSION;

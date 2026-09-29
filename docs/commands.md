@@ -182,7 +182,7 @@ device.onNumberCommand("SET_OFFSET", onSetOffset)
 `writeCommandState()` sends it, and `command` is the name the handler was already given.
 Without that call the value is only sent when a host asks for it.
 
-The channel costs a slot in the state channel table - see [State channels](state-channels.md).
+The channel takes RAM like any state channel - see [State channels](state-channels.md).
 
 The other way is to report on a signal:
 

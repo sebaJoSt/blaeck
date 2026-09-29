@@ -6,7 +6,7 @@ unsigned long Uptime = 0;
 void setup()
 {
   Serial.begin(115200);
-  Device.begin(Serial).withSignals(1);
+  Device.begin(Serial);
   Device.addSignal(F("Uptime"), &Uptime);
 }
 

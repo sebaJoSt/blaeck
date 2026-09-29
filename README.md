@@ -50,7 +50,7 @@ long pressure;
 void setup()
 {
   Serial.begin(115200);
-  device.begin(Serial).withSignals(2);
+  device.begin(Serial);
 
   device.DeviceName = "Weather Station";
 
@@ -96,7 +96,7 @@ void setup()
   }
 
   server.begin();
-  device.begin(server).withSignals(2).withDebugStream(&Serial);
+  device.begin(server).withDebugStream(&Serial);
 
   device.DeviceName = "Weather Station";
 
@@ -122,7 +122,7 @@ Three calls do the work:
 - `begin(Serial)` hands blaeck the serial port you opened. On a board with more than one
   port you can pass `Serial1` instead. For TCP, `begin(server)` takes the listening server
   you started. Call `begin()` only once per instance, normally in `setup()`; even
-  `end()` does not allow another call. `.withSignals(2)` reserves room for two signals.
+  `end()` does not allow another call.
 - `addSignal(...)` registers a variable. blaeck keeps a pointer to it and reads it
   whenever it sends data, so you only have to keep the variable up to date.
 - `tick()` reads incoming commands and sends the values when they are due. Call it in every
@@ -145,7 +145,7 @@ and the optional TelnetStream setup.
 | [Events](docs/events.md) | Reporting that something happened |
 | [Devices](docs/devices.md) | Showing a second board, or a part of this one, as its own device |
 | [Sending data](docs/sending-data.md) | Intervals, sending it yourself, timestamps, buffered writes |
-| [Configuration](docs/configuration.md) | Table sizes and compile-time settings |
+| [Configuration](docs/configuration.md) | Tables, memory and compile-time settings |
 | [Networking](docs/network.md) | Servers, client limits, terminal output and transport errors |
 
 ## Examples
@@ -188,8 +188,8 @@ ones:
 | BlaeckSerial / BlaeckTCP 6.0.1 | blaeck |
 |---|---|
 | `#include <BlaeckSerial.h>` and `BlaeckSerial BlaeckSerial;` | `#include <Blaeck.h>` and `Blaeck device;` |
-| `BlaeckSerial.begin(&Serial, 2)` | `device.begin(Serial).withSignals(2)` |
-| `BlaeckTCP.begin(clients, &Serial, 2, port)` | Start the server yourself, then `device.begin(server).withClients(clients).withSignals(2)`. Add `.withDebugStream(&Serial)` for debug output |
+| `BlaeckSerial.begin(&Serial, 2)` | `device.begin(Serial)`. Tables grow as entries are added |
+| `BlaeckTCP.begin(clients, &Serial, 2, port)` | Start the server yourself, then `device.begin(server).withClients(clients)`. Add `.withDebugStream(&Serial)` for debug output |
 | `update()`, `markSignalUpdated()`, `writeUpdatedData()`, `timedWrite…()` | `write()` sends a value at once; `writeAtInterval()` and `writeOnChange()` choose when each signal is sent. See [Sending data](docs/sending-data.md) |
 | `setIntervalMs()` | Removed. The host sets the interval with `BLAECK.ACTIVATE` |
 | `deleteSignals()` | `clearAllSignals()` |

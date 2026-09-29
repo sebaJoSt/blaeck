@@ -235,13 +235,7 @@ void setup()
   // writer warn, and that warning used to land inside the open 0xA0 frame - costing four
   // controls and mangling a fifth. Keeping the two streams the same is what would catch it
   // coming back.
-  device.begin(Serial)
-      .withSignals(3)
-      .withCommands(15)
-      // Every withOwnState() below claims a channel of its own, on top of the two declared
-      // outright - a command's state is a state channel like any other.
-      .withStateChannels(8)
-      .withDebugStream(&Serial);
+  device.begin(Serial).withDebugStream(&Serial);
 
   device.DeviceName = "Command Test";
   device.DeviceHWVersion = HARNESS_BOARD;

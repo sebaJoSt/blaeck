@@ -62,7 +62,7 @@ void setup()
   }
 
   server.begin();
-  device.begin(server).withSignals(1);
+  device.begin(server);
 
   device.DeviceName = HOST_NAME;
   device.DeviceFWVersion = "1.0";

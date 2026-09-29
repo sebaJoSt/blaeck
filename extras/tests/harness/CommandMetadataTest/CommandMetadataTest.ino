@@ -147,9 +147,6 @@ void setup()
   Serial.begin(115200);
 
   device.begin(Serial)
-      .withSignals(2)
-      .withCommands(29)
-      .withStateChannels(3)
       .withDebugStream(&Serial);
 
   device.DeviceName = "Command Metadata Test";

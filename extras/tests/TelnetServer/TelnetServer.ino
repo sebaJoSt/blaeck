@@ -12,7 +12,7 @@ void setup()
 {
   // Compile fixture: actual use must bring the network up before starting the server.
   TelnetPrint.begin();
-  device.begin(TelnetPrint).withClients(2).withSignals(1);
+  device.begin(TelnetPrint).withClients(2);
   device.addSignal(F("Uptime"), &Uptime);
 }
 

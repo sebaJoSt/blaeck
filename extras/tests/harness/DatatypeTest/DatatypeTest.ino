@@ -84,7 +84,7 @@ void setup()
   Serial.begin(115200);
 
   // Initialize blaeck
-  device.begin(Serial).withSignals(27);
+  device.begin(Serial);
 
   // Used by Loggbok to identify the device
   device.DeviceName = "Datatype Test";

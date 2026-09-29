@@ -37,7 +37,7 @@ void setup()
   // with it on is too high.
   // sht31.heater(true);
 
-  device.begin(Serial).withSignals(2);
+  device.begin(Serial);
 
   device.DeviceName = "SHT31TempHumiditySensor";
   device.DeviceFWVersion = "1.0";

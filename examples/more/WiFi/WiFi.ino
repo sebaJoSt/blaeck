@@ -98,7 +98,6 @@ void setup()
   server.begin();
   device.begin(server)
       .withClients(MAX_CLIENTS)
-      .withSignals(2)
       .withDebugStream(&device.Terminal);
 
   device.DeviceName = HOST_NAME;

@@ -135,13 +135,7 @@ void setup()
   Serial.begin(115200);
   pumpLink.begin(9600);
 
-  device.begin(Serial)
-      .withSignals(3)
-      .withCommands(1)
-      .withStateChannels(2)
-      .withEventChannels(1)
-      .withEventTypes(1)
-      .withDevices(1);
+  device.begin(Serial);
 
   device.DeviceName = "Greenhouse";
   device.DeviceFWVersion = "1.0";

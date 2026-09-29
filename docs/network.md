@@ -22,15 +22,14 @@ void setup()
   server.begin();
   device.begin(server)
       .withClients(4)
-      .withSignals(50)
       .withDebugStream(&device.Terminal);
 }
 ```
 
 `withClients()` sets how many connections are accepted at once, hosts and terminals
 together; the default is 4. Each connection takes a receive buffer, 128 bytes on a Mega. A
-connection beyond the limit is closed straight away. Like the table sizes, the number is
-fixed once the first `read()` or `tick()` has run.
+connection beyond the limit is closed straight away. The number is fixed once the first
+`read()` or `tick()` has run.
 
 The server must outlive its attachment to the device. Only one consumer may accept clients from
 it. Separate Blaeck objects can use separate servers, with independent client slots,

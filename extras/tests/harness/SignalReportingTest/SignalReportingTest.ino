@@ -135,7 +135,7 @@ void onTest(const char *, const char *const *params, byte count)
 void setup()
 {
   Serial.begin(115200);
-  device.begin(Serial).withSignals(9).withCommands(1);
+  device.begin(Serial);
   device.DeviceName = "Signal Reporting Test";
   device.DeviceFWVersion = "1";
   device.setTimestampMode(BLAECK_MICROS);

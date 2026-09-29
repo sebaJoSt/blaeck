@@ -90,24 +90,9 @@ Blaeck::Blaeck()
 Blaeck::~Blaeck()
 {
   end();
-  // Free what the entries own before the table, which holds the pointers.
+  // Free what the entries own before the tables, which hold the pointers. The tables free
+  // their chunks when they are destroyed.
   _freeSignalOwned();
-  delete[] Signals;
-  Signals = nullptr;
-  delete[] _commandHandlers;
-  _commandHandlers = nullptr;
-  delete[] _devices;
-  _devices = nullptr;
-#if BLAECK_ENABLE_STATE_CHANNELS
-  delete[] _stateChannels;
-  _stateChannels = nullptr;
-#endif
-#if BLAECK_ENABLE_EVENTS
-  delete[] _eventChannels;
-  _eventChannels = nullptr;
-  delete[] _eventTypes;
-  _eventTypes = nullptr;
-#endif
   _bufFree();
 }
 
@@ -168,14 +153,8 @@ if (_eventCatalogDirty)
 
 void Blaeck::_resetSignalCatalog()
 {
-  // Free first: _freeSignalOwned() needs _signalCapacity to still match the table.
-  if (Signals != nullptr)
-  {
-    _freeSignalOwned();
-    delete[] Signals;
-    Signals = nullptr;
-  }
-  _signalCapacity = DEFAULT_SIGNALS;
+  // The table keeps its chunks; only what the entries own is freed.
+  _freeSignalOwned();
   _signalIndex = 0;
   SignalCount = 0;
   _schemaHash = 0;
@@ -185,9 +164,6 @@ void Blaeck::_resetSignalCatalog()
 #if BLAECK_ENABLE_SIGNAL_META
   _rejectedSignalMetaCount = 0;
 #endif
-
-  // No table is allocated here; each is allocated by its first entry, so the begin() chain
-  // can still change the sizes.
 }
 
 bool Blaeck::hasRejections() const
@@ -212,17 +188,13 @@ bool Blaeck::hasRejections() const
   return false;
 }
 
-void Blaeck::_printRejectionLine(Print *out, const __FlashStringHelper *what,
-                                       uint16_t dropped,
-                                       unsigned int capacity)
+void Blaeck::_printRejectionLine(Print *out, const __FlashStringHelper *what, uint16_t dropped)
 {
   out->print(F("  "));
   out->print(dropped);
   out->print(F(" "));
   out->print(what);
-  out->print(F(" registrations rejected; table capacity: "));
-  out->print(capacity);
-  out->println(F("."));
+  out->println(F(" registrations rejected."));
 }
 
 bool Blaeck::printRejections(Print *out)
@@ -244,27 +216,22 @@ bool Blaeck::printRejections(Print *out)
     out->println(F(" signal reporting configuration/storage failure(s); enable withDebugStream() for details."));
   }
   if (_rejectedSignalCount > 0)
-    _printRejectionLine(out, F("signal"), _rejectedSignalCount,
-                        _signalCapacity);
+    _printRejectionLine(out, F("signal"), _rejectedSignalCount);
   if (_rejectedCommandCount > 0)
-    _printRejectionLine(out, F("command"), _rejectedCommandCount,
-                        _commandCapacity);
+    _printRejectionLine(out, F("command"), _rejectedCommandCount);
   if (_rejectedDeviceCount > 0)
-    _printRejectionLine(out, F("device"), _rejectedDeviceCount, _deviceCapacity);
+    _printRejectionLine(out, F("device"), _rejectedDeviceCount);
 #if BLAECK_ENABLE_STATE_CHANNELS
   if (_rejectedStateChannelCount > 0)
-    _printRejectionLine(out, F("state channel"),
-                        _rejectedStateChannelCount, _stateChannelCapacity);
+    _printRejectionLine(out, F("state channel"), _rejectedStateChannelCount);
 #endif
 #if BLAECK_ENABLE_EVENTS
   if (_rejectedEventChannelCount > 0)
-    _printRejectionLine(out, F("event channel"),
-                        _rejectedEventChannelCount, _eventChannelCapacity);
+    _printRejectionLine(out, F("event channel"), _rejectedEventChannelCount);
   if (_rejectedEventTypeCount > 0)
-    _printRejectionLine(out, F("event type"),
-                        _rejectedEventTypeCount, _eventTypeCapacity);
+    _printRejectionLine(out, F("event type"), _rejectedEventTypeCount);
 #endif
-  out->println(F("  Possible causes include full tables, invalid or conflicting names, "
+  out->println(F("  Possible causes include invalid or conflicting names, "
                  "invalid event types, or insufficient memory."));
   out->println(F("  Enable withDebugStream() before registration for details."));
 #if BLAECK_ENABLE_SIGNAL_META
@@ -281,196 +248,29 @@ bool Blaeck::printRejections(Print *out)
   return true;
 }
 
-void Blaeck::_setTableCapacity(TableId table, unsigned int count)
+void Blaeck::_warnNoRoom(const __FlashStringHelper *what, const char *droppedName)
 {
-  // The table this size is for, and whether it already exists.
-  const void *existing = nullptr;
-  const __FlashStringHelper *chainCall = nullptr;
-  switch (table)
-  {
-  case TABLE_SIGNALS:
-    existing = Signals;
-    chainCall = F("withSignals");
-    break;
-#if BLAECK_ENABLE_STATE_CHANNELS
-  case TABLE_STATE_CHANNELS:
-    existing = _stateChannels;
-    chainCall = F("withStateChannels");
-    break;
-#endif
-#if BLAECK_ENABLE_EVENTS
-  case TABLE_EVENT_CHANNELS:
-    existing = _eventChannels;
-    chainCall = F("withEventChannels");
-    break;
-  case TABLE_EVENT_TYPES:
-    existing = _eventTypes;
-    chainCall = F("withEventTypes");
-    break;
-#endif
-  case TABLE_COMMANDS:
-    existing = _commandHandlers;
-    chainCall = F("withCommands");
-    break;
-  case TABLE_DEVICES:
-    existing = _devices;
-    chainCall = F("withDevices");
-    break;
-  default:
-    return;
-  }
-
-  // A table's size is fixed once it exists.
-  if (existing != nullptr)
-  {
-    if (_debugStream != nullptr)
-    {
-      _debugStream->print(F("Too late for BLAECK."));
-      _debugStream->print(chainCall);
-      _debugStream->println(F("(): that table already exists. Move the call up, "
-                              "before the first entry is added to it."));
-    }
-    return;
-  }
-
-  // Capped at MAX_TABLE_ENTRIES, with a warning.
-  if (count > MAX_TABLE_ENTRIES && _debugStream != nullptr)
-  {
-    _debugStream->print(F("BLAECK."));
-    _debugStream->print(chainCall);
-    _debugStream->print(F("("));
-    _debugStream->print(count);
-    _debugStream->print(F("): clamped to "));
-    _debugStream->print(MAX_TABLE_ENTRIES);
-    _debugStream->println(F(", which is the most this table can hold."));
-  }
-
-  switch (table)
-  {
-  case TABLE_SIGNALS:
-    // Also capped for signals, because _signalIndex is an int, 16-bit on AVR.
-    _signalCapacity = (count > MAX_TABLE_ENTRIES) ? MAX_TABLE_ENTRIES : (uint16_t)count;
-    break;
-#if BLAECK_ENABLE_STATE_CHANNELS
-  case TABLE_STATE_CHANNELS:
-    _stateChannelCapacity = (count > MAX_TABLE_ENTRIES) ? MAX_TABLE_ENTRIES : (uint16_t)count;
-    break;
-#endif
-#if BLAECK_ENABLE_EVENTS
-  case TABLE_EVENT_CHANNELS:
-    _eventChannelCapacity = (count > MAX_TABLE_ENTRIES) ? MAX_TABLE_ENTRIES : (uint16_t)count;
-    break;
-  case TABLE_EVENT_TYPES:
-    _eventTypeCapacity = (count > MAX_TABLE_ENTRIES) ? MAX_TABLE_ENTRIES : (uint16_t)count;
-    break;
-#endif
-  case TABLE_COMMANDS:
-    _commandCapacity = (count > MAX_TABLE_ENTRIES) ? MAX_TABLE_ENTRIES : (uint16_t)count;
-    break;
-  case TABLE_DEVICES:
-    // Device IDs are one byte, so far fewer fit than in the other tables.
-    if (count > MAX_DEVICES && _debugStream != nullptr)
-    {
-      _debugStream->print(F("BLAECK.withDevices("));
-      _debugStream->print(count);
-      _debugStream->print(F("): clamped to "));
-      _debugStream->print(MAX_DEVICES);
-      _debugStream->println(F(", which is the most device IDs allow."));
-    }
-    _deviceCapacity = (count > MAX_DEVICES) ? MAX_DEVICES : (uint16_t)count;
-    break;
-  default:
-    break;
-  }
+  _warnNoRoom(what, BlaeckString(droppedName));
 }
 
-void Blaeck::_warnTableFull(const __FlashStringHelper *table, unsigned int capacity,
-                                  const char *droppedName)
+void Blaeck::_warnNoRoom(const __FlashStringHelper *what, const __FlashStringHelper *droppedName)
 {
-  if (_debugStream == nullptr)
-    return;
-  _debugStream->print(F("Dropped '"));
-  _debugStream->print(droppedName != nullptr ? droppedName : "");
-  _debugStream->print(F("': table full at "));
-  _debugStream->print(capacity);
-  _debugStream->print(F(". Increase ."));
-  _debugStream->print(table);
-  _debugStream->println(F("() on the original begin() chain, before registering entries, "
-                          "if memory and table limits allow."));
+  _warnNoRoom(what, BlaeckString(droppedName));
 }
 
-void Blaeck::_warnTableFull(const __FlashStringHelper *table, unsigned int capacity,
-                                  const __FlashStringHelper *droppedName)
+void Blaeck::_warnNoRoom(const __FlashStringHelper *what, BlaeckString droppedName)
 {
   if (_debugStream == nullptr)
     return;
   _debugStream->print(F("Dropped '"));
   if (droppedName != nullptr)
-    _debugStream->print(droppedName);
-  _debugStream->print(F("': table full at "));
-  _debugStream->print(capacity);
-  _debugStream->print(F(". Increase ."));
-  _debugStream->print(table);
-  _debugStream->println(F("() on the original begin() chain, before registering entries, "
-                          "if memory and table limits allow."));
-}
-
-// Each table is allocated once, by its first entry, and never grows or is freed, so the
-// heap doesn't fragment. If there isn't enough RAM the pointer stays null, which callers
-// treat as a full table.
-bool Blaeck::_ensureSignalTable()
-{
-  if (Signals != nullptr)
-    return true;
-  if (_signalCapacity == 0)
-    return false;
-  Signals = new (std::nothrow) Signal[_signalCapacity];
-  if (Signals == nullptr)
-  {
-    if (_debugStream != nullptr)
-    {
-      _debugStream->print(F("No RAM for the signal table ("));
-      _debugStream->print(_signalCapacity);
-      _debugStream->println(F(" signals). Every signal will be dropped."));
-    }
-    return false;
-  }
-  return true;
-}
-
-bool Blaeck::_ensureCommandTable()
-{
-  if (_commandHandlers != nullptr)
-    return true;
-  if (_commandCapacity == 0)
-    return false;
-  _commandHandlers = new (std::nothrow) CommandHandlerEntry[_commandCapacity]();
-  if (_commandHandlers == nullptr && _debugStream != nullptr)
-  {
-    _debugStream->print(F("No RAM for the command table ("));
-    _debugStream->print(_commandCapacity);
-    _debugStream->println(F(" commands). Every command will be dropped."));
-  }
-  return _commandHandlers != nullptr;
+    droppedName.printTo(*_debugStream);
+  _debugStream->print(F("': no room for another "));
+  _debugStream->print(what);
+  _debugStream->println(F(". The board is out of RAM."));
 }
 
 // ----- Devices -----
-
-bool Blaeck::_ensureDeviceTable()
-{
-  if (_devices != nullptr)
-    return true;
-  if (_deviceCapacity == 0)
-    return false;
-  _devices = new (std::nothrow) DeviceEntry[_deviceCapacity]();
-  if (_devices == nullptr && _debugStream != nullptr)
-  {
-    _debugStream->print(F("No RAM for the device table ("));
-    _debugStream->print(_deviceCapacity);
-    _debugStream->println(F(" devices). Every device will be dropped."));
-  }
-  return _devices != nullptr;
-}
 
 BlaeckDeviceRef Blaeck::addDevice(BlaeckString name)
 {
@@ -496,13 +296,20 @@ BlaeckDeviceRef Blaeck::addDevice(BlaeckString name)
       return BlaeckDeviceRef();
     }
   }
-  if (_deviceCount >= _deviceCapacity || !_ensureDeviceTable())
+  if (_deviceCount >= MAX_DEVICES)
   {
-    if (name.inFlash())
-      _warnTableFull(F("withDevices"), _deviceCapacity,
-                     reinterpret_cast<const __FlashStringHelper *>(name.data()));
-    else
-      _warnTableFull(F("withDevices"), _deviceCapacity, name.data());
+    if (_debugStream != nullptr)
+    {
+      _debugStream->print(F("Dropped '"));
+      name.printTo(*_debugStream);
+      _debugStream->println(F("': a board has at most 254 devices."));
+    }
+    ++_rejectedDeviceCount;
+    return BlaeckDeviceRef();
+  }
+  if (!_devices.reserve(_deviceCount + 1))
+  {
+    _warnNoRoom(F("device"), name);
     ++_rejectedDeviceCount;
     return BlaeckDeviceRef();
   }
@@ -656,58 +463,6 @@ void BlaeckDeviceRef::writeAll(unsigned long long timestamp)
     _core->_writeDeviceSignals(_deviceId, timestamp == BLAECK_NOW ? _core->getTimeStamp() : timestamp);
 }
 
-#if BLAECK_ENABLE_STATE_CHANNELS
-bool Blaeck::_ensureStateChannelTable()
-{
-  if (_stateChannels != nullptr)
-    return true;
-  if (_stateChannelCapacity == 0)
-    return false;
-  _stateChannels = new (std::nothrow) StateChannelEntry[_stateChannelCapacity]();
-  if (_stateChannels == nullptr && _debugStream != nullptr)
-  {
-    _debugStream->print(F("No RAM for the state channel table ("));
-    _debugStream->print(_stateChannelCapacity);
-    _debugStream->println(F(" channels). Every channel will be dropped."));
-  }
-  return _stateChannels != nullptr;
-}
-#endif
-
-#if BLAECK_ENABLE_EVENTS
-bool Blaeck::_ensureEventChannelTable()
-{
-  if (_eventChannels != nullptr)
-    return true;
-  if (_eventChannelCapacity == 0)
-    return false;
-  _eventChannels = new (std::nothrow) EventChannelEntry[_eventChannelCapacity]();
-  if (_eventChannels == nullptr && _debugStream != nullptr)
-  {
-    _debugStream->print(F("No RAM for the event channel table ("));
-    _debugStream->print(_eventChannelCapacity);
-    _debugStream->println(F(" channels). Every event channel will be dropped."));
-  }
-  return _eventChannels != nullptr;
-}
-
-bool Blaeck::_ensureEventTypeTable()
-{
-  if (_eventTypes != nullptr)
-    return true;
-  if (_eventTypeCapacity == 0)
-    return false;
-  _eventTypes = new (std::nothrow) EventTypeEntry[_eventTypeCapacity]();
-  if (_eventTypes == nullptr && _debugStream != nullptr)
-  {
-    _debugStream->print(F("No RAM for the event type pool ("));
-    _debugStream->print(_eventTypeCapacity);
-    _debugStream->println(F(" types). Every event type will be dropped."));
-  }
-  return _eventTypes != nullptr;
-}
-#endif
-
 int Blaeck::_registerSignal(byte deviceId, const char *signalName, dataType type, void *address, bool textInFlash)
 {
   return _registerSignalCommon(deviceId, signalName, nullptr, type, address, textInFlash);
@@ -721,15 +476,12 @@ int Blaeck::_registerSignal(byte deviceId, const __FlashStringHelper *signalName
 int Blaeck::_registerSignalCommon(byte deviceId, const char *ram, const __FlashStringHelper *flash,
                                         dataType type, void *address, bool textInFlash)
 {
-  if (!_ensureSignalTable() || static_cast<unsigned int>(_signalIndex) >= _signalCapacity)
+  if (_signalIndex >= MAX_TABLE_ENTRIES || !Signals.reserve(_signalIndex + 1))
   {
-    if (Signals != nullptr || _signalCapacity == 0)
-    {
-      if (flash != nullptr)
-        _warnTableFull(F("withSignals"), _signalCapacity, flash);
-      else
-        _warnTableFull(F("withSignals"), _signalCapacity, ram);
-    }
+    if (flash != nullptr)
+      _warnNoRoom(F("signal"), flash);
+    else
+      _warnNoRoom(F("signal"), ram);
     _signalRegistrationFailed = true;
     _rejectedSignalCount++;
     // -1 makes a handle that ignores every call.
@@ -807,7 +559,7 @@ void Blaeck::setSignalName(int signalIndex, const char *signalName)
 
 void Blaeck::_setSignalName(int signalIndex, const char *ram, const __FlashStringHelper *flash)
 {
-  if (Signals == nullptr || signalIndex < 0 || signalIndex >= (int)_signalCapacity)
+  if (signalIndex < 0 || signalIndex >= (int)Signals.capacity())
     return;
 
   Signal &s = Signals[signalIndex];
@@ -840,9 +592,7 @@ void Blaeck::_setSignalName(int signalIndex, const char *ram, const __FlashStrin
 
 void Blaeck::_freeSignalOwned()
 {
-  if (Signals == nullptr)
-    return;
-  for (unsigned int i = 0; i < _signalCapacity; i++)
+  for (unsigned int i = 0; i < Signals.capacity(); i++)
   {
     // Pointer first, as in _setSignalName().
     if (Signals[i].SignalName != nullptr && !Signals[i].NameInFlash)
@@ -1072,7 +822,7 @@ bool Blaeck::_signalChanged(const Signal &s, double delta) const
 SignalMeta *Blaeck::_ensureSignalMeta(int16_t index)
 {
   // A rejected signal's handle has nowhere to store anything.
-  if (index < 0 || Signals == nullptr || static_cast<unsigned int>(index) >= _signalCapacity)
+  if (index < 0 || static_cast<unsigned int>(index) >= Signals.capacity())
     return nullptr;
   Signal &s = Signals[index];
   if (s.Meta == nullptr)
@@ -1462,14 +1212,6 @@ int Blaeck::_registerCommand(byte deviceId, const char *command, BlaeckCommandHa
     return -1;
   }
 
-  if (!_ensureCommandTable())
-  {
-    if (_commandCapacity == 0)
-      _warnTableFull(F("withCommands"), _commandCapacity, command);
-    _rejectedCommandCount++;
-    return -1;
-  }
-
   for (uint16_t i = 0; i < _commandSlots(); i++)
   {
     if (_commandHandlers[i].inUse && strcmp(_commandHandlers[i].command, command) == 0)
@@ -1485,6 +1227,12 @@ int Blaeck::_registerCommand(byte deviceId, const char *command, BlaeckCommandHa
     }
   }
 
+  if (!_roomFor(_commandHandlers))
+  {
+    _warnNoRoom(F("command"), command);
+    _rejectedCommandCount++;
+    return -1;
+  }
   for (uint16_t i = 0; i < _commandSlots(); i++)
   {
     if (!_commandHandlers[i].inUse)
@@ -1500,7 +1248,7 @@ int Blaeck::_registerCommand(byte deviceId, const char *command, BlaeckCommandHa
     }
   }
 
-  _warnTableFull(F("withCommands"), _commandCapacity, command);
+  _warnNoRoom(F("command"), command);
   _rejectedCommandCount++;
   return -1;
 }
@@ -1675,16 +1423,9 @@ bool Blaeck::_addOwnedStateChannel(byte deviceId, BlaeckString channelName, Blae
     return true;
   }
 
-  if (!_ensureStateChannelTable())
+  if (!_roomFor(_stateChannels))
   {
-    if (_stateChannelCapacity == 0)
-    {
-      if (channelName.inFlash())
-        _warnTableFull(F("withStateChannels"), _stateChannelCapacity,
-                       reinterpret_cast<const __FlashStringHelper *>(channelName.data()));
-      else
-        _warnTableFull(F("withStateChannels"), _stateChannelCapacity, channelName.data());
-    }
+    _warnNoRoom(F("state channel"), channelName);
     _rejectedStateChannelCount++;
     return false;
   }
@@ -1717,11 +1458,7 @@ bool Blaeck::_addOwnedStateChannel(byte deviceId, BlaeckString channelName, Blae
     return true;
   }
 
-  if (channelName.inFlash())
-    _warnTableFull(F("withStateChannels"), _stateChannelCapacity,
-                   reinterpret_cast<const __FlashStringHelper *>(channelName.data()));
-  else
-    _warnTableFull(F("withStateChannels"), _stateChannelCapacity, channelName.data());
+  _warnNoRoom(F("state channel"), channelName);
   _rejectedStateChannelCount++;
   return false;
 #endif
@@ -2432,15 +2169,12 @@ int Blaeck::_registerStateChannel(byte deviceId, const char *channelName, const 
     return existing;
   }
 
-  if (!_ensureStateChannelTable())
+  if (!_roomFor(_stateChannels))
   {
-    if (_stateChannelCapacity == 0)
-    {
-      if (flashName != nullptr)
-        _warnTableFull(F("withStateChannels"), _stateChannelCapacity, flashName);
-      else
-        _warnTableFull(F("withStateChannels"), _stateChannelCapacity, channelName);
-    }
+    if (flashName != nullptr)
+      _warnNoRoom(F("state channel"), flashName);
+    else
+      _warnNoRoom(F("state channel"), channelName);
     _rejectedStateChannelCount++;
     return -1;
   }
@@ -2483,7 +2217,7 @@ int Blaeck::_registerStateChannel(byte deviceId, const char *channelName, const 
     }
   }
 
-  _warnTableFull(F("withStateChannels"), _stateChannelCapacity, channelName);
+  _warnNoRoom(F("state channel"), channelName);
   _rejectedStateChannelCount++;
   return -1;
 }
@@ -3136,15 +2870,12 @@ int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const 
     return -1;
   }
 
-  if (!_ensureEventChannelTable())
+  if (!_roomFor(_eventChannels))
   {
-    if (_eventChannelCapacity == 0)
-    {
-      if (flashName != nullptr)
-        _warnTableFull(F("withEventChannels"), _eventChannelCapacity, flashName);
-      else
-        _warnTableFull(F("withEventChannels"), _eventChannelCapacity, channelName);
-    }
+    if (flashName != nullptr)
+      _warnNoRoom(F("event channel"), flashName);
+    else
+      _warnNoRoom(F("event channel"), channelName);
     _rejectedEventChannelCount++;
     return -1;
   }
@@ -3175,7 +2906,7 @@ int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const 
     }
   }
 
-  _warnTableFull(F("withEventChannels"), _eventChannelCapacity, channelName);
+  _warnNoRoom(F("event channel"), channelName);
   _rejectedEventChannelCount++;
   return -1;
 }
@@ -3186,17 +2917,13 @@ void Blaeck::_addEventTypesCsv(uint16_t channelIndex, const detail::StoredString
   uint16_t fieldCount = _flashCsvOptionCount(eventTypes);
   for (uint16_t f = 0; f < fieldCount; f++)
   {
-    if (!_ensureEventTypeTable() || _eventTypeCount >= _eventTypeSlots())
+    if (_eventTypeCount >= MAX_TABLE_ENTRIES || !_eventTypes.reserve(_eventTypeCount + 1))
     {
-      if (_eventTypes != nullptr || _eventTypeCapacity == 0)
-      {
-        if (_eventChannels[channelIndex].nameInFlash)
-          _warnTableFull(F("withEventTypes"), _eventTypeCapacity,
-                         reinterpret_cast<const __FlashStringHelper *>(_eventChannels[channelIndex].name));
-        else
-          _warnTableFull(F("withEventTypes"), _eventTypeCapacity,
-                         _eventChannels[channelIndex].name);
-      }
+      if (_eventChannels[channelIndex].nameInFlash)
+        _warnNoRoom(F("event type"),
+                    reinterpret_cast<const __FlashStringHelper *>(_eventChannels[channelIndex].name));
+      else
+        _warnNoRoom(F("event type"), _eventChannels[channelIndex].name);
       // The remaining fields are dropped too.
       _rejectedEventTypeCount += (uint16_t)(fieldCount - f);
       break;
@@ -3311,10 +3038,9 @@ bool Blaeck::_addEventType(byte deviceId, const char *channelName, BlaeckString 
     return false;
   }
 
-  if (!_ensureEventTypeTable() || _eventTypeCount >= _eventTypeSlots())
+  if (_eventTypeCount >= MAX_TABLE_ENTRIES || !_eventTypes.reserve(_eventTypeCount + 1))
   {
-    if (_eventTypes != nullptr || _eventTypeCapacity == 0)
-      _warnTableFull(F("withEventTypes"), _eventTypeCapacity, channelName);
+    _warnNoRoom(F("event type"), channelName);
     _rejectedEventTypeCount++;
     return false;
   }

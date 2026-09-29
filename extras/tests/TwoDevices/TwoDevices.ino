@@ -34,8 +34,8 @@ void setup()
           F("TCP buffering default after attach"));
   SerialDevice.setBufferedWrites(!BLAECK_SERIAL_BUFFERED_WRITES_DEFAULT);
   NetworkDevice.setBufferedWrites(!BLAECK_TCP_BUFFERED_WRITES_DEFAULT);
-  SerialDevice.begin(Serial).withSignals(1);
-  NetworkDevice.begin(server).withClients(2).withSignals(1);
+  SerialDevice.begin(Serial);
+  NetworkDevice.begin(server).withClients(2);
   require(SerialDevice.isBufferedWrites() != BLAECK_SERIAL_BUFFERED_WRITES_DEFAULT,
           F("Serial begin preserved override"));
   require(NetworkDevice.isBufferedWrites() != BLAECK_TCP_BUFFERED_WRITES_DEFAULT,

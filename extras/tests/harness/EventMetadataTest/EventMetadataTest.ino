@@ -110,10 +110,6 @@ void setup()
   Serial.begin(115200);
 
   device.begin(Serial)
-      .withSignals(1)
-      .withEventChannels(8)
-      .withEventTypes(17)
-      .withCommands(18)
       .withDebugStream(&Serial);
 
   device.DeviceName = "Event Metadata Test";

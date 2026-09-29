@@ -4,31 +4,22 @@ This library uses one shared configuration for Serial and TCP. Include `Blaeck.h
 when the old standalone libraries are also installed. The examples below use the Serial
 transport; TCP uses `begin(server)` after `server.begin()`, and the same core settings.
 
-Two things are decided outside the code that uses them: how many entries each table holds, and
-which parts of the library are built at all.
+One thing is decided outside the code that uses it: which parts of the library are built at all.
 
-## Table sizes
+## Tables
 
-Everything you register lives in a table with a fixed number of slots. `begin()` returns a
-handle that sizes them, and every call on it is optional:
+Everything you register lives in a table that grows as you add to it, eight entries at a time.
+There is nothing to size. `begin()` returns a handle for the connection limit and the debug
+stream, and both are optional:
 
 ```cpp
 void setup()
 {
   Serial.begin(115200);
 
-  device.begin(Serial)
-      .withSignals(50)
-      .withStateChannels(12)
-      .withEventChannels(6)
-      .withEventTypes(20)
-      .withCommands(16)
-      .withDebugStream(&Serial1);
+  device.begin(Serial).withDebugStream(&Serial1);
 }
 ```
-
-`device.begin(Serial)` alone gives every table the default for the board.
-Use `.withSignals(20)` on the begin chain to choose a different size.
 
 Call `begin()` once per instance, normally in `setup()`. A later call reports
 `BeginAlreadyCalled` and does not change the transport or apply its chained settings.
@@ -36,32 +27,20 @@ This also applies after `end()` or failed initialization; a latched `OutOfMemory
 error is retained. `end()` closes the transport; it does not reset the instance for
 another `begin()`.
 
-The defaults:
+RAM is the only limit. On AVR, with the default settings, a signal costs 12 bytes, an event type
+6, an event channel 13, a state channel 35, a device 10 and a command 66 - the largest there is.
+A signal with a unit, icon or other description takes 18 bytes more. Every eight entries of a
+table share about 4 bytes of bookkeeping, and the last group of eight may hold up to seven
+unused slots. Each configuration string passed as ordinary RAM text is copied, at about its
+length plus 7 bytes (a reference count, the terminator and the heap's own header); an `F()`
+string costs nothing extra. A Mega's 8 kB is gone at a few hundred of anything, where an ESP32
+has room for thousands. A command that reports its own value with `withOwnState()` adds a state
+channel too.
 
-| | Small AVR (2 kB SRAM or less) | Mega and larger AVR | ESP32, SAMD, RP2040, ... |
-|---|---|---|---|
-| `withSignals` | 8 | 24 | 64 |
-| `withStateChannels` | 3 | 8 | 32 |
-| `withEventChannels` | 2 | 6 | 24 |
-| `withEventTypes` | 8 | 20 | 64 |
-| `withCommands` | 6 | 16 | 32 |
-
-RAM is what you are sizing against, not just the entry count. On AVR, with the default
-settings, a signal costs 12 bytes, an event type 6, an event channel 13, a state channel 35, a
-device 10 and a command 66 - the largest there is. A signal with a unit, icon or other
-description takes 18 bytes more. Each configuration string passed as ordinary RAM text is
-copied, at about its length plus 7 bytes (a reference count, the terminator and the heap's own
-header); an `F()` string costs nothing extra. A Mega's 8 kB is gone at a few hundred of
-anything, where an ESP32 has room for thousands.
-
-Two slots are easy to miss. A command that reports its own value with `withOwnState()` takes a
-state channel as well as a command slot. Event types share one table across every channel, so
-`withEventTypes()` is the sum, not the largest.
-
-A table is allocated in full by the first entry added to it, and never grows. A table your
-sketch never touches costs nothing, and raising a number costs SRAM whether or not you fill the
-slots. Put the whole `begin()` chain before any `add...()` call: once a table exists its size is
-fixed, and a later `with...()` is refused.
+Entries are added in `setup()`, and a table never moves or frees what it holds, so the heap
+doesn't fragment. `clearAllSignals()` and the other clear calls keep the space and reuse it.
+When RAM runs out, the entry is dropped and reported by `hasRejections()`, `printRejections()`
+and the debug stream.
 
 ## Configuration text
 
@@ -76,13 +55,11 @@ their existing lifetime requirements; they are not copied configuration.
 
 ## Finding out what did not fit
 
-An entry that has no slot is dropped. Your sketch still runs, still logs, and is simply missing
-a signal or a control - which is why it is worth asking.
+An entry that can't be added is dropped. Your sketch still runs, still logs, and is simply
+missing a signal or a control - which is why it is worth asking.
 
 `withDebugStream()` names a stream for the library to report on. Enable it before registration
-to see why an entry was rejected. For a full table, the message identifies the setting to
-increase on the original `begin()` chain, before registering entries. Do not call `begin()`
-again just to resize a table. The debug stream may be the same stream the data goes to.
+to see why an entry was rejected. The debug stream may be the same stream the data goes to.
 
 On a board with only one `Serial`, end `setup()` with this instead:
 
@@ -94,14 +71,10 @@ It prints one line per table with registration rejections, and nothing when ther
 
 ```
 Blaeck registration rejections:
-  3 signal registrations rejected; table capacity: 8.
-  Possible causes include full tables, invalid or conflicting names, invalid event types, or insufficient memory.
+  3 signal registrations rejected.
+  Possible causes include invalid or conflicting names, invalid event types, or insufficient memory.
   Enable withDebugStream() before registration for details.
 ```
-
-These counts are not solely capacity errors. Increasing a table will not fix an invalid
-declaration or insufficient memory. Allocation failures are reported as memory failures,
-not as a recommendation to increase capacity.
 
 It is safe on the Blaeck stream because no data has been written yet at the end of `setup()`.
 

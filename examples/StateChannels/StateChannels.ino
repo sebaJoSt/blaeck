@@ -56,13 +56,9 @@ void setup()
   networkBegin(23);
   server.begin();
   device.begin(server)
-      .withSignals(1)
-      .withStateChannels(3)
       .withDebugStream(&device.Terminal);
 #else
   device.begin(Serial)
-      .withSignals(1)
-      .withStateChannels(3)
       .withDebugStream(&Serial);
 #endif
 

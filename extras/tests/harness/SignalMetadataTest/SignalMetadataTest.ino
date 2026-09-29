@@ -82,8 +82,6 @@ void setup()
   Serial.begin(115200);
 
   device.begin(Serial)
-      .withSignals(27)
-      .withCommands(1)
       .withDebugStream(&Serial);
 
   device.DeviceName = "Signal Metadata Test";

@@ -198,8 +198,6 @@ void setup()
   Serial.begin(115200);
 
   device.begin(Serial)
-      .withSignals(8)
-      .withCommands(7)
       .withDebugStream(&Serial);
 
   device.DeviceName = "Signal Timing Test";

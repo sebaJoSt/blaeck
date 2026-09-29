@@ -23,7 +23,9 @@ Version 7.0.0 is in development; setting its metadata does not publish a release
   flash text without copying, and share owned backing for command options and event CSV fields.
   Preserve existing settings on allocation failure and report it through the rejection API.
   Release copied text on replacement, clearing and destruction; signal value ownership is unchanged.
-- One `BlaeckBeginRef` handle configures table sizes, client count and debug output.
+- One `BlaeckBeginRef` handle configures client count and debug output. Tables have no size:
+  each is a chunk list (`src/detail/BlaeckChunkList.h`) that grows by 8 entries and never moves
+  or frees an entry, so the heap doesn't fragment.
 - TCP takes an already-started server via `begin(server)`. TelnetPrint is an optional
   user-supplied server, never an implicit dependency. Require `accept()`; do not substitute
   `available()`. Keep concrete client ownership in the adapter and session state in Blaeck.

@@ -134,9 +134,6 @@ void setup()
   while (!Serial && millis() < 3000) {}
 
   device.begin(Serial)
-      .withCommands(1)
-      .withSignals(1)
-      .withStateChannels(40)
       .withDebugStream(&Serial);
 
   device.DeviceName = "State Channel Test";

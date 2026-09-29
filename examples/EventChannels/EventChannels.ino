@@ -57,15 +57,9 @@ void setup()
   networkBegin(23);
   server.begin();
   device.begin(server)
-      .withSignals(2)
-      .withEventChannels(4)
-      .withEventTypes(10)
       .withDebugStream(&device.Terminal);
 #else
-  device.begin(Serial)
-      .withSignals(2)
-      .withEventChannels(4)
-      .withEventTypes(10);
+  device.begin(Serial);
 #endif
 
   device.DeviceName = HOST_NAME;

@@ -105,17 +105,9 @@ reused after registration.
 
 ## When a channel or type does not fit
 
-Two tables are involved. One holds the channels. The other holds the types, and every channel
-draws from it - four channels of five types each need room for twenty types, not twenty each.
-
-```cpp
-device.begin(Serial)
-    .withEventChannels(4)
-    .withEventTypes(20);
-```
-
-See [Configuration](configuration.md) for the defaults. In addition to the entries, ordinary
-type strings need copied storage; types from the same comma-separated list share one copy.
+Channels and types take RAM as they are added; see [Configuration](configuration.md) for what
+each costs. Ordinary type strings need copied storage too; types from the same comma-separated
+list share one copy.
 
 ```cpp
 if (device.hasRejectedEventChannels())

@@ -44,7 +44,7 @@ void setup()
   RTCTime startTime(13, Month::AUGUST, 2025, 14, 00, 00, DayOfWeek::WEDNESDAY, SaveLight::SAVING_TIME_ACTIVE);
   RTC.setTime(startTime);
 
-  device.begin(Serial).withSignals(1);
+  device.begin(Serial);
 
   device.DeviceName = "TimestampsRTC";
   device.DeviceFWVersion = "1.0";

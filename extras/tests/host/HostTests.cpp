@@ -20,8 +20,7 @@ static_assert(!std::is_copy_constructible<Blaeck>::value, "Blaeck owns its alloc
 static_assert(!std::is_copy_assignable<Blaeck>::value, "Blaeck owns its allocations");
 static_assert(std::is_same<
     decltype(std::declval<BlaeckBeginRef &>()
-                 .withSignals(1).withStateChannels(1).withEventChannels(1)
-                 .withEventTypes(1).withCommands(1).withDebugStream(nullptr).withClients(1)),
+                 .withDebugStream(nullptr).withClients(1)),
     BlaeckBeginRef &>::value, "Every begin option must preserve the same handle");
 
 static int failAfter = -1;
@@ -301,7 +300,7 @@ static void sessionBehavior(bool buffered)
   Capture debug;
   Blaeck device;
   device.setBufferedWrites(buffered);
-  device.begin(server).withClients(3).withSignals(1).withDebugStream(&debug);
+  device.begin(server).withClients(3).withDebugStream(&debug);
   assert(device.isBufferedWrites() == buffered);
   assert(server.noDelay == BLAECK_TCP_NO_DELAY_DEFAULT);
   device.setClientConnectedCallback(onOpen);
@@ -606,39 +605,36 @@ static void diagnosticMessages()
     FakeServer<> server;
     Blaeck device;
     auto setup = tcp ? device.begin(server) : device.begin(stream);
-    setup.withSignals(0).withCommands(1).withDebugStream(&debug);
+    setup.withDebugStream(&debug);
     debug.text.clear();
     assert(!device.printRejections(&debug) && debug.text.empty());
 
     float value = 0;
+    failAfter = 0;
     device.addSignal("RAM", &value);
     device.addSignal(F("Flash"), &value);
-    assert(debug.text.find("Dropped 'RAM': table full at 0.") != std::string::npos);
-    assert(debug.text.find("Dropped 'Flash': table full at 0.") != std::string::npos);
-    assert(debug.text.find("Increase .withSignals() on the original begin() chain")
+    failAfter = -1;
+    assert(debug.text.find("Dropped 'RAM': no room for another signal. The board is out of RAM.")
            != std::string::npos);
+    assert(debug.text.find("Dropped 'Flash': no room for another signal.") != std::string::npos);
     assert(debug.text.find("begin(Serial)") == std::string::npos);
     device.onCommand("BLAECK.RESERVED", handler);
     assert(device.getRejectedCommandCount() == 1);
 
     debug.text.clear();
     assert(device.printRejections(&debug));
-    assert(debug.text.find("2 signal registrations rejected; table capacity: 0.")
-           != std::string::npos);
-    assert(debug.text.find("1 command registrations rejected; table capacity: 1.")
-           != std::string::npos);
+    assert(debug.text.find("2 signal registrations rejected.") != std::string::npos);
+    assert(debug.text.find("1 command registrations rejected.") != std::string::npos);
     assert(debug.text.find("invalid or conflicting names") != std::string::npos);
-    assert(debug.text.find("Increase") == std::string::npos);
     assert(debug.text.find("begin(Serial)") == std::string::npos);
   }
 
-  // Every table can fail allocation without being full.
+  // Every table reports a chunk it couldn't allocate.
   for (int table = 0; table < 5; ++table)
   {
     FakeStream stream;
     Blaeck device;
-    device.begin(stream).withSignals(1).withCommands(1).withStateChannels(1)
-        .withEventChannels(1).withEventTypes(1).withDebugStream(&debug);
+    device.begin(stream).withDebugStream(&debug);
     float value = 0;
     debug.text.clear();
     failAfter = table == 4 ? 1 : 0; // For event types, allocate the channel first.
@@ -652,9 +648,7 @@ static void diagnosticMessages()
     }
     failAfter = -1;
     assert(device.hasRejections());
-    assert(debug.text.find("No RAM") != std::string::npos);
-    assert(debug.text.find("table full") == std::string::npos);
-    assert(debug.text.find("Increase") == std::string::npos);
+    assert(debug.text.find("no room for another") != std::string::npos);
   }
 }
 
@@ -810,6 +804,54 @@ static void command(Blaeck &device, FakeStream &stream, const char *text)
   device.read();
 }
 
+// Tables grow a chunk at a time, past any chunk boundary, and keep their chunks when cleared.
+static int chunkCommandCalls = 0;
+static void chunkedTables()
+{
+  FakeStream stream;
+  Capture debug;
+  Blaeck device;
+  device.begin(stream).withDebugStream(&debug);
+
+  float values[20] = {};
+  std::string names[20];
+  for (int i = 0; i < 20; ++i)
+  {
+    names[i] = "S" + std::to_string(i);
+    device.addSignal(names[i].c_str(), &values[i]);
+  }
+  assert(device.SignalCount == 20);
+  for (int i = 0; i < 20; ++i)
+    assert(device.findSignalIndex(names[i].c_str()) == i);
+
+  // Adding as many signals again after clearing allocates no chunk.
+  device.clearAllSignals();
+  const size_t before = allocations;
+  for (int i = 0; i < 20; ++i)
+    device.addSignal(names[19 - i].c_str(), &values[i]);
+  assert(allocations == before);
+  assert(device.SignalCount == 20);
+  assert(device.findSignalIndex("S19") == 0 && device.findSignalIndex("S0") == 19);
+
+  auto handler = [](const char *, const char *const *, byte) { ++chunkCommandCalls; };
+  for (int i = 0; i < 20; ++i)
+    device.onCommand(("C" + std::to_string(i)).c_str(), handler);
+  command(device, stream, "<C0>");
+  command(device, stream, "<C19>");
+  assert(chunkCommandCalls == 2);
+
+  for (int i = 0; i < 10; ++i)
+    device.addDevice(("D" + std::to_string(i)).c_str());
+
+#if BLAECK_ENABLE_EVENTS
+  device.addEventChannel(F("Activity"), F("a,b,c,d,e,f,g,h,i,j"));
+  for (int i = 0; i < 10; ++i)
+    device.addEventType(F("Activity"), ("extra" + std::to_string(i)).c_str());
+#endif
+  assert(!device.hasRejections());
+  assert(debug.text.find("no room") == std::string::npos);
+}
+
 static std::string commandFramePayload(const std::string &wire, byte key, uint32_t messageId)
 {
   const std::string output = unescaped(wire);
@@ -943,7 +985,7 @@ static void frameEscaping(bool buffered)
 {
   FakeStream stream;
   Blaeck device;
-  device.begin(stream).withSignals(1);
+  device.begin(stream);
   device.setBufferedWrites(buffered);
   static char text[] = "a<b\\c\rd\ne/f";
   device.addSignal("Text", text).writeAtInterval(BLAECK_OFF);
@@ -972,7 +1014,7 @@ static void flashSignalText(bool buffered)
     FakeStream stream;
     Capture debug;
     Blaeck device;
-    device.begin(stream).withSignals(1).withDebugStream(&debug);
+    device.begin(stream).withDebugStream(&debug);
     device.setBufferedWrites(buffered);
     device.setTimestampMode(BLAECK_MICROS);
     hostMillis() = 0;
@@ -1102,7 +1144,7 @@ static void flashNamesAndFailures()
   FakeStream stream;
   Capture debug;
   Blaeck device;
-  device.begin(stream).withSignals(2).withDebugStream(&debug);
+  device.begin(stream).withDebugStream(&debug);
   float value = 0;
   device.addSignal(F("VeryLongSignalNameBeyondAnyTemporaryNameBuffer_"), &value).withNameSuffix(255);
   assert(device.findSignalIndex(F("VeryLongSignalNameBeyondAnyTemporaryNameBuffer_255")) == 0);
@@ -1184,7 +1226,7 @@ static void flashStateText(bool buffered)
   FakeStream stream;
   Capture debug;
   Blaeck device;
-  device.begin(stream).withStateChannels(8).withDebugStream(&debug);
+  device.begin(stream).withDebugStream(&debug);
   device.setBufferedWrites(buffered);
   device.addStateChannel("Bound", F("Initial"));
   device.addStateChannel(F("FlashBound"), F("Initial"));
@@ -1304,8 +1346,8 @@ static void ordinaryConfiguration(bool buffered)
   using blaeck::BlaeckString;
   FakeStream stream;
   ConfigurationProbe device;
-  device.begin(stream).withSignals(2).withCommands(4).withStateChannels(5)
-      .withEventChannels(2).withEventTypes(5);
+  device.begin(stream)
+      ;
   device.setBufferedWrites(buffered);
   float value = 1;
   byte selected = 1;
@@ -1420,7 +1462,7 @@ static void configurationAllocationFailures()
   FakeStream stream;
   Capture debug;
   ConfigurationProbe device;
-  device.begin(stream).withDebugStream(&debug).withCommands(2).withStateChannels(3);
+  device.begin(stream).withDebugStream(&debug);
   float value = 0;
   auto signal = device.addSignal("Signal", &value).withUnit(F("V"));
   auto number = device.onNumberCommand("SET", onPing).withRange(0, 10, 1)
@@ -1465,7 +1507,7 @@ static void configurationAllocationFailures()
 #if BLAECK_ENABLE_COMMAND_META && BLAECK_ENABLE_STATE_CHANNELS
   FakeStream freshStream;
   ConfigurationProbe fresh;
-  fresh.begin(freshStream).withStateChannels(1);
+  fresh.begin(freshStream);
   auto freshNumber = fresh.onNumberCommand("SET", onPing).withRange(0, 10, 1)
       .withStateFromSignal(F("Signal"));
   // The command name copy succeeds, but allocating the state table fails.
@@ -1523,7 +1565,7 @@ static void beginOnlyOnce()
     Blaeck device;
     device.end(); // Teardown before initialization does not consume begin().
     auto setup = tcp ? device.begin(server) : device.begin(stream);
-    setup.withSignals(3).withDebugStream(&debug);
+    setup.withDebugStream(&debug);
     if (tcp)
     {
       setup.withClients(2);
@@ -1557,9 +1599,7 @@ static void beginOnlyOnce()
     }
     const size_t before = allocations;
     auto rejected = nextTcp ? device.begin(otherServer) : device.begin(otherStream);
-    rejected.withClients(1).withSignals(1).withStateChannels(0)
-        .withEventChannels(0).withEventTypes(0).withCommands(0)
-        .withDebugStream(&ignoredDebug);
+    rejected.withClients(1).withDebugStream(&ignoredDebug);
     assert(allocations == before);
     assert(device.transportError() == Blaeck::TransportError::BeginAlreadyCalled);
     assert(debug.text.find("only once per instance") != std::string::npos);
@@ -1669,7 +1709,7 @@ static void subDevices(bool buffered)
   FakeStream stream;
   Capture debug;
   Blaeck device;
-  device.begin(stream).withDevices(2).withDebugStream(&debug);
+  device.begin(stream).withDebugStream(&debug);
   device.setBufferedWrites(buffered);
   device.DeviceName = "Board";
   device.DeviceHWVersion = "Mega";
@@ -1682,12 +1722,12 @@ static void subDevices(bool buffered)
   BlaeckDeviceRef fan = device.addDevice("Fan");
   assert(!pump.isMissing() && !fan.isMissing());
 
-  // A duplicate name, a full table and an empty name are rejected; their handles do nothing.
+  // Duplicate and empty names are rejected; their handles do nothing.
   debug.text.clear();
   BlaeckDeviceRef duplicate = device.addDevice(F("Pump"));
   assert(debug.text.find("duplicate device name") != std::string::npos);
-  BlaeckDeviceRef third = device.addDevice(F("Third"));
-  assert(debug.text.find("Dropped 'Third': table full at 2") != std::string::npos);
+  BlaeckDeviceRef third = device.addDevice(F("Fan"));
+  assert(debug.text.find("duplicate device name: Fan") != std::string::npos);
   BlaeckDeviceRef empty = device.addDevice("");
   BlaeckDeviceRef unset;
   third.markMissing();
@@ -1695,7 +1735,7 @@ static void subDevices(bool buffered)
   assert(!third.isMissing() && !unset.isMissing() && !duplicate.isMissing());
   debug.text.clear();
   assert(device.printRejections(&debug));
-  assert(debug.text.find("3 device registrations rejected; table capacity: 2.") != std::string::npos);
+  assert(debug.text.find("3 device registrations rejected.") != std::string::npos);
 
   pump.addSignal(F("Flow"), &flow);
   pump.addSignal(F("Pressure"), &pressure);
@@ -1846,7 +1886,7 @@ static void subDevices(bool buffered)
   stream.data.output.clear();
   Blaeck changes;
   FakeStream changesStream;
-  changes.begin(changesStream).withDevices(1);
+  changes.begin(changesStream);
   float level = 7;
   BlaeckDeviceRef tank = changes.addDevice(F("Tank"));
   tank.addSignal(F("Level"), &level).writeAtInterval(BLAECK_OFF).writeOnChange(BLAECK_ANY_CHANGE);
@@ -1862,12 +1902,11 @@ static void subDevices(bool buffered)
   frames = takeData(changesStream.data.output, {4});
   assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0}));
 
-  // The device table holds at most 254, so the list's count byte covers them and the board.
+  // A board holds at most 254 devices, so the list's count byte covers them and the board.
   Blaeck big;
   FakeStream bigStream;
   debug.text.clear();
-  big.begin(bigStream).withDebugStream(&debug).withDevices(300);
-  assert(debug.text.find("withDevices(300): clamped to 254") != std::string::npos);
+  big.begin(bigStream).withDebugStream(&debug);
   char name[8];
   for (int i = 0; i < 255; ++i)
   {
@@ -1875,6 +1914,7 @@ static void subDevices(bool buffered)
     big.addDevice(name);
   }
   assert(big.hasRejections()); // the 255th
+  assert(debug.text.find("Dropped 'D254': a board has at most 254 devices.") != std::string::npos);
   big.read();
   bigStream.data.output.clear();
   command(big, bigStream, "<BLAECK.GET_DEVICES>");
@@ -1890,7 +1930,7 @@ static void deviceNoticesBeforeHost()
   FakeServer<> server;
   SocketState host;
   Blaeck device;
-  device.begin(server).withDevices(2);
+  device.begin(server);
   device.DeviceName = "Board";
   device.DeviceHWVersion = "Mega";
   BlaeckDeviceRef pump = device.addDevice(F("Pump"));
@@ -1955,7 +1995,7 @@ static void defaultTimestamps()
 {
   FakeStream stream;
   Blaeck device;
-  device.begin(stream).withSignals(1).withDevices(1);
+  device.begin(stream);
   device.setTimestampMode(BLAECK_MICROS);
   hostMillis() = 0;
   hostMicros() = 1234;
@@ -1993,7 +2033,7 @@ static void sameNamesAcrossDevices()
   FakeStream stream;
   Capture debug;
   Blaeck device;
-  device.begin(stream).withDevices(2).withDebugStream(&debug);
+  device.begin(stream).withDebugStream(&debug);
   BlaeckDeviceRef zoneA = device.addDevice(F("Zone A"));
   BlaeckDeviceRef zoneB = device.addDevice("Zone B");
 
@@ -2089,7 +2129,7 @@ static void sameNamesAcrossDevices()
   // values under zone B.
   FakeStream swappedStream;
   Blaeck swapped;
-  swapped.begin(swappedStream).withDevices(2);
+  swapped.begin(swappedStream);
   BlaeckDeviceRef swappedA = swapped.addDevice(F("Zone A"));
   BlaeckDeviceRef swappedB = swapped.addDevice("Zone B");
   swapped.addSignal("Temperature", &boardTemp);
@@ -2131,7 +2171,7 @@ static void deviceCommands()
   pings.clear();
   FakeStream stream;
   Blaeck device;
-  device.begin(stream).withDevices(2);
+  device.begin(stream);
   BlaeckDeviceRef pump = device.addDevice(F("Pump"));
   device.addDevice(F("Fan"));
   pump.onNumberCommand("SET_PUMP_SPEED", onPing).withRange(0.0f, 100.0f, 1.0f);
@@ -2181,7 +2221,7 @@ static void reportingPolicies(bool buffered)
   hostMillis() = 0;
   FakeStream stream;
   Blaeck device;
-  device.begin(stream).withSignals(4);
+  device.begin(stream);
   device.setBufferedWrites(buffered);
   float periodic = 0, filtered = 20, change = 20, combined = 20;
   device.addSignal(F("Periodic"), &periodic);
@@ -2246,7 +2286,7 @@ static void reportingToggle(bool buffered)
     hostMillis() = 0;
     FakeStream stream;
     ReportingProbe device;
-    device.begin(stream).withSignals(3);
+    device.begin(stream);
     device.setBufferedWrites(buffered);
     float value = 0;
     bool flag = false;
@@ -2356,7 +2396,7 @@ static void reportingToggleFailures()
   FakeStream stream;
   Capture debug;
   ReportingProbe device;
-  device.begin(stream).withSignals(1).withDebugStream(&debug);
+  device.begin(stream).withDebugStream(&debug);
   float value = 0;
   auto signal = device.addSignal(F("Value"), &value);
   signal.writeAtInterval(BLAECK_OFF).writeOnChange(BLAECK_ANY_CHANGE, 0);
@@ -2399,7 +2439,12 @@ static void reportingToggleFailures()
   device.writeIfDue();
   expectData(stream, {4}, {0});
 
+  // Fill the first chunk, then fail the next one, for a rejected handle.
+  for (int i = 1; i < 8; ++i)
+    device.addSignal(("Filler" + std::to_string(i)).c_str(), &value);
+  failAfter = 0;
   auto rejected = device.addSignal(F("Overflow"), &value);
+  failAfter = -1;
   debug.text.clear();
   rejected.writeOnChange(BLAECK_OFF).writeOnChange(BLAECK_ANY_CHANGE)
       .writeOnChange(BLAECK_ALWAYS);
@@ -2411,7 +2456,7 @@ static void reportingActivationSnapshot(bool buffered)
   hostMillis() = 0;
   FakeStream stream;
   Blaeck device;
-  device.begin(stream).withSignals(7);
+  device.begin(stream);
   device.setBufferedWrites(buffered);
   float periodic = 0, filtered = 0, change = 0, combined = 0, explicitValue = 0;
   bool flag = false;
@@ -2560,7 +2605,7 @@ static void reportingTypesAndFailures(bool buffered)
   FakeStream stream;
   Capture debug;
   Blaeck device;
-  device.begin(stream).withSignals(5).withDebugStream(&debug);
+  device.begin(stream).withDebugStream(&debug);
   device.setBufferedWrites(buffered);
   char text[300] = "";
   bool flag = false;
@@ -3057,6 +3102,7 @@ int main()
   if (!BLAECK_TEST_REPORTING_ONLY)
   {
     diagnosticMessages();
+    chunkedTables();
     crc32Behavior();
     sessionBehavior(false);
     sessionBehavior(true);

@@ -79,10 +79,6 @@ void setup()
   // Both streams on Serial on purpose: anything the library prints while a frame is open
   // would land inside it, and this is where that would show.
   device.begin(Serial)
-      .withSignals(1)
-      .withEventChannels(4)
-      .withEventTypes(10)
-      .withCommands(7)
       .withDebugStream(&Serial);
 
   device.DeviceName = "Event Test";

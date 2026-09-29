@@ -187,5 +187,5 @@ if (device.hasRejectedStateChannels())
 }
 ```
 
-A command whose channel was dropped keeps no state at all, so a full table costs a control its
-value rather than costing you a channel.
+A command whose channel was dropped keeps no state at all, so running out of RAM costs a
+control its value rather than costing you a channel.

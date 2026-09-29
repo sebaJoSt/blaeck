@@ -15,6 +15,7 @@
 #include "detail/BlaeckServerAdapter.h"
 #include "detail/BlaeckCRC32.h"
 #include "detail/BlaeckString.h"
+#include "detail/BlaeckChunkList.h"
 #include <new>
 #include <string.h>
 #include <limits.h>
@@ -70,8 +71,6 @@ static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
                   BLAECK_COMMAND_MAX_CHARS_DEFAULT <= 65535UL,
               "BLAECK_COMMAND_MAX_CHARS_DEFAULT must be between 1 and 65535 bytes.");
 
-// Table sizes (signals, commands, channels) are set in the sketch, on the begin() chain:
-// device.begin(...).withCommands(16).
 
 // The four switches below each remove one feature to save SRAM and flash on small boards.
 // The API stays, so a sketch compiles either way, and the matching catalog request is
@@ -464,13 +463,11 @@ class BlaeckEventChannelRef;
 class BlaeckDeviceRef;
 class Blaeck;
 
-// Returned by begin() to set table sizes and connection limits, e.g.
+// Returned by begin() to set the connection limit and the debug stream, e.g.
 //
-//   device.begin(...).withSignals(50).withStateChannels(12);
+//   device.begin(server).withClients(2).withDebugStream(&Serial);
 //
-// Each table starts from a default that suits the board, and is allocated when its first
-// entry is added, so an unused table costs nothing. Changing a size after that table exists
-// is refused. The state and event calls still compile when those features are switched off.
+// Tables need no size: each grows as entries are added.
 //
 // Defined before Blaeck so that editors can offer its methods on the chain.
 class BlaeckBeginRef
@@ -499,107 +496,16 @@ public:
   BlaeckBeginRef &withClients(byte count);
 
   /*!
-    @brief   Sets how many signals fit in the signal table.
-
-    Each signal takes 12 bytes of SRAM on AVR, and a signal with a unit, icon or
-    other description 18 more.
-
-    @param   count  Up to 32767. A larger literal fails the build.
-    @return  The same handle, for chaining.
-
-    @code
-      device.begin(Serial).withSignals(50);
-    @endcode
-  */
-  BlaeckBeginRef &withSignals(unsigned int count);
-
-  /*!
-    @brief   Sets how many state channels fit in the state channel table.
-
-    Count the channels from addStateChannel() plus one for each command that uses
-    withOwnState(). Each channel takes 35 bytes of SRAM on AVR, plus any RAM strings
-    it copies.
-
-    @param   count  Up to 32767. A larger literal fails the build.
-    @return  The same handle, for chaining.
-
-    @code
-      device.begin(Serial).withStateChannels(12);
-    @endcode
-  */
-  BlaeckBeginRef &withStateChannels(unsigned int count);
-
-  /*!
-    @brief   Sets how many event channels fit in the event channel table.
-
-    Each channel takes 13 bytes of SRAM on AVR, plus any RAM strings it copies.
-
-    @param   count  Up to 32767. A larger literal fails the build.
-    @return  The same handle, for chaining.
-
-    @code
-      device.begin(Serial).withEventChannels(4);
-    @endcode
-  */
-  BlaeckBeginRef &withEventChannels(unsigned int count);
-
-  /*!
-    @brief   Sets how many event types fit, counted across all channels.
-
-    All channels share one table of types, so give the total: four channels with
-    five types each need 20. Each type takes 6 bytes of SRAM on AVR, plus the copy
-    of a type list given as a RAM string.
-
-    @param   count  Up to 32767. A larger literal fails the build.
-    @return  The same handle, for chaining.
-
-    @code
-      device.begin(Serial).withEventChannels(4).withEventTypes(20);
-    @endcode
-  */
-  BlaeckBeginRef &withEventTypes(unsigned int count);
-
-  /*!
-    @brief   Sets how many commands fit in the command table.
-
-    onCommand() and all the typed commands share this table. Each command takes 66
-    bytes of SRAM on AVR, plus any RAM strings it copies. A command using
-    withOwnState() also needs a state channel, so raise withStateChannels() to match.
-
-    @param   count  Up to 32767. A larger literal fails the build.
-    @return  The same handle, for chaining.
-
-    @code
-      device.begin(Serial).withCommands(8);
-    @endcode
-  */
-  BlaeckBeginRef &withCommands(unsigned int count);
-
-  /*!
-    @brief   Sets how many devices addDevice() can add.
-
-    Each device takes 13 bytes of SRAM on AVR, plus any RAM strings it copies.
-
-    @param   count  Up to 254.
-    @return  The same handle, for chaining.
-
-    @code
-      device.begin(Serial).withDevices(2);
-    @endcode
-  */
-  BlaeckBeginRef &withDevices(unsigned int count);
-
-  /*!
     @brief   Sets a stream where the library reports what it rejected and why.
 
-    Without one, problems such as a full table show only in hasRejections().
+    Without one, problems such as a rejected name show only in hasRejections().
 
     @param   debugStream  Where to print: a serial port, or anything else that can print,
                           such as a display.
     @return  The same handle, for chaining.
 
     @code
-      device.begin(Serial).withSignals(50).withDebugStream(&Serial);
+      device.begin(Serial).withDebugStream(&Serial);
     @endcode
   */
   BlaeckBeginRef &withDebugStream(Print *debugStream);
@@ -1217,7 +1123,7 @@ public:
     addStateChannel() and writeState() refuse its name. Call writeCommandState()
     after a change; otherwise the value is sent only when a host asks.
 
-    @param   channelName   Name of the channel. It takes a slot in withStateChannels().
+    @param   channelName   Name of the channel.
     @param   getStateText  Returns the current value as text.
     @return  The same handle, for chaining.
 
@@ -1326,7 +1232,7 @@ public:
 
     There is an overload for each numeric type.
 
-    @param   channelName  Name of the channel. It takes a slot in withStateChannels().
+    @param   channelName  Name of the channel.
     @param   value        The variable to read. It must outlive the sketch, so use a
                           global.
     @return  The same handle, for chaining.
@@ -1446,7 +1352,7 @@ public:
     @brief   Reports the switch's current position on a state channel of its own,
              read from a bool.
 
-    @param   channelName  Name of the channel. It takes a slot in withStateChannels().
+    @param   channelName  Name of the channel.
     @param   value        The bool to read. Use a global.
     @return  The same handle, for chaining.
 
@@ -1477,7 +1383,7 @@ public:
     The library looks the index up in the options list and sends the option's name.
     This is usually the same variable the handler sets.
 
-    @param   channelName  Name of the channel. It takes a slot in withStateChannels().
+    @param   channelName  Name of the channel.
     @param   index        The index variable, counting from 0. Use a global.
     @return  The same handle, for chaining.
 
@@ -1568,7 +1474,7 @@ public:
     @brief   Reports the control's current text on a state channel of its own, read
              from a buffer.
 
-    @param   channelName  Name of the channel. It takes a slot in withStateChannels().
+    @param   channelName  Name of the channel.
     @param   value        The buffer holding the text. Use a global.
     @return  The same handle, for chaining.
 
@@ -2768,7 +2674,7 @@ public:
                          write() calls may replace it with RAM or flash text.
     @return  A handle for describing how a host shows the signal. It can be
              ignored, or kept in a global to change the signal later.
-    @note    If the table is full, the signal is dropped and the handle ignores
+    @note    If there is no RAM for it, the signal is dropped and the handle ignores
              every call; hasRejectedSignals() reports it. Describing a signal
              allocates memory, and if that fails the signal is still sent, just
              without the description.
@@ -2930,7 +2836,7 @@ public:
     @param   channelName  A channel added with addEventChannel().
     @param   eventType    The new type.
     @return  False if the type is blank or a duplicate, the channel doesn't exist, or
-             the type table is full. Each is reported on the debug stream.
+             there is no RAM for it. Each is reported on the debug stream.
 
     @code
       device.addEventChannel(F("Activity"), F("idle_warning,resumed"));
@@ -3083,7 +2989,7 @@ public:
     @param   command  The command name. It can't start with `#` or `BLAECK.`.
     @param   handler  Called with the parameters as received.
 
-    @note    A command that can't be registered (table full, name too long or
+    @note    A command that can't be registered (no RAM, name too long or
              reserved) is reported on the debug stream and counted in
              hasRejectedCommands(). This applies to every command type.
 
@@ -3444,13 +3350,13 @@ public:
   /*!
     @brief   Reports whether any signal could not be added.
 
-    That happens when the table is full, or when there wasn't enough RAM to build it.
+    That happens when there wasn't enough RAM for it.
 
     @return  True if at least one signal was dropped.
 
     @code
       if (device.hasRejectedSignals())
-        Serial.println(F("Raise withSignals() on the begin() chain."));
+        device.printRejections(&Serial);
     @endcode
   */
   bool hasRejectedSignals() const { return _signalRegistrationFailed; }
@@ -3523,9 +3429,9 @@ public:
     or within one device; command names within the whole board.
 
     @param   name  The name a host shows. RAM text is copied; an F() literal stays in flash.
-    @return  A handle for the device. If the table is full or the name is empty, the
-             device is dropped and the handle ignores every call; hasRejections()
-             reports it.
+    @return  A handle for the device. If there is no RAM for it, 254 devices exist
+             already, or the name is empty or taken, the device is dropped and the
+             handle ignores every call; hasRejections() reports it.
 
     @code
       BlaeckDeviceRef pump = device.addDevice(F("Pump controller"));
@@ -3780,7 +3686,7 @@ public:
 
     @code
       if (device.hasRejectedCommands())
-        Serial.println(F("Raise withCommands() on the begin() chain."));
+        device.printRejections(&Serial);
     @endcode
   */
   bool hasRejectedCommands() const { return _rejectedCommandCount > 0; }
@@ -3862,7 +3768,7 @@ public:
   /*!
     @brief   Reports whether any state channel could not be added.
 
-    That happens when the table is full, the name is too long, or a command's
+    That happens when there isn't enough RAM, the name is too long, or a command's
     withOwnState() already uses the name. A command's own channel counts too; if
     it can't be added, the command reports no value.
 
@@ -3870,7 +3776,7 @@ public:
 
     @code
       if (device.hasRejectedStateChannels())
-        Serial.println(F("Raise withStateChannels() on the begin() chain."));
+        device.printRejections(&Serial);
     @endcode
   */
   bool hasRejectedStateChannels() const { return _rejectedStateChannelCount > 0; }
@@ -3930,8 +3836,8 @@ public:
   /*!
     @brief   Prints rejection counts and affected table capacities.
 
-    Prints nothing when there were no rejections. A rejection can mean a full table,
-    an invalid declaration or insufficient memory; increasing capacity may not help.
+    Prints nothing when there were no rejections. A rejection can mean an invalid
+    declaration or insufficient memory.
     Also includes configuration text and signal snapshot allocation failures.
     Enable withDebugStream() for details when a failure occurs.
 
@@ -4096,7 +4002,7 @@ public:
 
     @code
       Serial.begin(115200);
-      device.begin(Serial).withSignals(2);
+      device.begin(Serial);
     @endcode
   */
   BlaeckBeginRef begin(Stream &stream);
@@ -4115,14 +4021,13 @@ public:
     error takes precedence. Reconnecting TCP clients does not require another begin().
 
     @param   server  A server with accept() returning a Client-derived value.
-    @return  A handle for setting the number of connections, table sizes and a debug
-             stream. Each has a default, so the handle can be ignored.
+    @return  A handle for setting the number of connections and a debug stream. Each
+             has a default, so the handle can be ignored.
 
     @code
       server.begin();
       device.begin(server)
           .withClients(4)
-          .withSignals(50)
           .withDebugStream(&device.Terminal);
     @endcode
   */
@@ -4262,8 +4167,7 @@ protected:
   // Sets a signal's name: a heap copy of ram, or the flash pointer. Exactly one is non-null.
   // Frees the copy the slot held before.
   void _setSignalName(int signalIndex, const char *ram, const __FlashStringHelper *flash);
-  // Frees the name copies and metadata records the signal table owns. Must run while
-  // _signalCapacity still describes the allocated table.
+  // Frees the name copies and metadata records the signal table owns.
   void _freeSignalOwned();
 #if BLAECK_ENABLE_SIGNAL_META
   // The signal's metadata record, allocated on first use. nullptr if the handle is dead or
@@ -4429,11 +4333,8 @@ protected:
   Print *_debugStream = nullptr;
   bool _storeString(detail::StoredString &slot, BlaeckString value);
   uint16_t _rejectedStringCount = 0;
-  Signal *Signals = nullptr;
-  // Allocates the signal table on first use.
-  bool _ensureSignalTable();
+  detail::ChunkList<Signal> Signals;
   int _signalIndex = 0;
-  unsigned int _signalCapacity = 0;
   bool _signalRegistrationFailed = false;
   uint16_t _rejectedSignalCount = 0;
   uint16_t _rejectedSignalPolicyCount = 0;
@@ -4469,56 +4370,29 @@ protected:
   uint32_t _lastIntervalMs = 0;
   unsigned long _timedInterval_ms = 1000;
 
-  // ── Table sizes ───────────────────────────────────────────────────
-  enum TableId
-  {
-    TABLE_SIGNALS,
-    TABLE_STATE_CHANNELS,
-    TABLE_EVENT_CHANNELS,
-    TABLE_EVENT_TYPES,
-    TABLE_COMMANDS,
-    TABLE_DEVICES
-  };
-  void _setTableCapacity(TableId table, unsigned int count);
-  // For a full table, prints what was dropped and which original begin() setting to raise.
-  void _warnTableFull(const __FlashStringHelper *table, unsigned int capacity,
-                      const char *droppedName);
-  void _warnTableFull(const __FlashStringHelper *table, unsigned int capacity,
-                      const __FlashStringHelper *droppedName);
+  // ── Table limits ──────────────────────────────────────────────────
+  // For an entry that found no room, prints what was dropped and why.
+  void _warnNoRoom(const __FlashStringHelper *what, const char *droppedName);
+  void _warnNoRoom(const __FlashStringHelper *what, const __FlashStringHelper *droppedName);
+  void _warnNoRoom(const __FlashStringHelper *what, BlaeckString droppedName);
   // One line of printRejections(), for a table that dropped something.
-  void _printRejectionLine(Print *out, const __FlashStringHelper *what,
-                           uint16_t dropped, unsigned int capacity);
+  void _printRejectionLine(Print *out, const __FlashStringHelper *what, uint16_t dropped);
 
   // The largest size any table accepts. Handles store their index as int16_t, with negative
   // values meaning rejected. In practice RAM runs out long before this.
   static const uint16_t MAX_TABLE_ENTRIES = INT16_MAX;
 
-  // Default table sizes, changed with the begin() chain. A table is allocated whole when its
-  // first entry is added.
-#if defined(__AVR__)
-  #if defined(RAMEND) && (RAMEND >= 0x10FF)
-    static const unsigned int DEFAULT_SIGNALS = 24;
-    static const byte DEFAULT_STATE_CHANNELS = 8;
-    static const byte DEFAULT_EVENT_CHANNELS = 6;
-    static const byte DEFAULT_EVENT_TYPES = 20;
-    static const byte DEFAULT_COMMANDS = 16;
-    static const byte DEFAULT_DEVICES = 4;
-  #else
-    static const unsigned int DEFAULT_SIGNALS = 8;
-    static const byte DEFAULT_STATE_CHANNELS = 3;
-    static const byte DEFAULT_EVENT_CHANNELS = 2;
-    static const byte DEFAULT_EVENT_TYPES = 8;
-    static const byte DEFAULT_COMMANDS = 6;
-    static const byte DEFAULT_DEVICES = 2;
-  #endif
-#else
-  static const unsigned int DEFAULT_SIGNALS = 64;
-  static const byte DEFAULT_STATE_CHANNELS = 32;
-  static const byte DEFAULT_EVENT_CHANNELS = 24;
-  static const byte DEFAULT_EVENT_TYPES = 64;
-  static const byte DEFAULT_COMMANDS = 32;
-  static const byte DEFAULT_DEVICES = 8;
-#endif
+  // Makes sure a slot table has a free slot, growing it by a chunk if every slot is in use.
+  // False if the table is at MAX_TABLE_ENTRIES or RAM ran out.
+  template <class T>
+  static bool _roomFor(detail::ChunkList<T> &table)
+  {
+    for (uint16_t i = 0; i < table.capacity(); ++i)
+      if (!table[i].inUse)
+        return true;
+    return table.capacity() < MAX_TABLE_ENTRIES && table.reserve(table.capacity() + 1);
+  }
+
   // Device IDs are one byte and 0 is the board itself.
   // Device IDs 1-254: the device list counts the board and its devices in one byte.
   static const byte MAX_DEVICES = 254;
@@ -4791,21 +4665,15 @@ protected:
   }
 
   typedef blaeck_detail::CommandHandlerEntry CommandHandlerEntry;
-  CommandHandlerEntry *_commandHandlers = nullptr;
-  uint16_t _commandCapacity = DEFAULT_COMMANDS;
-  // Entries that exist: the capacity once the table is allocated, 0 before. Loops over a
-  // table stop here.
-  uint16_t _commandSlots() const { return _commandHandlers != nullptr ? _commandCapacity : 0; }
-  // Allocates the table on first use. False if there isn't enough RAM.
-  bool _ensureCommandTable();
+  detail::ChunkList<CommandHandlerEntry> _commandHandlers;
+  // Entries that exist, in use or free. Loops over a table stop here.
+  uint16_t _commandSlots() const { return _commandHandlers.capacity(); }
 
   // ── Devices ───────────────────────────────────────────────────────
   // Added in order and never removed, so a device's DeviceID is its index plus one.
   typedef blaeck_detail::DeviceEntry DeviceEntry;
-  DeviceEntry *_devices = nullptr;
-  uint16_t _deviceCapacity = DEFAULT_DEVICES;
+  detail::ChunkList<DeviceEntry> _devices;
   byte _deviceCount = 0;
-  bool _ensureDeviceTable();
   // The entry for a DeviceID, or nullptr for 0 or an ID never handed out.
   DeviceEntry *_deviceEntry(byte id) const
   {
@@ -4836,10 +4704,8 @@ protected:
   // without state channels.
   static byte _dtypeCode(dataType t);
 #if BLAECK_ENABLE_STATE_CHANNELS
-  StateChannelEntry *_stateChannels = nullptr;
-  uint16_t _stateChannelCapacity = DEFAULT_STATE_CHANNELS;
-  uint16_t _stateChannelSlots() const { return _stateChannels != nullptr ? _stateChannelCapacity : 0; }
-  bool _ensureStateChannelTable();
+  detail::ChunkList<StateChannelEntry> _stateChannels;
+  uint16_t _stateChannelSlots() const { return _stateChannels.capacity(); }
   // A text channel's current value, or nullptr if it has none. buf is used only when an
   // option index has to be turned into its name.
   const char *_channelText(const StateChannelEntry &e, char *buf, byte bufSize, bool *inFlash = nullptr) const;
@@ -4870,10 +4736,8 @@ protected:
 #endif
 #if BLAECK_ENABLE_EVENTS
   typedef blaeck_detail::EventChannelEntry EventChannelEntry;
-  EventChannelEntry *_eventChannels = nullptr;
-  uint16_t _eventChannelCapacity = DEFAULT_EVENT_CHANNELS;
-  uint16_t _eventChannelSlots() const { return _eventChannels != nullptr ? _eventChannelCapacity : 0; }
-  bool _ensureEventChannelTable();
+  detail::ChunkList<EventChannelEntry> _eventChannels;
+  uint16_t _eventChannelSlots() const { return _eventChannels.capacity(); }
 
   // One table of event types for all channels. Each entry names its channel; a type's index
   // is its position among its channel's entries.
@@ -4886,10 +4750,7 @@ protected:
   static bool _eventTypeEquals(const EventTypeEntry &e, BlaeckString eventType);
   // Emits the entry's name with a terminator.
   void _emitEventType0(const EventTypeEntry &e);
-  EventTypeEntry *_eventTypes = nullptr;
-  uint16_t _eventTypeCapacity = DEFAULT_EVENT_TYPES;
-  uint16_t _eventTypeSlots() const { return _eventTypes != nullptr ? _eventTypeCapacity : 0; }
-  bool _ensureEventTypeTable();
+  detail::ChunkList<EventTypeEntry> _eventTypes;
   uint16_t _eventTypeCount = 0;
 #endif
   BlaeckAnyCommandHandler _anyCommandHandler = nullptr;
@@ -5034,87 +4895,12 @@ private:
 
 // ----- BlaeckBeginRef bodies -----
 // Defined here because they use Blaeck's private members. Documented at the
-// declarations. (Keep the blank line below, or this comment becomes withSignals()'s hover.)
-
-// A literal size above 32767 fails the build: GCC removes the call when the check is false
-// and fails the link with this message when it is true.
-#if defined(__GNUC__) && !defined(__clang__)
-extern void blaeck_capacity_above_32767() __attribute__((error(
-    "BLAECK: a table capacity above 32767 cannot be indexed - a handle names its slot "
-    "with an int16_t. Ask for 32767 or fewer.")));
-  #define BLAECK_CHECK_CAPACITY(count)                                     \
-    do {                                                                   \
-      if (__builtin_constant_p(count) &&                                   \
-          (unsigned long)(count) > (unsigned long)Blaeck::MAX_TABLE_ENTRIES) \
-        blaeck_capacity_above_32767();                                     \
-    } while (0)
-#else
-  #define BLAECK_CHECK_CAPACITY(count) do { } while (0)
-#endif
+// declarations. (Keep the blank line below, or this comment becomes withClients()'s hover.)
 
 inline BlaeckBeginRef &BlaeckBeginRef::withClients(byte count)
 {
   if (_owner != nullptr)
     _owner->_setMaxClients(count);
-  return *this;
-}
-
-inline BlaeckBeginRef &BlaeckBeginRef::withSignals(unsigned int count)
-{
-  BLAECK_CHECK_CAPACITY(count);
-  if (_owner != nullptr)
-    _owner->_setTableCapacity(Blaeck::TABLE_SIGNALS, count);
-  return *this;
-}
-
-inline BlaeckBeginRef &BlaeckBeginRef::withStateChannels(unsigned int count)
-{
-  BLAECK_CHECK_CAPACITY(count);
-#if BLAECK_ENABLE_STATE_CHANNELS
-  if (_owner != nullptr)
-    _owner->_setTableCapacity(Blaeck::TABLE_STATE_CHANNELS, count);
-#else
-  (void)count;
-#endif
-  return *this;
-}
-
-inline BlaeckBeginRef &BlaeckBeginRef::withEventChannels(unsigned int count)
-{
-  BLAECK_CHECK_CAPACITY(count);
-#if BLAECK_ENABLE_EVENTS
-  if (_owner != nullptr)
-    _owner->_setTableCapacity(Blaeck::TABLE_EVENT_CHANNELS, count);
-#else
-  (void)count;
-#endif
-  return *this;
-}
-
-inline BlaeckBeginRef &BlaeckBeginRef::withEventTypes(unsigned int count)
-{
-  BLAECK_CHECK_CAPACITY(count);
-#if BLAECK_ENABLE_EVENTS
-  if (_owner != nullptr)
-    _owner->_setTableCapacity(Blaeck::TABLE_EVENT_TYPES, count);
-#else
-  (void)count;
-#endif
-  return *this;
-}
-
-inline BlaeckBeginRef &BlaeckBeginRef::withCommands(unsigned int count)
-{
-  BLAECK_CHECK_CAPACITY(count);
-  if (_owner != nullptr)
-    _owner->_setTableCapacity(Blaeck::TABLE_COMMANDS, count);
-  return *this;
-}
-
-inline BlaeckBeginRef &BlaeckBeginRef::withDevices(unsigned int count)
-{
-  if (_owner != nullptr)
-    _owner->_setTableCapacity(Blaeck::TABLE_DEVICES, count);
   return *this;
 }
 
@@ -5436,8 +5222,8 @@ inline void BlaeckSignalRefBase::_setDisplayPrecision(uint8_t decimals)
 
 inline void BlaeckSignalRefBase::_setNameSuffix(uint8_t suffix)
 {
-  if (_owner == nullptr || _index < 0 || _owner->Signals == nullptr ||
-      static_cast<unsigned int>(_index) >= _owner->_signalCapacity)
+  if (_owner == nullptr || _index < 0 ||
+      static_cast<unsigned int>(_index) >= _owner->Signals.capacity())
     return;
   Signal &s = _owner->Signals[_index];
   s.NameSuffix = suffix;

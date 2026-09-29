@@ -133,13 +133,7 @@ void onSetPumpSpeed(const char *command, const char *const *params, byte paramCo
 void setup()
 {
   Serial.begin(115200);
-  device.begin(Serial)
-      .withSignals(3)
-      .withCommands(5)
-      .withStateChannels(3)
-      .withEventChannels(1)
-      .withEventTypes(1)
-      .withDevices(1);
+  device.begin(Serial);
 
   device.DeviceName = "SubDevicesTest";
   device.DeviceHWVersion = "Arduino Mega 2560";
