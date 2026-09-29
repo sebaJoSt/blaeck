@@ -30,7 +30,11 @@ int intTest[2] = {INT_MIN, INT_MAX};
 unsigned int uintTest[2] = {0, UINT_MAX};
 long longTest[2] = {LONG_MIN, LONG_MAX};
 unsigned long ulongTest[2] = {0, ULONG_MAX};
-long long longLongTest[2] = {LLONG_MIN, LLONG_MAX};
+// LLONG_MIN and LLONG_MAX sit behind a C99 guard on __STDC_VERSION__, which a C++
+// build does not set, so avr-libc and newlib both leave them undefined. long long is
+// 64 bits wherever the library builds, so the two ends are written out. The minimum
+// is spelled as -max - 1 because 9223372036854775808 has no type to be read as.
+long long longLongTest[2] = {-9223372036854775807LL - 1, 9223372036854775807LL};
 float floatTest[2] = {-FLT_MAX, FLT_MAX};
 double doubleTest[2] = {-DBL_MAX, DBL_MAX};
 float floatNaN = NAN;
