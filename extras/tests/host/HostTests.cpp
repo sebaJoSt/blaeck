@@ -2201,9 +2201,9 @@ static void properties()
   assert(commandFramePayload(stream.data.output, 0x95, 0) == std::string("\x00\x00\x08", 3) + f32(22.5f));
   stream.data.output.clear();
 
-  // On its step: 0.1 steps from 5, so 22.3000004 is stored as 5 + 173 * 0.1.
+  // On its step: 0.1 steps from 5, so 22.3000004 is stored as 22.3 rather than beside it.
   command(device, stream, "<Setpoint,22.3000004>");
-  assert(setpoint == 5.0f + 173 * 0.1f);
+  assert(setpoint == 22.3f);
   stream.data.output.clear();
 
   const auto refused = [&](const char *text, byte reason)
@@ -2227,7 +2227,7 @@ static void properties()
   refused("<Label,far too long>", BLAECK_ACK_TOO_LONG);
   refused("<Temperature,25>", BLAECK_ACK_READ_ONLY);
   refused("<Missing,1>", BLAECK_ACK_UNKNOWN);
-  assert(setpoint == 5.0f + 173 * 0.1f && percent == 10 && !enabled && mode == 0 && strcmp(label, "lab") == 0);
+  assert(setpoint == 22.3f && percent == 10 && !enabled && mode == 0 && strcmp(label, "lab") == 0);
 
   command(device, stream, "<Percent,200>");
   assert(percent == 200);
@@ -2241,6 +2241,19 @@ static void properties()
   assert(strcmp(label, "a,b") == 0);
   command(device, stream, "<Label,>");
   assert(label[0] == '\0');
+  stream.data.output.clear();
+
+  // A step is held as a float, so min + n * step lands beside the decimal the step was written
+  // as: 0.1 on a 0.01 step once came back as 0.099999994, a whole step out and worse than what
+  // arrived. Each of these is stored as the nearest float to the decimal asked for.
+  command(device, stream, "<Setpoint,5.1>");
+  assert(setpoint == 5.1f);
+  command(device, stream, "<Setpoint,29.9>");
+  assert(setpoint == 29.9f);
+  command(device, stream, "<Setpoint,12.7>");
+  assert(setpoint == 12.7f);
+  command(device, stream, "<Setpoint,22.35>"); // between two steps: left as it arrived
+  assert(setpoint == 22.35f);
   stream.data.output.clear();
 
   // Change reports: at most every 100 ms by default; Temperature only by 0.5 or more.

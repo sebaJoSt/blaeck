@@ -3266,13 +3266,21 @@ static bool _storeNumber(void *address, dataType type, double v)
   {
   case Blaeck_byte: if (v < 0 || v > 255) return false; *(byte *)address = (byte)v; return true;
   case Blaeck_short: case Blaeck_int:
-    if (v < -32768.0 || v > 32767.0) return false; { int16_t x = (int16_t)v; memcpy(address, &x, 2); } return true;
+    if (v < -32768.0 || v > 32767.0)
+      return false;
+    { int16_t x = (int16_t)v; memcpy(address, &x, 2); } return true;
   case Blaeck_ushort: case Blaeck_uint:
-    if (v < 0 || v > 65535.0) return false; { uint16_t x = (uint16_t)v; memcpy(address, &x, 2); } return true;
+    if (v < 0 || v > 65535.0)
+      return false;
+    { uint16_t x = (uint16_t)v; memcpy(address, &x, 2); } return true;
   case Blaeck_long:
-    if (v < -2147483648.0 || v > 2147483647.0) return false; { int32_t x = (int32_t)v; memcpy(address, &x, 4); } return true;
+    if (v < -2147483648.0 || v > 2147483647.0)
+      return false;
+    { int32_t x = (int32_t)v; memcpy(address, &x, 4); } return true;
   case Blaeck_ulong:
-    if (v < 0 || v > 4294967295.0) return false; { uint32_t x = (uint32_t)v; memcpy(address, &x, 4); } return true;
+    if (v < 0 || v > 4294967295.0)
+      return false;
+    { uint32_t x = (uint32_t)v; memcpy(address, &x, 4); } return true;
   case Blaeck_float: { float x = (float)v; memcpy(address, &x, sizeof x); } return true;
   case Blaeck_double: { double x = v; memcpy(address, &x, sizeof x); } return true;
   // The bounds are the nearest doubles inside the range: 2^63 itself does not fit.
@@ -3310,6 +3318,23 @@ static bool _parseLongLong(const char *text, long long &out)
 static bool _isIntegerType(dataType type)
 {
   return type != Blaeck_float && type != Blaeck_double && type != Blaeck_bool && type != Blaeck_string;
+}
+
+// The decimal places a step is written with: 0.01 gives 2, 0.5 gives 1, 2 gives 0. A step is
+// held as a float, which no decimal fraction lands on exactly, so the answer is the first
+// scaling that leaves a whole number to within the same thousandth the snap itself allows.
+// Six is as far as it looks, which is past the point a float distinguishes steps at all.
+static int _stepDecimals(double step)
+{
+  double scale = 1.0;
+  for (int decimals = 0; decimals < 6; decimals++)
+  {
+    const double scaled = step * scale;
+    if (fabs(scaled - floor(scaled + 0.5)) < 1e-3)
+      return decimals;
+    scale *= 10.0;
+  }
+  return 6;
 }
 
 byte Blaeck::_receiveProperty(uint16_t index)
@@ -3360,7 +3385,22 @@ byte Blaeck::_receiveProperty(uint16_t index)
       const double steps = (number - p.rangeMin) / p.rangeStep;
       const double nearest = floor(steps + 0.5);
       if (fabs(steps - nearest) < 1e-3)
-        number = p.rangeMin + nearest * p.rangeStep;
+      {
+        double snapped = (double)p.rangeMin + nearest * (double)p.rangeStep;
+        // min + n * step is arithmetic on two floats, neither of which is the decimal it was
+        // written as, so the sum lands beside the step rather than on it - 0.1 came back as
+        // 0.099999994, a whole float step out and worse than the value that arrived. Rounding
+        // the sum to the step's own decimals puts it back: the scaling is by an exact power of
+        // ten, so the result is the nearest number there is to the decimal intended. Skipped
+        // where the scaling would run out of digits, which the range a step this fine can
+        // cover does not reach.
+        double scale = 1.0;
+        for (int i = _stepDecimals(p.rangeStep); i > 0; i--)
+          scale *= 10.0;
+        if (fabs(snapped) * scale < 1e15)
+          snapped = floor(fabs(snapped) * scale + 0.5) / scale * (snapped < 0.0 ? -1.0 : 1.0);
+        number = snapped;
+      }
     }
     if (_isIntegerType(p.type))
     {
