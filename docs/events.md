@@ -3,8 +3,8 @@
 An event is something that happened: a threshold was crossed, a motor stalled, a run finished.
 
 It is the third kind, and the one with no value. A signal is a value sampled again and again. A
-state channel is a value that stands until it changes. An event is a moment, with nothing to
-read afterwards.
+property is a value that stands until it changes. An event is a moment, with nothing to read
+afterwards.
 
 ## A sketch that reports two events
 
@@ -89,7 +89,7 @@ An event carries nothing but its own name, so the wording is fixed when you comp
 no way to attach a temperature to `overheated`.
 
 Where a number matters, something else carries it. Log it as a signal if you want it in the
-history, or put it on a [state channel](state-channels.md) if it only has to be visible.
+history, or make it a [sensor](properties.md) if it only has to be visible.
 
 ## Describing a channel
 

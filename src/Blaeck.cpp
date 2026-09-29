@@ -116,15 +116,6 @@ byte Blaeck::_dtypeCode(dataType t)
   }
 }
 
-// The type a numeric tag names. On AVR, BlaeckDouble maps to float, as double * does.
-static dataType _tagType(BlaeckNumericTag tag)
-{
-#ifdef __AVR__
-  return tag.t == Blaeck_double ? Blaeck_float : tag.t;
-#else
-  return tag.t;
-#endif
-}
 
 void Blaeck::_flushCatalogs()
 {
@@ -132,10 +123,8 @@ void Blaeck::_flushCatalogs()
     return;
 
   // Each writer clears its own dirty flag, so a catalog a host asked for isn't sent twice.
-#if BLAECK_ENABLE_STATE_CHANNELS
-  if (_stateCatalogDirty)
-    this->writeStateChannels(0);
-#endif
+  if (_entityCatalogDirty)
+    this->writeEntities(0);
 
 #if BLAECK_ENABLE_EVENTS
 if (_eventCatalogDirty)
@@ -177,10 +166,8 @@ bool Blaeck::hasRejections() const
   if (_rejectedSignalMetaCount > 0)
     return true;
 #endif
-#if BLAECK_ENABLE_STATE_CHANNELS
-  if (_rejectedStateChannelCount > 0)
+  if (_rejectedPropertyCount > 0)
     return true;
-#endif
 #if BLAECK_ENABLE_EVENTS
   if (_rejectedEventChannelCount > 0 || _rejectedEventTypeCount > 0)
     return true;
@@ -221,10 +208,8 @@ bool Blaeck::printRejections(Print *out)
     _printRejectionLine(out, F("command"), _rejectedCommandCount);
   if (_rejectedDeviceCount > 0)
     _printRejectionLine(out, F("device"), _rejectedDeviceCount);
-#if BLAECK_ENABLE_STATE_CHANNELS
-  if (_rejectedStateChannelCount > 0)
-    _printRejectionLine(out, F("state channel"), _rejectedStateChannelCount);
-#endif
+  if (_rejectedPropertyCount > 0)
+    _printRejectionLine(out, F("input and sensor"), _rejectedPropertyCount);
 #if BLAECK_ENABLE_EVENTS
   if (_rejectedEventChannelCount > 0)
     _printRejectionLine(out, F("event channel"), _rejectedEventChannelCount);
@@ -625,14 +610,14 @@ void Blaeck::_reportSignalPolicyError(const __FlashStringHelper *message)
     _debugStream->println(message);
 }
 
-SignalReporting *Blaeck::_ensureSignalReporting(int16_t index)
+ReportingState *Blaeck::_ensureReporting(int16_t index)
 {
   if (index < 0 || index >= _signalIndex)
     return nullptr;
   Signal &s = Signals[index];
   if (s.Reporting == nullptr)
   {
-    s.Reporting = new (std::nothrow) SignalReporting();
+    s.Reporting = new (std::nothrow) ReportingState();
     if (s.Reporting == nullptr)
       _reportSignalPolicyError(F("No RAM for signal reporting; previous policy retained."));
   }
@@ -653,7 +638,7 @@ void Blaeck::_setSignalInterval(int16_t index, BlaeckIntervalMode mode, double d
   }
   if (mode == BLAECK_ON_CHANGE)
   {
-    SignalReporting *r = _ensureSignalReporting(index);
+    ReportingState *r = _ensureReporting(index);
     if (r == nullptr)
       return;
     r->intervalDelta = delta;
@@ -677,7 +662,7 @@ void Blaeck::_setSignalOnChange(int16_t index, double delta, uint32_t minInterva
     _reportSignalPolicyError(F("Invalid change threshold; previous policy retained."));
     return;
   }
-  if (SignalReporting *r = _ensureSignalReporting(index))
+  if (ReportingState *r = _ensureReporting(index))
   {
     r->changeDelta = delta;
     r->minIntervalMs = minIntervalMs;
@@ -724,50 +709,61 @@ static size_t _signalValueSize(dataType type)
   }
 }
 
-bool Blaeck::_prepareSignalSnapshot(Signal &s)
+// Makes room in r for a text snapshot of this length. False, reported once, if RAM ran out.
+bool Blaeck::_prepareTextSnapshot(ReportingState &r, size_t length)
 {
-  SignalReporting *r = s.Reporting;
-  if (r == nullptr || s.DataType != Blaeck_string)
-    return true;
-  const uint16_t needed = static_cast<uint16_t>(_textLength(s.Address, s.TextInFlash)) + 1;
-  if (needed > r->textCapacity)
+  const uint16_t needed = static_cast<uint16_t>(length) + 1;
+  if (needed > r.textCapacity)
   {
     char *text = new (std::nothrow) char[needed];
     if (text == nullptr)
     {
-      if (!r->memoryError)
-        _reportSignalPolicyError(F("No RAM for signal text snapshot; data frame not sent."));
-      r->memoryError = true;
+      if (!r.memoryError)
+        _reportSignalPolicyError(F("No RAM for a text snapshot; the value is not sent."));
+      r.memoryError = true;
       return false;
     }
-    if (r->text != nullptr)
-      memcpy(text, r->text, static_cast<size_t>(r->textLength) + 1);
-    delete[] r->text;
-    r->text = text;
-    r->textCapacity = needed;
+    if (r.text != nullptr)
+      memcpy(text, r.text, static_cast<size_t>(r.textLength) + 1);
+    delete[] r.text;
+    r.text = text;
+    r.textCapacity = needed;
   }
-  r->memoryError = false;
+  r.memoryError = false;
   return true;
 }
 
-void Blaeck::_captureSignalSnapshot(Signal &s)
+bool Blaeck::_prepareSignalSnapshot(Signal &s)
 {
-  SignalReporting &r = *s.Reporting;
-  if (s.DataType == Blaeck_string)
+  if (s.Reporting == nullptr || s.DataType != Blaeck_string)
+    return true;
+  return _prepareTextSnapshot(*s.Reporting, _textLength(s.Address, s.TextInFlash));
+}
+
+// Copies a value into r as the baseline later values are compared with. For text, r must have
+// room from _prepareTextSnapshot().
+static void _captureValue(ReportingState &r, dataType type, const void *value, bool inFlash)
+{
+  if (type == Blaeck_string)
   {
-    r.textLength = static_cast<byte>(_textLength(s.Address, s.TextInFlash));
+    r.textLength = static_cast<byte>(_textLength(value, inFlash));
     if (r.textLength != 0)
     {
-      if (!s.TextInFlash)
-        memcpy(r.text, s.Address, r.textLength);
+      if (!inFlash)
+        memcpy(r.text, value, r.textLength);
       else
         for (uint16_t i = 0; i < r.textLength; ++i)
-          r.text[i] = static_cast<char>(_textByte(s.Address, true, i));
+          r.text[i] = static_cast<char>(_textByte(value, true, i));
     }
     r.text[r.textLength] = '\0';
   }
   else
-    memcpy(r.value, s.Address, _signalValueSize(s.DataType));
+    memcpy(r.value, value, _signalValueSize(type));
+}
+
+void Blaeck::_captureSignalSnapshot(Signal &s)
+{
+  _captureValue(*s.Reporting, s.DataType, s.Address, s.TextInFlash);
 }
 
 template<class T>
@@ -803,28 +799,33 @@ static bool _floatingSignalChanged(const void *address, const byte *baseline, do
   return fabs(current - previous) >= delta;
 }
 
-bool Blaeck::_signalChanged(const Signal &s, double delta) const
+// Whether value differs from r's baseline by at least delta. Always true without a baseline.
+static bool _valueChanged(const ReportingState &r, dataType type, const void *value, bool inFlash, double delta)
 {
-  const SignalReporting &r = *s.Reporting;
   if (!r.valid)
     return true;
-  switch (s.DataType)
+  switch (type)
   {
-  case Blaeck_bool: return memcmp(s.Address, r.value, sizeof(bool)) != 0;
-  case Blaeck_byte: return _integerSignalChanged<byte>(s.Address, r.value, delta);
-  case Blaeck_short: case Blaeck_int: return _integerSignalChanged<int16_t>(s.Address, r.value, delta);
-  case Blaeck_ushort: case Blaeck_uint: return _integerSignalChanged<uint16_t>(s.Address, r.value, delta);
-  case Blaeck_long: return _integerSignalChanged<int32_t>(s.Address, r.value, delta);
-  case Blaeck_ulong: return _integerSignalChanged<uint32_t>(s.Address, r.value, delta);
-  case Blaeck_float: return _floatingSignalChanged<float>(s.Address, r.value, delta, FLT_MIN);
-  case Blaeck_double: return _floatingSignalChanged<double>(s.Address, r.value, delta, DBL_MIN);
+  case Blaeck_bool: return memcmp(value, r.value, sizeof(bool)) != 0;
+  case Blaeck_byte: return _integerSignalChanged<byte>(value, r.value, delta);
+  case Blaeck_short: case Blaeck_int: return _integerSignalChanged<int16_t>(value, r.value, delta);
+  case Blaeck_ushort: case Blaeck_uint: return _integerSignalChanged<uint16_t>(value, r.value, delta);
+  case Blaeck_long: return _integerSignalChanged<int32_t>(value, r.value, delta);
+  case Blaeck_ulong: return _integerSignalChanged<uint32_t>(value, r.value, delta);
+  case Blaeck_float: return _floatingSignalChanged<float>(value, r.value, delta, FLT_MIN);
+  case Blaeck_double: return _floatingSignalChanged<double>(value, r.value, delta, DBL_MIN);
   case Blaeck_string:
   {
-    const byte length = static_cast<byte>(_textLength(s.Address, s.TextInFlash));
-    return length != r.textLength || (length != 0 && !_textMatchesRam(s.Address, s.TextInFlash, r.text, length));
+    const byte length = static_cast<byte>(_textLength(value, inFlash));
+    return length != r.textLength || (length != 0 && !_textMatchesRam(value, inFlash, r.text, length));
   }
   default: return false;
   }
+}
+
+bool Blaeck::_signalChanged(const Signal &s, double delta) const
+{
+  return _valueChanged(*s.Reporting, s.DataType, s.Address, s.TextInFlash, delta);
 }
 
 #if BLAECK_ENABLE_SIGNAL_META
@@ -967,33 +968,6 @@ bool blaeck_detail::optionsAccepted(BlaeckString optionsCsv, Print *debug,
   return false;
 }
 
-bool blaeck_detail::stateGetterAccepted(const void *stateValue, dataType want, dataType have,
-                                        const __FlashStringHelper *method, Print *debug,
-                                        const char *name, bool nameInFlash)
-{
-  const bool taken = (stateValue != nullptr);
-  if (!taken && want == have)
-    return true;
-
-  if (debug != nullptr)
-  {
-    debug->print(method);
-    debug->print(taken ? F(" ignored, channel was declared with a variable: ")
-                       : F(" ignored, the getter does not return what the channel carries: "));
-    if (name != nullptr)
-    {
-      if (nameInFlash)
-        debug->print(reinterpret_cast<const __FlashStringHelper *>(name));
-      else
-        debug->print(name);
-    }
-    debug->println(taken
-                       ? F(". The getter would be read instead of the variable, so neither is trusted.")
-                       : F(". Declare the channel with the type the getter returns."));
-  }
-  return false;
-}
-
 // Store a value in a signal, converted to the signal's declared type. There are three
 // because no one C++ type holds all the others: a double on AVR is 4 bytes and can't hold a
 // long. False if there is no such signal, or it holds text.
@@ -1112,10 +1086,10 @@ void Blaeck::read()
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
         this->writeCommands(msg_id);
       }
-      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_STATE_CHANNELS)))
+      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_ENTITIES)))
       {
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
-        this->writeStateChannels(msg_id);
+        this->writeEntities(msg_id);
       }
       else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_EVENT_CHANNELS)))
       {
@@ -1216,6 +1190,13 @@ int Blaeck::_registerCommand(byte deviceId, const char *command, BlaeckCommandHa
     return -1;
   }
 
+  // An input or sensor answers to the name already.
+  if (_nameRefused(BlaeckString(command), true))
+  {
+    _rejectedCommandCount++;
+    return -1;
+  }
+
   for (uint16_t i = 0; i < _commandSlots(); i++)
   {
     if (_commandHandlers[i].inUse && strcmp(_commandHandlers[i].command, command) == 0)
@@ -1263,21 +1244,12 @@ void Blaeck::_resetCommandMeta(uint16_t handlerIndex, uint8_t kind)
 #if BLAECK_ENABLE_COMMAND_META
   CommandHandlerEntry &e = _commandHandlers[handlerIndex];
   e.kind = kind;
-  e.meta_min = 0.0f;
-  // A text command's default maximum length. Other kinds set their own range.
-  e.meta_max = (kind == BLAECK_CMD_TEXT) ? (float)BLAECK_TEXT_MAX_LENGTH : 0.0f;
-  e.meta_step = 0.0f;
-  e.unit = nullptr;
-  e.options = nullptr;
-  e.stateSignal = nullptr;
-  e.stateSource = BLAECK_STATE_SIGNAL;
   e.category = BLAECK_CAT_NONE;
   // Reset with the rest, so nothing carries over from an earlier registration.
   e.displayName = nullptr;
   e.deviceClass = nullptr;
   e.icon = nullptr;
   e.pressPayload = nullptr;
-  e.mode = 0;
 #else
   (void)handlerIndex;
   (void)kind;
@@ -1296,23 +1268,6 @@ void Blaeck::onAnyCommand(BlaeckAnyCommandHandler handler)
 
 void Blaeck::clearAllCommandHandlers()
 {
-#if BLAECK_ENABLE_STATE_CHANNELS
-  // Free the channels these commands owned through withOwnState(). clearAllStateChannels()
-  // leaves them alone, so this is the only place they are released.
-  for (uint16_t i = 0; i < _stateChannelSlots(); i++)
-  {
-    if (!_stateChannels[i].ownedByCommand)
-      continue;
-
-    // Each catalog is marked changed only if it held something.
-    if (_stateChannels[i].inUse)
-      _stateCatalogDirty = true;
-
-    _setChannelName(_stateChannels[i].name, _stateChannels[i].nameInFlash, nullptr, nullptr);
-    _stateChannels[i] = StateChannelEntry{};
-  }
-#endif
-
   for (uint16_t i = 0; i < _commandSlots(); i++)
   {
     if (_commandHandlers[i].inUse)
@@ -1337,206 +1292,9 @@ bool Blaeck::_storeString(detail::StoredString &slot, BlaeckString value)
   return false;
 }
 
-void Blaeck::_writeCommandState(const char *command, bool inFlash)
-{
-#if !BLAECK_ENABLE_COMMAND_META || !BLAECK_ENABLE_STATE_CHANNELS
-  (void)command;
-  (void)inFlash;
-#else
-  if (command == nullptr)
-    return;
-
-  for (uint16_t i = 0; i < _commandSlots(); i++)
-  {
-    const CommandHandlerEntry &e = _commandHandlers[i];
-    if (!e.inUse || e.stateSource != BLAECK_STATE_CHANNEL || e.stateSignal == nullptr)
-      continue;
-    if (inFlash ? !_flashStringEqualsName(reinterpret_cast<const __FlashStringHelper *>(command), e.command)
-                : strcmp(e.command, command) != 0)
-      continue;
-
-    // The channel exists unless the table was full, which was reported at registration.
-    for (uint16_t c = 0; c < _stateChannelSlots(); c++)
-    {
-      // The channel carries the command's name, within the command's device.
-      if (!_stateChannels[c].inUse || !_stateChannels[c].ownedByCommand
-          || _stateChannels[c].deviceId != e.deviceId)
-        continue;
-      const StateChannelEntry &state = _stateChannels[c];
-      BlaeckString stateName = state.nameInFlash
-          ? BlaeckString(reinterpret_cast<const __FlashStringHelper *>(state.name))
-          : BlaeckString(state.name);
-      if (stateName != BlaeckString(e.stateSignal))
-        continue;
-
-      // Resolve the text as writeState(channelName) does: from a getter, a buffer, or a select's
-      // index. An empty result would delete a retained value on the host.
-      char optionBuf[BLAECK_STATE_MAX_OPTION_CHARS];
-      bool textInFlash;
-      const char *text = _channelText(_stateChannels[c], optionBuf, sizeof(optionBuf), &textInFlash);
-      _writeStateFrame(c, text, nullptr, 0, textInFlash);
-      return;
-    }
-    return;
-  }
-#endif
-}
-
-#if BLAECK_ENABLE_COMMAND_META
-// Adds a command's own channel. addStateChannel() refuses such names.
-bool Blaeck::_addOwnedStateChannel(byte deviceId, BlaeckString channelName, BlaeckStateTextGetter getStateText,
-                                        dataType valueType, const void *value)
-{
-#if !BLAECK_ENABLE_STATE_CHANNELS
-  (void)deviceId;
-  (void)channelName;
-  (void)getStateText;
-  (void)valueType;
-  (void)value;
-  return false;
-#else
-  if (channelName == nullptr)
-    return false;
-
-  if (channelName.read() == 0)
-    return false;
-
-  // Only a channel of the command's own device can be taken over.
-  int existing = _findStateChannel(deviceId, channelName);
-  if (existing >= 0 && !_stateChannels[existing].ownedByCommand)
-  {
-    // The sketch already added this name. The command takes it over; say so, because the
-    // addStateChannel() call no longer has any effect.
-    if (_debugStream != nullptr)
-    {
-      _debugStream->print(F("Channel taken over by a command's own state; drop the addStateChannel() for: "));
-      channelName.printTo(*_debugStream);
-      _debugStream->println();
-    }
-  }
-
-  if (existing >= 0)
-  {
-    _stateChannels[existing].icon = nullptr;
-    _stateChannels[existing].diagnostic = true;
-    _stateChannels[existing].getStateText = getStateText;
-    _stateChannels[existing].valueType = valueType;
-    _stateChannels[existing].stateValue = value;
-    _stateChannels[existing].textInFlash = false;
-    _stateChannels[existing].ownedByCommand = true;
-    return true;
-  }
-
-  if (!_roomFor(_stateChannels))
-  {
-    _warnNoRoom(F("state channel"), channelName);
-    _rejectedStateChannelCount++;
-    return false;
-  }
-
-  for (uint16_t i = 0; i < _stateChannelSlots(); i++)
-  {
-    if (_stateChannels[i].inUse)
-      continue;
-    if (!_setChannelName(_stateChannels[i].name, _stateChannels[i].nameInFlash,
-                         channelName.inFlash() ? nullptr : channelName.data(),
-                         channelName.inFlash() ? reinterpret_cast<const __FlashStringHelper *>(channelName.data()) : nullptr))
-    {
-      if (_debugStream != nullptr)
-        _debugStream->println(F("No RAM for owned state channel name."));
-      ++_rejectedStateChannelCount;
-      return false;
-    }
-    _stateChannels[i].icon = nullptr;
-    // Diagnostic, since the command's control already shows the value.
-    _stateChannels[i].diagnostic = true;
-    _stateChannels[i].getStateText = getStateText;
-    _stateChannels[i].valueType = valueType;
-    _stateChannels[i].stateValue = value;
-    _stateChannels[i].textInFlash = false;
-    _stateChannels[i].truncationWarned = false;
-    _stateChannels[i].ownedByCommand = true;
-    _stateChannels[i].inUse = true;
-    _stateChannels[i].deviceId = deviceId;
-    _stateCatalogDirty = true;
-    return true;
-  }
-
-  _warnNoRoom(F("state channel"), channelName);
-  _rejectedStateChannelCount++;
-  return false;
-#endif
-}
-
-bool Blaeck::_declareOwnState(uint16_t handlerIndex, BlaeckString channelName,
-                                   BlaeckStateTextGetter getStateText)
-{
-  return _declareOwnState(handlerIndex, channelName, getStateText, Blaeck_string, nullptr);
-}
-
-bool Blaeck::_declareOwnState(uint16_t handlerIndex, BlaeckString channelName,
-                                   BlaeckStateTextGetter getStateText, dataType valueType,
-                                   const void *value, bool selectIndex)
-{
-  // The value needs a source, a getter or a variable. Without one it would never be reported.
-  if (channelName == nullptr || (getStateText == nullptr && value == nullptr))
-    return false;
-
-  if (!_addOwnedStateChannel(_commandHandlers[handlerIndex].deviceId, channelName, getStateText,
-                             valueType, value))
-    return false;
-
-  // A select's options go to its channel, so a host shows a list and an index can be turned
-  // into a name.
-#if BLAECK_ENABLE_STATE_CHANNELS
-  const CommandHandlerEntry &cmd = _commandHandlers[handlerIndex];
-  int ch = _findStateChannel(cmd.deviceId, channelName);
-  if (ch >= 0)
-  {
-    _stateChannels[ch].stateIsSelectIndex = selectIndex;
-    // A host matches a switch's state against "1" and "0", so a getter's "ON" or "true" is
-    // converted before it is sent.
-    if (cmd.kind == BLAECK_CMD_SWITCH && getStateText != nullptr)
-      _stateChannels[ch].stateIsSwitchBool = true;
-    // A name from a getter or buffer is checked against the options.
-    if (cmd.kind == BLAECK_CMD_SELECT && !selectIndex)
-      _stateChannels[ch].stateIsSelectName = true;
-    if (cmd.kind == BLAECK_CMD_SELECT && cmd.options != nullptr)
-      _stateChannels[ch].options = cmd.options;
-  }
-#else
-  // No channel was added, so there is nothing to give the options to.
-  (void)handlerIndex;
-  (void)selectIndex;
-#endif
-
-  return true;
-}
-#endif
-
-BlaeckNumberCommandNeedsRange BlaeckDeviceBase::onNumberCommand(const char *command, BlaeckCommandHandler handler)
-{
-  return BlaeckNumberCommandNeedsRange(_core, (int16_t)_registerCommand(command, handler, BLAECK_CMD_NUMBER));
-}
-
-BlaeckSwitchCommandRef BlaeckDeviceBase::onSwitchCommand(const char *command, BlaeckCommandHandler handler)
-{
-  return BlaeckSwitchCommandRef(_core, (int16_t)_registerCommand(command, handler, BLAECK_CMD_SWITCH));
-}
-
-BlaeckSelectCommandNeedsOptions BlaeckDeviceBase::onSelectCommand(const char *command, BlaeckCommandHandler handler)
-{
-  return BlaeckSelectCommandNeedsOptions(_core, (int16_t)_registerCommand(command, handler, BLAECK_CMD_SELECT));
-}
-
 BlaeckButtonCommandRef BlaeckDeviceBase::onButtonCommand(const char *command, BlaeckCommandHandler handler)
 {
   return BlaeckButtonCommandRef(_core, (int16_t)_registerCommand(command, handler, BLAECK_CMD_BUTTON));
-}
-
-BlaeckTextCommandRef BlaeckDeviceBase::onTextCommand(const char *command, BlaeckCommandHandler handler)
-{
-  return BlaeckTextCommandRef(_core, (int16_t)_registerCommand(command, handler, BLAECK_CMD_TEXT));
 }
 
 uint16_t Blaeck::_flashCsvOptionCount(BlaeckString csv)
@@ -1581,86 +1339,55 @@ bool Blaeck::_flashCsvHasBlankField(BlaeckString csv)
   return !fieldHasContent;
 }
 
-long Blaeck::getSelectOptionIndexOf(const char *command, const char *optionName) const
+long Blaeck::getSelectOptionIndexOf(BlaeckString name, const char *optionName) const
 {
-  if (command == nullptr || optionName == nullptr)
+  const int index = _findProperty(name);
+  if (index < 0 || optionName == nullptr || _properties[index].kind != BLAECK_VALUE_ENUM)
     return -1;
-
-#if !BLAECK_ENABLE_COMMAND_META
-  // No metadata, so no options to match.
-  return -1;
-#else
-  for (uint16_t i = 0; i < _commandSlots(); i++)
-  {
-    const CommandHandlerEntry &e = _commandHandlers[i];
-    if (!e.inUse || e.kind != BLAECK_CMD_SELECT || e.options == nullptr)
-      continue;
-    if (strcmp(e.command, command) != 0)
-      continue;
-
-    // The same match as an incoming command value.
-    return _flashCsvIndexOf(e.options, optionName);
-  }
-  return -1;
-#endif
+  // The same match as a value a host sends.
+  return _flashCsvIndexOf(_properties[index].options, optionName);
 }
 
-bool Blaeck::getSelectOptionNameAt(const char *command, byte index, char *out, byte outSize) const
+bool Blaeck::getSelectOptionNameAt(BlaeckString name, byte index, char *out, byte outSize) const
 {
   if (out == nullptr || outSize == 0)
     return false;
   out[0] = '\0';
-  if (command == nullptr)
+  const int property = _findProperty(name);
+  if (property < 0 || _properties[property].kind != BLAECK_VALUE_ENUM)
     return false;
 
-#if !BLAECK_ENABLE_COMMAND_META
-  // No metadata, so no options to read.
-  (void)index;
-  return false;
-#else
-  for (uint16_t i = 0; i < _commandSlots(); i++)
+  // Skip `index` commas, then copy up to the next one.
+  BlaeckString p = _properties[property].options;
+  byte seen = 0;
+  unsigned int at = 0;
+  while (seen < index)
   {
-    const CommandHandlerEntry &e = _commandHandlers[i];
-    if (!e.inUse || e.kind != BLAECK_CMD_SELECT || e.options == nullptr)
-      continue;
-    if (strcmp(e.command, command) != 0)
-      continue;
-
-    // Skip `index` commas, then copy up to the next one.
-    BlaeckString p = e.options;
-    byte seen = 0;
-    unsigned int at = 0;
-    while (seen < index)
-    {
-      byte c = p.read(at);
-      if (c == 0)
-        return false; // fewer options than the index asked for
-      if (c == ',')
-        seen++;
-      at++;
-    }
-
-    byte len = 0;
-    byte c;
-    while ((c = p.read(at + len)) != 0 && c != ',')
-    {
-      // A shortened name would match no option, so fail instead.
-      if ((unsigned int)len + 1 >= outSize)
-      {
-        out[0] = '\0';
-        return false;
-      }
-      out[len] = (char)c;
-      len++;
-    }
-    out[len] = '\0';
-    return len > 0;
+    byte c = p.read(at);
+    if (c == 0)
+      return false; // fewer options than the index asked for
+    if (c == ',')
+      seen++;
+    at++;
   }
-  return false;
-#endif
+
+  byte len = 0;
+  byte c;
+  while ((c = p.read(at + len)) != 0 && c != ',')
+  {
+    // A shortened name would match no option, so fail instead.
+    if ((unsigned int)len + 1 >= outSize)
+    {
+      out[0] = '\0';
+      return false;
+    }
+    out[len] = (char)c;
+    len++;
+  }
+  out[len] = '\0';
+  return len > 0;
 }
 
-#if BLAECK_ENABLE_COMMAND_META
 long Blaeck::_flashCsvIndexOf(BlaeckString csv, const char *value)
 {
   if (csv == nullptr || value == nullptr || value[0] == '\0')
@@ -1700,7 +1427,6 @@ long Blaeck::_flashCsvIndexOf(BlaeckString csv, const char *value)
     }
   }
 }
-#endif
 
 bool Blaeck::_receiveByte(Receiver &r, char rc)
 {
@@ -2013,8 +1739,23 @@ void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
   byte ackStatus = 1;                  // 0 = accepted, 1 = rejected
   byte ackReason = BLAECK_ACK_UNKNOWN; // reason reported when rejected
   bool matched = false;
+  int propertySet = -1;
 
-  for (uint16_t i = 0; i < _commandSlots(); i++)
+  // An input or sensor: the value is checked and stored here; its callback and the new value
+  // follow the ack.
+  const int property = _findProperty(BlaeckString(_parsedCommand));
+  if (property >= 0)
+  {
+    matched = true;
+    ackReason = _receiveProperty((uint16_t)property);
+    if (ackReason == BLAECK_ACK_OK)
+    {
+      ackStatus = 0;
+      propertySet = property;
+    }
+  }
+
+  for (uint16_t i = 0; !matched && i < _commandSlots(); i++)
   {
     if (_commandHandlers[i].inUse &&
         _commandHandlers[i].handler != nullptr &&
@@ -2025,11 +1766,7 @@ void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
       if (_deviceMissing(_commandHandlers[i].deviceId))
         ackReason = BLAECK_ACK_DEVICE_NOT_RESPONDING;
       else
-#if BLAECK_ENABLE_COMMAND_META
-        ackReason = _validateTypedCommand(i);
-#else
         ackReason = BLAECK_ACK_OK;
-#endif
       if (ackReason == BLAECK_ACK_OK)
       {
         ackStatus = 0;
@@ -2063,6 +1800,14 @@ void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
   if (sendAck)
   {
     _writeCommandAck(_receiver.chars, ackStatus, ackReason);
+  }
+
+  if (propertySet >= 0)
+  {
+    PropertyEntry &p = _properties[propertySet];
+    if (p.callback != nullptr)
+      p.callback();
+    _writePropertyFrame((uint16_t)propertySet);
   }
 }
 
@@ -2111,121 +1856,6 @@ void Blaeck::_writeCommandAck(const char *rawCommand, byte status, byte reasonCo
   _frameClose();
 }
 
-#if BLAECK_ENABLE_STATE_CHANNELS
-int Blaeck::_registerStateChannel(byte deviceId, const char *channelName, const __FlashStringHelper *flashName,
-                                         dataType valueType, const void *value, bool textInFlash)
-{
-  // Only a RAM name is copied, so only it can be too long.
-  char probe[2];
-  bool emptyFlash = flashName != nullptr && copyFlashName(flashName, probe, sizeof(probe)) == 0;
-  if ((channelName == nullptr && flashName == nullptr) || emptyFlash ||
-      (channelName != nullptr && channelName[0] == '\0'))
-  {
-    _rejectedStateChannelCount++;
-    return -1;
-  }
-
-  // A command's own channel takes its value only from the command.
-  int owned = flashName != nullptr ? _findStateChannel(deviceId, flashName) : _findStateChannel(deviceId, channelName);
-  if (owned >= 0 && _stateChannels[owned].ownedByCommand)
-  {
-    if (_debugStream != nullptr)
-    {
-      _debugStream->print(F("Channel belongs to a command's own state and cannot be redeclared: "));
-      _debugStream->println(channelName);
-    }
-    _rejectedStateChannelCount++;
-    return -1;
-  }
-
-  if (channelName != nullptr && strlen(channelName) >= MAX_STATE_NAME_COUNT)
-  {
-    if (_debugStream != nullptr)
-    {
-      _debugStream->print(F("Channel name too long for state channel table: "));
-      _debugStream->println(channelName);
-    }
-    _rejectedStateChannelCount++;
-    return -1;
-  }
-
-  // Declaring an existing name reuses its slot with the metadata cleared.
-  int existing = flashName != nullptr ? _findStateChannel(deviceId, flashName) : _findStateChannel(deviceId, channelName);
-  if (existing >= 0)
-  {
-    _stateChannels[existing].icon = nullptr;
-    _stateChannels[existing].diagnostic = false;
-    _stateChannels[existing].deviceClass = nullptr;
-    _stateChannels[existing].options = nullptr;
-    _stateChannels[existing].disabledByDefault = false;
-    _stateChannels[existing].forceUpdate = false;
-    _stateChannels[existing].getStateText = nullptr;
-    _stateChannels[existing].unit = nullptr;
-    _stateChannels[existing].metaFlags = 0;
-    _stateChannels[existing].displayPrecision = 0;
-    _stateChannels[existing].valueType = valueType;
-    _stateChannels[existing].stateValue = value;
-    _stateChannels[existing].textInFlash = textInFlash;
-    _stateChannels[existing].stateIsSelectIndex = false;
-    _stateChannels[existing].stateIsSelectName = false;
-    _stateChannels[existing].stateIsSwitchBool = false;
-    _stateCatalogDirty = true;
-    return existing;
-  }
-
-  if (!_roomFor(_stateChannels))
-  {
-    if (flashName != nullptr)
-      _warnNoRoom(F("state channel"), flashName);
-    else
-      _warnNoRoom(F("state channel"), channelName);
-    _rejectedStateChannelCount++;
-    return -1;
-  }
-
-  for (uint16_t i = 0; i < _stateChannelSlots(); i++)
-  {
-    if (!_stateChannels[i].inUse)
-    {
-      if (!_setChannelName(_stateChannels[i].name, _stateChannels[i].nameInFlash, channelName, flashName))
-      {
-        if (_debugStream != nullptr)
-        {
-          _debugStream->print(F("State channel name allocation failed: "));
-          _debugStream->println(channelName);
-        }
-        _rejectedStateChannelCount++;
-        return -1;
-      }
-      _stateChannels[i].icon = nullptr;
-      _stateChannels[i].diagnostic = false;
-      _stateChannels[i].deviceClass = nullptr;
-      _stateChannels[i].options = nullptr;
-      _stateChannels[i].disabledByDefault = false;
-      _stateChannels[i].forceUpdate = false;
-      _stateChannels[i].getStateText = nullptr;
-      _stateChannels[i].unit = nullptr;
-      _stateChannels[i].metaFlags = 0;
-      _stateChannels[i].displayPrecision = 0;
-      _stateChannels[i].truncationWarned = false;
-      _stateChannels[i].valueType = valueType;
-      _stateChannels[i].stateValue = value;
-      _stateChannels[i].textInFlash = textInFlash;
-      _stateChannels[i].stateIsSelectIndex = false;
-      _stateChannels[i].stateIsSelectName = false;
-      _stateChannels[i].stateIsSwitchBool = false;
-      _stateChannels[i].inUse = true;
-      _stateChannels[i].deviceId = deviceId;
-      _stateCatalogDirty = true;
-      return (int)i;
-    }
-  }
-
-  _warnNoRoom(F("state channel"), channelName);
-  _rejectedStateChannelCount++;
-  return -1;
-}
-
 bool Blaeck::_flashStringEqualsName(const __FlashStringHelper *flashName, const char *name)
 {
   if (flashName == nullptr || name == nullptr)
@@ -2243,570 +1873,6 @@ bool Blaeck::_flashStringEqualsName(const __FlashStringHelper *flashName, const 
       return true;
   }
 }
-
-void Blaeck::clearAllStateChannels()
-{
-  for (uint16_t i = 0; i < _stateChannelSlots(); i++)
-  {
-    // Channels a command owns stay; clearAllCommandHandlers() removes them with their commands.
-    if (_stateChannels[i].ownedByCommand)
-      continue;
-
-    // Only a slot that held something changes the catalog.
-    if (_stateChannels[i].inUse)
-      _stateCatalogDirty = true;
-
-    _setChannelName(_stateChannels[i].name, _stateChannels[i].nameInFlash, nullptr, nullptr);
-    _stateChannels[i] = StateChannelEntry{};
-  }
-}
-
-int Blaeck::_findStateChannel(byte deviceId, const __FlashStringHelper *channelName) const
-{
-  for (uint16_t i = 0; i < _stateChannelSlots(); i++)
-  {
-    if (_stateChannels[i].inUse && _stateChannels[i].deviceId == deviceId &&
-        _channelNameEqualsFlash(_stateChannels[i].name, _stateChannels[i].nameInFlash, channelName))
-      return i;
-  }
-  return -1;
-}
-
-int Blaeck::_findStateChannel(byte deviceId, const char *channelName) const
-{
-  if (channelName == nullptr || channelName[0] == '\0')
-    return -1;
-
-  for (uint16_t i = 0; i < _stateChannelSlots(); i++)
-  {
-    if (_stateChannels[i].inUse && _stateChannels[i].deviceId == deviceId
-        && _channelNameEquals(_stateChannels[i].name, _stateChannels[i].nameInFlash, channelName))
-      return (int)i;
-  }
-  return -1;
-}
-
-void Blaeck::_writeStateText(byte deviceId, const char *channelName, bool nameInFlash, const char *text, bool textInFlash)
-{
-  int channelIndex = _stateChannelForPush(deviceId, channelName, true, nameInFlash);
-  if (channelIndex < 0)
-    return;
-
-  // A text channel points at the sketch's own buffer. Don't repoint it at the caller's text,
-  // which may not outlive the call.
-  if (_stateChannels[channelIndex].stateValue != nullptr)
-  {
-    if (_debugStream != nullptr)
-    {
-      _debugChannel(F("State dropped, channel reads its own buffer; use writeState(channelName) for: "),
-                    _stateChannels[channelIndex]);
-      _debugStream->println();
-    }
-    return;
-  }
-
-  _writeStateFrame(channelIndex, text, nullptr, 0, textInFlash);
-}
-
-void Blaeck::_writeStateCurrent(byte deviceId, const char *channelName, bool nameInFlash)
-{
-  if (!_mayWriteFrame())
-    return;
-
-  int channelIndex = nameInFlash ? _findStateChannel(deviceId, reinterpret_cast<const __FlashStringHelper *>(channelName))
-                                : _findStateChannel(deviceId, channelName);
-  if (channelIndex < 0)
-  {
-    if (_debugStream != nullptr)
-    {
-      _debugStream->print(F("State dropped, channel not declared with addStateChannel(): "));
-      if (channelName != nullptr)
-      {
-        if (nameInFlash)
-          _debugStream->print(reinterpret_cast<const __FlashStringHelper *>(channelName));
-        else
-          _debugStream->print(channelName);
-      }
-      _debugStream->println();
-    }
-    return;
-  }
-
-  if (_stateChannels[channelIndex].ownedByCommand)
-  {
-    if (_debugStream != nullptr)
-    {
-      _debugChannel(F("State dropped, channel belongs to a command's own state; use writeCommandState() for: "),
-                    _stateChannels[channelIndex]);
-      _debugStream->println();
-    }
-    return;
-  }
-
-  const StateChannelEntry &e = _stateChannels[channelIndex];
-  char optionBuf[BLAECK_STATE_MAX_OPTION_CHARS];
-  bool textInFlash;
-  const char *text = _channelText(e, optionBuf, sizeof(optionBuf), &textInFlash);
-  _writeStateFrame(channelIndex, text, nullptr, 0, textInFlash);
-}
-
-// Finds the channel for a writeState() push, or returns -1 with a note on the debug stream.
-// Shared by the text and number forms. A channel with a getter is refused, since the getter
-// would replace the pushed value; a channel with a variable takes the value into it.
-int Blaeck::_stateChannelForPush(byte deviceId, const char *channelName, bool wantText, bool nameInFlash)
-{
-  if (!_transportReady())
-    return -1;
-
-  int channelIndex = nameInFlash ? _findStateChannel(deviceId, reinterpret_cast<const __FlashStringHelper *>(channelName))
-                                : _findStateChannel(deviceId, channelName);
-  if (channelIndex < 0)
-  {
-    if (_debugStream != nullptr)
-    {
-      _debugStream->print(F("State dropped, channel not declared with addStateChannel(): "));
-      if (channelName != nullptr)
-      {
-        if (nameInFlash)
-          _debugStream->print(reinterpret_cast<const __FlashStringHelper *>(channelName));
-        else
-          _debugStream->print(channelName);
-      }
-      _debugStream->println();
-    }
-    return -1;
-  }
-
-  const StateChannelEntry &e = _stateChannels[channelIndex];
-  if (e.ownedByCommand)
-  {
-    if (_debugStream != nullptr)
-    {
-      _debugChannel(F("State dropped, channel belongs to a command's own state; use writeCommandState() for: "), e);
-      _debugStream->println();
-    }
-    return -1;
-  }
-
-  const bool isText = (e.valueType == Blaeck_string);
-  if (isText != wantText)
-  {
-    if (_debugStream != nullptr)
-    {
-      _debugChannel(isText ? F("State dropped, channel carries text; use writeState(channelName, text) for: ")
-                          : F("State dropped, channel carries a number; use writeState(channelName, value) for: "), e);
-      _debugStream->println();
-    }
-    return -1;
-  }
-
-  const bool hasGetter = isText ? (e.getStateText != nullptr) : (e.getNumber != nullptr);
-  if (hasGetter)
-  {
-    if (_debugStream != nullptr)
-    {
-      _debugChannel(F("State dropped, channel works its value out for itself; use writeState(channelName) for: "), e);
-      _debugStream->println();
-    }
-    return -1;
-  }
-
-  return channelIndex;
-}
-
-void Blaeck::_writeStateNumber(byte deviceId, const char *channelName, long s, unsigned long u, double d, bool nameInFlash)
-{
-  int channelIndex = _stateChannelForPush(deviceId, channelName, false, nameInFlash);
-  if (channelIndex < 0)
-    return;
-
-  const StateChannelEntry &e = _stateChannels[channelIndex];
-  byte pushed[8];
-  byte len = _valueBytes(e.valueType, s, u, d, pushed);
-
-  // Store into the channel's variable, so the value stays when the catalog is next read.
-  if (e.stateValue != nullptr && len > 0)
-    memcpy(const_cast<void *>(e.stateValue), pushed, len);
-
-  _writeStateFrame(channelIndex, nullptr, pushed, len);
-}
-
-void Blaeck::_writeStateFrame(int channelIndex, const char *text, const byte *pushed, byte pushedLen, bool textInFlash)
-{
-  if (!_mayWriteFrame())
-    return;
-
-  // Send changed catalogs first, so the index refers to the list the host has.
-  _flushCatalogs();
-
-  // The value comes from the channel's variable or getter, or, for a channel added with a tag,
-  // from the bytes writeState() passed in.
-  StateChannelEntry &e = _stateChannels[channelIndex];
-  byte valueBytes[8];
-  byte valueLen = pushedLen;
-  if (pushed != nullptr)
-    memcpy(valueBytes, pushed, pushedLen);
-  else
-    valueLen = _channelValueBytes(e, valueBytes);
-
-  // No value, so send nothing: the frame can't express "none", and an empty text would delete
-  // a retained value on the host. An empty string is still sent, since that is a deliberate
-  // clear.
-  if (valueLen == 0 && text == nullptr)
-    return;
-
-  if (text == nullptr)
-  {
-    text = "";
-    textInFlash = false;
-  }
-
-  // Capped at 255 bytes, like a string signal.
-  size_t rawLen = _textLength(text, textInFlash, 256);
-  byte len = (rawLen > 255) ? (byte)255 : (byte)rawLen;
-  if (rawLen > 255 && !e.truncationWarned)
-  {
-    e.truncationWarned = true;
-    _debugChannel(F("State text truncated to 255 bytes on channel: "), e);
-    if (_debugStream != nullptr)
-      _debugStream->println();
-  }
-
-  if (!_frameOpen(0x95, 0))
-    return;
-  // Layout: State (0x95) in the protocol spec.
-  _emitDeviceId(_stateChannels[channelIndex].deviceId);
-  _emitByte((byte)(channelIndex & 0xFF));
-  _emitByte((byte)((channelIndex >> 8) & 0xFF));
-  _emitByte(_dtypeCode(e.valueType));
-  if (valueLen > 0)
-  {
-    _emitBytes(valueBytes, valueLen);
-  }
-  else
-  {
-    _emitByte(len);
-    if (len > 0)
-      _emitTextBytes(text, textInFlash, len);
-  }
-  _frameClose();
-}
-
-void Blaeck::writeStateChannels()
-{
-  this->writeStateChannels(0);
-}
-
-void Blaeck::writeStateChannels(unsigned long msg_id)
-{
-  this->writeStateChannelsFrame(msg_id);
-}
-
-#if BLAECK_ENABLE_STATE_CHANNELS
-void Blaeck::_debugChannel(const __FlashStringHelper *prefix, const StateChannelEntry &e) const
-{
-  if (_debugStream == nullptr)
-    return;
-  _debugStream->print(prefix);
-  if (e.nameInFlash)
-    _debugStream->print(reinterpret_cast<const __FlashStringHelper *>(e.name));
-  else
-    _debugStream->print(e.name);
-}
-
-const char *Blaeck::_checkedSelectName(const StateChannelEntry &e, const char *text) const
-{
-  // No value yet is fine; pass it on as none.
-  if (text == nullptr || text[0] == '\0')
-    return text;
-
-#if BLAECK_ENABLE_COMMAND_META
-  if (e.options == nullptr)
-    return text;
-
-  // The same match used for incoming command values.
-  if (_flashCsvIndexOf(e.options, text) >= 0)
-    return text;
-
-  // A host ignores a name that isn't an option and keeps showing the old one, so warn.
-  if (!e.stateWarned)
-  {
-    e.stateWarned = true;
-    _debugChannel(F("Select state is not a declared option on channel: "), e);
-    if (_debugStream != nullptr)
-    {
-      _debugStream->print(F(" returned \""));
-      _debugStream->print(text);
-      _debugStream->print(F("\", allowed ["));
-      e.options.printTo(*_debugStream);
-      _debugStream->println(F("]. Nothing is reported and the control keeps its last value."));
-    }
-  }
-  return nullptr;
-#else
-  (void)e;
-  return text;
-#endif
-}
-
-const char *Blaeck::_channelText(const StateChannelEntry &e, char *buf, byte bufSize, bool *inFlash) const
-{
-  if (inFlash != nullptr)
-    *inFlash = false;
-  // Check valueType first: getStateText shares storage with getNumber, so on a numeric channel
-  // it holds a getter of a different type.
-  if (e.valueType == Blaeck_string && e.getStateText != nullptr)
-  {
-    const char *t = e.getStateText();
-    if (e.stateIsSelectName)
-      return _checkedSelectName(e, t);
-    if (!e.stateIsSwitchBool)
-      return t;
-
-    const char *canonical = blaeck_detail::switchStateText(t);
-    // Not a recognised on/off spelling. Report nothing, and warn once.
-    if (canonical == nullptr && t != nullptr && t[0] != '\0' && !e.stateWarned)
-    {
-      e.stateWarned = true;
-      _debugChannel(F("Switch state not recognised on channel: "), e);
-      if (_debugStream != nullptr)
-      {
-        _debugStream->print(F(" returned \""));
-        _debugStream->print(t);
-        _debugStream->println(F("\". Expected 1/on/true/yes or 0/off/false/no. "
-                                "Nothing is reported and the control stays unknown."));
-      }
-    }
-    return canonical;
-  }
-
-  // Only text channels keep text here.
-  if (e.valueType != Blaeck_string || e.stateValue == nullptr)
-    return nullptr;
-
-  if (!e.stateIsSelectIndex)
-  {
-    const char *t = (const char *)e.stateValue;
-    if (inFlash != nullptr)
-      *inFlash = e.textInFlash;
-    return e.stateIsSelectName ? _checkedSelectName(e, t) : t;
-  }
-  if (e.options == nullptr || buf == nullptr || bufSize == 0)
-    return nullptr;
-
-  // Find the index'th option, as getSelectOptionNameAt() does.
-  byte index = *((const byte *)e.stateValue);
-  BlaeckString p = e.options;
-  byte seen = 0;
-  unsigned int at = 0;
-  while (seen < index)
-  {
-    byte c = p.read(at);
-    if (c == 0)
-      return nullptr; // fewer options than the index asked for
-    if (c == ',')
-      seen++;
-    at++;
-  }
-  byte len = 0;
-  byte c;
-  while ((c = p.read(at + len)) != 0 && c != ',')
-  {
-    // Too long for the buffer. A shortened name would match no option, so report nothing.
-    if ((unsigned int)len + 1 >= bufSize)
-    {
-      if (!e.stateWarned)
-      {
-        e.stateWarned = true;
-        _debugChannel(F("Select option too long to report on channel: "), e);
-        if (_debugStream != nullptr)
-        {
-          _debugStream->print(F(" needs more than "));
-          _debugStream->print((unsigned int)bufSize - 1);
-          _debugStream->println(F(" characters. Nothing is reported; raise "
-                                  "BLAECK_STATE_MAX_OPTION_CHARS or shorten the option."));
-        }
-      }
-      return nullptr;
-    }
-    buf[len] = (char)c;
-    len++;
-  }
-  buf[len] = '\0';
-  return len > 0 ? buf : nullptr;
-}
-#endif
-
-#if BLAECK_ENABLE_STATE_CHANNELS
-// A pushed number converted to the channel's type, as bytes. The caller passes the value cast
-// three ways and the switch picks the one that fits; one switch keeps the flash cost down.
-byte Blaeck::_valueBytes(dataType declared, long s, unsigned long u, double d, byte *out)
-{
-  switch (declared)
-  {
-  case (Blaeck_bool):   boolCvt.val   = (s != 0);                memcpy(out, boolCvt.bval, 1);   return 1;
-  case (Blaeck_byte):   out[0]        = (byte)u;                                                 return 1;
-  case (Blaeck_short):  shortCvt.val  = (short)s;                memcpy(out, shortCvt.bval, 2);  return 2;
-  case (Blaeck_ushort): ushortCvt.val = (unsigned short)u;       memcpy(out, ushortCvt.bval, 2); return 2;
-  case (Blaeck_int):    intCvt.val    = (int)s;                  memcpy(out, intCvt.bval, 2);    return 2;
-  case (Blaeck_uint):   uintCvt.val   = (unsigned int)u;         memcpy(out, uintCvt.bval, 2);   return 2;
-  case (Blaeck_long):   lngCvt.val    = s;                       memcpy(out, lngCvt.bval, 4);    return 4;
-  case (Blaeck_ulong):  ulngCvt.val   = u;                       memcpy(out, ulngCvt.bval, 4);   return 4;
-  case (Blaeck_float):  fltCvt.val    = (float)d;                memcpy(out, fltCvt.bval, 4);    return 4;
-  case (Blaeck_double): dblCvt.val    = d;                       memcpy(out, dblCvt.bval, 8);    return 8;
-  default:                                                                                       return 0;
-  }
-}
-
-byte Blaeck::_channelValueBytes(const StateChannelEntry &e, byte *out)
-{
-  // A getter takes priority over a variable. withStateValue() ensured its type matches.
-  if (e.getNumber != nullptr && e.valueType != Blaeck_string)
-  {
-    switch (e.valueType)
-    {
-    case (Blaeck_bool):   boolCvt.val   = ((BlaeckStateBoolGetter)e.getNumber)();   memcpy(out, boolCvt.bval, 1);   return 1;
-    case (Blaeck_byte):   out[0]        = ((BlaeckStateByteGetter)e.getNumber)();                                   return 1;
-    case (Blaeck_short):  shortCvt.val  = ((BlaeckStateShortGetter)e.getNumber)();  memcpy(out, shortCvt.bval, 2);  return 2;
-    case (Blaeck_ushort): ushortCvt.val = ((BlaeckStateUShortGetter)e.getNumber)(); memcpy(out, ushortCvt.bval, 2); return 2;
-    case (Blaeck_int):    intCvt.val    = ((BlaeckStateIntGetter)e.getNumber)();    memcpy(out, intCvt.bval, 2);    return 2;
-    case (Blaeck_uint):   uintCvt.val   = ((BlaeckStateUIntGetter)e.getNumber)();   memcpy(out, uintCvt.bval, 2);   return 2;
-    case (Blaeck_long):   lngCvt.val    = ((BlaeckStateLongGetter)e.getNumber)();   memcpy(out, lngCvt.bval, 4);    return 4;
-    case (Blaeck_ulong):  ulngCvt.val   = ((BlaeckStateULongGetter)e.getNumber)();  memcpy(out, ulngCvt.bval, 4);   return 4;
-    case (Blaeck_float):  fltCvt.val    = ((BlaeckStateFloatGetter)e.getNumber)();  memcpy(out, fltCvt.bval, 4);    return 4;
-    case (Blaeck_double): dblCvt.val    = ((BlaeckStateDoubleGetter)e.getNumber)(); memcpy(out, dblCvt.bval, 8);    return 8;
-    default:                                                                                                        return 0;
-    }
-  }
-
-  if (e.stateValue == nullptr)
-    return 0;
-
-  switch (e.valueType)
-  {
-  case (Blaeck_bool):   boolCvt.val   = *((const bool *)e.stateValue);           memcpy(out, boolCvt.bval, 1);   return 1;
-  case (Blaeck_byte):   out[0]        = *((const byte *)e.stateValue);                                           return 1;
-  case (Blaeck_short):  shortCvt.val  = *((const short *)e.stateValue);          memcpy(out, shortCvt.bval, 2);  return 2;
-  case (Blaeck_ushort): ushortCvt.val = *((const unsigned short *)e.stateValue); memcpy(out, ushortCvt.bval, 2); return 2;
-  case (Blaeck_int):    intCvt.val    = *((const int *)e.stateValue);            memcpy(out, intCvt.bval, 2);    return 2;
-  case (Blaeck_uint):   uintCvt.val   = *((const unsigned int *)e.stateValue);   memcpy(out, uintCvt.bval, 2);   return 2;
-  case (Blaeck_long):   lngCvt.val    = *((const long *)e.stateValue);           memcpy(out, lngCvt.bval, 4);    return 4;
-  case (Blaeck_ulong):  ulngCvt.val   = *((const unsigned long *)e.stateValue);  memcpy(out, ulngCvt.bval, 4);   return 4;
-  case (Blaeck_float):  fltCvt.val    = *((const float *)e.stateValue);          memcpy(out, fltCvt.bval, 4);    return 4;
-  case (Blaeck_double): dblCvt.val    = *((const double *)e.stateValue);         memcpy(out, dblCvt.bval, 8);    return 8;
-  default:                                                                                                       return 0;
-  }
-}
-#endif
-
-uint16_t Blaeck::_stateChannelFlags(const StateChannelEntry &e, bool hasStateValue) const
-{
-  uint16_t flags = 0;
-  if (e.icon != nullptr)
-    flags |= BLAECK_SCH_HAS_ICON;
-  if (e.diagnostic)
-    flags |= BLAECK_SCH_DIAGNOSTIC;
-  if (hasStateValue)
-    flags |= BLAECK_SCH_HAS_STATE_VALUE;
-  if (e.deviceClass != nullptr)
-    flags |= BLAECK_SCH_HAS_DEVICE_CLASS;
-  if (e.disabledByDefault)
-    flags |= BLAECK_SCH_DISABLED_BY_DEFAULT;
-  if (e.forceUpdate)
-    flags |= BLAECK_SCH_FORCE_UPDATE;
-  if (e.options != nullptr)
-    flags |= BLAECK_SCH_HAS_OPTIONS;
-  if (e.unit != nullptr)
-    flags |= BLAECK_SCH_HAS_UNIT;
-  // State class and display precision are kept in metaFlags already.
-  flags |= (uint16_t)(e.metaFlags & (BLAECK_SCH_STATE_CLASS_MASK | BLAECK_SCH_HAS_DISPLAY_PRECISION));
-  return flags;
-}
-
-void Blaeck::writeStateChannelsFrame(unsigned long msg_id)
-{
-  // The host is about to have the current list.
-  _stateCatalogDirty = false;
-
-  // Layout: State Channel List (0x90) in the protocol spec. Values come from each channel's
-  // variable or getter as the frame is built.
-  //
-  // _channelText() can warn, and with buffered writes off a warning printed during the frame
-  // would land inside it if the debug stream is the same port. Each warning prints only once,
-  // so calling it first gets them out before the frame starts.
-  if (_debugStream != nullptr && !_bufferedWrites)
-  {
-    for (uint16_t i = 0; i < _stateChannelSlots(); i++)
-    {
-      if (!_stateChannels[i].inUse)
-        continue;
-      char optionBuf[BLAECK_STATE_MAX_OPTION_CHARS];
-      _channelText(_stateChannels[i], optionBuf, sizeof(optionBuf));
-    }
-  }
-
-  if (!_frameOpen(0x90, msg_id))
-    return;
-
-  for (uint16_t i = 0; i < _stateChannelSlots(); i++)
-  {
-    StateChannelEntry &e = _stateChannels[i];
-    if (!e.inUse)
-      continue;
-
-    // Asked once: calling the getter twice could give two different answers.
-    char optionBuf[BLAECK_STATE_MAX_OPTION_CHARS];
-    bool textInFlash;
-    const char *stateText = _channelText(e, optionBuf, sizeof(optionBuf), &textInFlash);
-    byte valueBytes[8];
-    byte valueLen = _channelValueBytes(e, valueBytes);
-
-    uint16_t flags = _stateChannelFlags(e, stateText != nullptr || valueLen > 0);
-
-    _emitDeviceId(e.deviceId);
-    if (e.nameInFlash)
-      _emitFlashStr0(reinterpret_cast<const __FlashStringHelper *>(e.name));
-    else
-      _emitStr0(e.name);
-    _emitByte((byte)(flags & 0xFF));
-    _emitByte((byte)((flags >> 8) & 0xFF));
-    _emitByte(_dtypeCode(e.valueType));
-
-    if (flags & BLAECK_SCH_HAS_ICON)
-      _emitFlashStr0(e.icon);
-    // Text ends with a terminator; a number has its type's fixed width.
-    if (flags & BLAECK_SCH_HAS_STATE_VALUE)
-    {
-      if (valueLen > 0)
-        _emitBytes(valueBytes, valueLen);
-      else
-      {
-        _emitTextBytes(stateText, textInFlash, _textLength(stateText, textInFlash, SIZE_MAX));
-        _emitByte(0);
-      }
-    }
-    if (flags & BLAECK_SCH_HAS_DEVICE_CLASS)
-      _emitFlashStr0(e.deviceClass);
-    if (flags & BLAECK_SCH_HAS_OPTIONS)
-      _emitFlashStr0(e.options);
-    if (flags & BLAECK_SCH_HAS_UNIT)
-      _emitFlashStr0(e.unit);
-    if (flags & BLAECK_SCH_HAS_DISPLAY_PRECISION)
-      _emitByte(e.displayPrecision);
-  }
-
-  _frameClose();
-}
-#else
-void Blaeck::clearAllStateChannels() {}
-// Used by the F() addStateChannel() overloads, which exist either way.
-int Blaeck::_registerStateChannel(byte, const char *, const __FlashStringHelper *, dataType, const void *, bool) { return -1; }
-void Blaeck::_writeStateText(byte, const char *, bool, const char *, bool) {}
-void Blaeck::_writeStateCurrent(byte, const char *, bool) {}
-void Blaeck::_writeStateNumber(byte, const char *, long, unsigned long, double, bool) {}
-void Blaeck::writeStateChannels() { this->writeStateChannels(0); }
-void Blaeck::writeStateChannels(unsigned long msg_id) { this->_writeEmptyFrame(0x90, msg_id); }
-#endif
 
 #if BLAECK_ENABLE_EVENTS
 int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const __FlashStringHelper *flashName, BlaeckString eventTypes)
@@ -3260,175 +2326,6 @@ void Blaeck::writeEventChannels(unsigned long msg_id) { this->_writeEmptyFrame(0
 void Blaeck::_writeEvent(byte, const char *, BlaeckString) {}
 #endif
 
-#if BLAECK_ENABLE_COMMAND_META
-// Whether withRange() was called. Without it, min and max are both 0.
-static inline bool _rangeDeclared(const blaeck_detail::CommandHandlerEntry &e)
-{
-  return e.meta_max > e.meta_min;
-}
-
-// Whether a step was declared: a positive step. 0 means none on purpose, and a negative or
-// NaN step can't be used.
-static inline bool _stepDeclared(const blaeck_detail::CommandHandlerEntry &e)
-{
-  return e.meta_step > 0.0f;
-}
-
-// Whether an options list was set. withOptions() already refused empty ones.
-static inline bool _optionsDeclared(const blaeck_detail::CommandHandlerEntry &e)
-{
-  return e.options != nullptr;
-}
-
-// Warns about a number command without withRange(), when the catalog goes out. A host would
-// otherwise use its own range or drop the control. BLAECK_NODISCARD makes this rare: it
-// needs the handle to be dropped.
-static void _warnCommandWithoutRange(Print *dbg, const blaeck_detail::CommandHandlerEntry &e)
-{
-  if (dbg == nullptr)
-    return;
-  dbg->print(F("No withRange() on number command: "));
-  dbg->print(e.command);
-  dbg->println(F(". Any value is accepted, and a host has no limits to build a control from."));
-}
-
-// The same for a select without options, which accepts nothing at all.
-static void _warnCommandWithoutOptions(Print *dbg, const blaeck_detail::CommandHandlerEntry &e)
-{
-  if (dbg == nullptr)
-    return;
-  dbg->print(F("No withOptions() on select command: "));
-  dbg->print(e.command);
-  dbg->println(F(". Every value is rejected and a host has nothing to offer."));
-}
-
-byte Blaeck::_validateTypedCommand(uint16_t handlerIndex)
-{
-  const CommandHandlerEntry &e = _commandHandlers[handlerIndex];
-
-  // Plain commands and buttons have no value to check.
-  if (e.kind == BLAECK_CMD_PLAIN || e.kind == BLAECK_CMD_BUTTON)
-    return BLAECK_ACK_OK;
-
-  // A typed command without its value is rejected rather than passed to the handler.
-  if (_parsedParamCount < 1 || _parsedParamPtrs[0] == nullptr)
-    return BLAECK_ACK_MISSING_VALUE;
-
-  const char *v = _parsedParamPtrs[0];
-
-  // An empty value is valid only for text, where it clears the field.
-  if (v[0] == '\0' && e.kind != BLAECK_CMD_TEXT)
-    return BLAECK_ACK_MISSING_VALUE;
-
-  if (e.kind == BLAECK_CMD_NUMBER)
-  {
-    // The whole string must be a number: atof() would read "abc" as 0. NaN is refused here
-    // because every comparison with it is false; infinity is caught by the range check.
-    char *endp = nullptr;
-    float f = (float)strtod(v, &endp);
-    if (endp == v || *endp != '\0' || isnan(f))
-    {
-      if (_debugStream != nullptr)
-      {
-        _debugStream->print(F("Command rejected (not a number): "));
-        _debugStream->print(e.command);
-        _debugStream->print('=');
-        _debugStream->println(v);
-      }
-      return BLAECK_ACK_OUT_OF_RANGE;
-    }
-
-    // Check the range only if one was declared.
-    if (_rangeDeclared(e) && (f < e.meta_min || f > e.meta_max))
-    {
-      if (_debugStream != nullptr)
-      {
-        _debugStream->print(F("Command rejected (out of range): "));
-        _debugStream->print(e.command);
-        _debugStream->print('=');
-        _debugStream->print(v);
-        _debugStream->print(F(" allowed ["));
-        _debugStream->print(e.meta_min);
-        _debugStream->print(F(", "));
-        _debugStream->print(e.meta_max);
-        _debugStream->println(F("]"));
-      }
-      return BLAECK_ACK_OUT_OF_RANGE;
-    }
-  }
-  else if (e.kind == BLAECK_CMD_SWITCH)
-  {
-    if (!(strcmp(v, "0") == 0 || strcmp(v, "1") == 0))
-    {
-      if (_debugStream != nullptr)
-      {
-        _debugStream->print(F("Command rejected (switch expects 0/1): "));
-        _debugStream->print(e.command);
-        _debugStream->print('=');
-        _debugStream->println(v);
-      }
-      return BLAECK_ACK_BAD_SWITCH;
-    }
-  }
-  else if (e.kind == BLAECK_CMD_SELECT)
-  {
-    uint16_t count = _flashCsvOptionCount(e.options);
-
-    // An option name (exact) or an index.
-    long idx = _flashCsvIndexOf(e.options, v);
-    if (idx < 0)
-    {
-      char *endp = nullptr;
-      long n = strtol(v, &endp, 10);
-      if (endp != v && *endp == '\0')
-        idx = n;
-    }
-
-    if (idx < 0 || idx >= (long)count)
-    {
-      if (_debugStream != nullptr)
-      {
-        _debugStream->print(F("Command rejected (bad select value): "));
-        _debugStream->print(e.command);
-        _debugStream->print('=');
-        _debugStream->print(v);
-        _debugStream->print(F(" allowed [0, "));
-        _debugStream->print((int)count - 1);
-        _debugStream->println(F("] or an option name"));
-      }
-      return BLAECK_ACK_BAD_SELECT;
-    }
-
-    // Always hand the handler the index, whichever form was sent.
-    snprintf(_selectIndexScratch, sizeof(_selectIndexScratch), "%ld", idx);
-    _parsedParamPtrs[0] = _selectIndexScratch;
-  }
-  else if (e.kind == BLAECK_CMD_TEXT)
-  {
-    // Decode in place so the handler gets plain UTF-8. The ack hashes the command as received,
-    // so it still matches what the host sent.
-    char *decoded = (char *)_parsedParamPtrs[0];
-    _percentDecodeInPlace(decoded);
-
-    unsigned int maxLen = (unsigned int)e.meta_max;
-    if (maxLen > 0 && strlen(decoded) > maxLen)
-    {
-      if (_debugStream != nullptr)
-      {
-        _debugStream->print(F("Command rejected (text too long): "));
-        _debugStream->print(e.command);
-        _debugStream->print(F(" len="));
-        _debugStream->print((unsigned int)strlen(decoded));
-        _debugStream->print(F(" max="));
-        _debugStream->println(maxLen);
-      }
-      return BLAECK_ACK_TOO_LONG;
-    }
-  }
-
-  return BLAECK_ACK_OK;
-}
-
 void Blaeck::_percentDecodeInPlace(char *s)
 {
   if (s == nullptr)
@@ -3461,7 +2358,6 @@ void Blaeck::_percentDecodeInPlace(char *s)
   }
   *dst = '\0';
 }
-#endif
 
 void Blaeck::_setTimedDataState(bool timedActivated, unsigned long timedInterval_ms)
 {
@@ -3646,7 +2542,7 @@ void Blaeck::writeIfDue(unsigned long long timestamp)
   for (int i = 0; i < _signalIndex; ++i)
   {
     Signal &s = Signals[i];
-    SignalReporting *r = s.Reporting;
+    ReportingState *r = s.Reporting;
     const bool interval = intervalDue && (s.IntervalMode == BLAECK_ALWAYS ||
         (s.IntervalMode == BLAECK_ON_CHANGE &&
          (initialInterval || _signalChanged(s, r->intervalDelta))));
@@ -3657,6 +2553,7 @@ void Blaeck::writeIfDue(unsigned long long timestamp)
     intervalReport |= interval;
   }
   writeDataFrame(0, 0, _signalIndex - 1, true, timestamp, intervalReport);
+  _writeChangedProperties();
 }
 
 // ----- Buffered writes -----
@@ -3862,11 +2759,9 @@ void Blaeck::writeRestarted(unsigned long msg_id)
     _frameClose();
 
     // Send every catalog after the notice, so a host that stayed connected sees what this run
-    // declares. The state catalog matters most, since its values are back at their defaults.
+    // declares. The entity list matters most, since its values are back at their defaults.
     // This runs from read(), so setup() has finished declaring by then.
-#if BLAECK_ENABLE_STATE_CHANNELS
-    this->writeStateChannels(msg_id);
-#endif
+    this->writeEntities(msg_id);
 
 #if BLAECK_ENABLE_EVENTS
     this->writeEventChannels(msg_id);
@@ -4091,23 +2986,6 @@ void Blaeck::writeSignalConfigFrame(unsigned long msg_id)
 void Blaeck::writeCommandsFrame(unsigned long msg_id)
 {
   // Layout: Command List (0xA0) in the protocol spec. Every command is listed, plain ones too.
-  //
-  // Warn about missing ranges and options before the frame opens: with buffered writes off, a
-  // warning printed during the frame would land inside it if the debug stream is the same port.
-  if (_debugStream != nullptr)
-  {
-    for (uint16_t i = 0; i < _commandSlots(); i++)
-    {
-      const CommandHandlerEntry &e = _commandHandlers[i];
-      if (!e.inUse)
-        continue;
-      if (e.kind == BLAECK_CMD_NUMBER && !_rangeDeclared(e))
-        _warnCommandWithoutRange(_debugStream, e);
-      else if (e.kind == BLAECK_CMD_SELECT && !_optionsDeclared(e))
-        _warnCommandWithoutOptions(_debugStream, e);
-    }
-  }
-
   if (!_frameOpen(0xA0, msg_id))
     return;
 
@@ -4118,29 +2996,12 @@ void Blaeck::writeCommandsFrame(unsigned long msg_id)
       continue;
 
     uint32_t flags = 0;
-    // Send a range only if one was declared; 0 to 0 would allow only zero.
-    if (e.kind == BLAECK_CMD_NUMBER && _rangeDeclared(e))
-      flags |= 0x0001;
-    if (e.unit != nullptr)
-      flags |= 0x0002;
-    if (e.kind == BLAECK_CMD_SELECT && _optionsDeclared(e))
-      flags |= 0x0004;
-    if (e.stateSignal != nullptr)
-      flags |= 0x0008;
-    if (e.kind == BLAECK_CMD_TEXT)
-      flags |= 0x0010;
     // Entity category in bits 5-6.
     flags |= (uint32_t)((e.category & 0x03) << 5);
     if (e.disabledByDefault)
       flags |= 0x4000;
-    // The step has its own bit, so "no step" differs from a step of 0.
-    if (e.kind == BLAECK_CMD_NUMBER && _stepDeclared(e))
-      flags |= 0x0080;
     if (e.displayName != nullptr)
       flags |= 0x0100;
-    // Input mode in bits 9-10: box or slider on a number, password on text. 0 is the default.
-    if (e.kind == BLAECK_CMD_NUMBER || e.kind == BLAECK_CMD_TEXT)
-      flags |= (uint32_t)((e.mode & 0x03) << 9);
     if (e.deviceClass != nullptr)
       flags |= 0x0800;
     if (e.icon != nullptr)
@@ -4162,33 +3023,6 @@ void Blaeck::writeCommandsFrame(unsigned long msg_id)
     _emitByte((byte)((flags >> 16) & 0xFF));
     _emitByte((byte)((flags >> 24) & 0xFF));
 
-    if (flags & 0x0001)
-    {
-      fltCvt.val = e.meta_min;
-      _emitBytes(fltCvt.bval, 4);
-      fltCvt.val = e.meta_max;
-      _emitBytes(fltCvt.bval, 4);
-    }
-    if (flags & 0x0002)
-      _emitFlashStr0(e.unit);
-    if (flags & 0x0004)
-      _emitFlashStr0(e.options);
-    if (flags & 0x0008)
-    {
-      _emitFlashStr0(e.stateSignal);
-      _emitByte(e.stateSource);
-    }
-    if (flags & 0x0010)
-    {
-      uint16_t maxLen = (uint16_t)e.meta_max;
-      _emitByte((byte)(maxLen & 0xFF));
-      _emitByte((byte)((maxLen >> 8) & 0xFF));
-    }
-    if (flags & 0x0080)
-    {
-      fltCvt.val = e.meta_step;
-      _emitBytes(fltCvt.bval, 4);
-    }
     if (flags & 0x0100)
       _emitFlashStr0(e.displayName);
     if (flags & 0x0800)
@@ -4326,15 +3160,6 @@ int BlaeckDeviceBase::_registerSignal(BlaeckString signalName, dataType type, vo
              : _core->_registerSignal(_deviceId, signalName.data(), type, address, textInFlash);
 }
 
-int BlaeckDeviceBase::_registerStateChannel(BlaeckString channelName, dataType valueType, const void *value, bool textInFlash)
-{
-  if (_core == nullptr)
-    return -1;
-  return _core->_registerStateChannel(_deviceId, channelName.inFlash() ? nullptr : channelName.data(),
-                                      channelName.inFlash() ? reinterpret_cast<const __FlashStringHelper *>(channelName.data()) : nullptr,
-                                      valueType, value, textInFlash);
-}
-
 int BlaeckDeviceBase::_registerEventChannel(BlaeckString channelName, BlaeckString eventTypes)
 {
   if (_core == nullptr)
@@ -4342,24 +3167,6 @@ int BlaeckDeviceBase::_registerEventChannel(BlaeckString channelName, BlaeckStri
   return _core->_registerEventChannel(_deviceId, channelName.inFlash() ? nullptr : channelName.data(),
                                       channelName.inFlash() ? reinterpret_cast<const __FlashStringHelper *>(channelName.data()) : nullptr,
                                       eventTypes);
-}
-
-void BlaeckDeviceBase::_writeStateText(BlaeckString channelName, const char *text, bool textInFlash)
-{
-  if (_core != nullptr)
-    _core->_writeStateText(_deviceId, channelName.data(), channelName.inFlash(), text, textInFlash);
-}
-
-void BlaeckDeviceBase::_writeStateCurrent(BlaeckString channelName)
-{
-  if (_core != nullptr)
-    _core->_writeStateCurrent(_deviceId, channelName.data(), channelName.inFlash());
-}
-
-void BlaeckDeviceBase::_writeStateNumber(BlaeckString channelName, long s, unsigned long u, double d)
-{
-  if (_core != nullptr)
-    _core->_writeStateNumber(_deviceId, channelName.data(), s, u, d, channelName.inFlash());
 }
 
 // int and unsigned int are registered by their real width: 2 bytes on AVR, 4 elsewhere. On AVR
@@ -4387,42 +3194,6 @@ BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, doub
 // Address is void * for every type; a string is only read.
 BlaeckTextSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, const char *value) { return BlaeckTextSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_string, const_cast<char *>(value))); }
 BlaeckTextSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, const __FlashStringHelper *value) { return BlaeckTextSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_string, const_cast<__FlashStringHelper *>(value), true)); }
-
-BlaeckTextStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, BlaeckTextTag) { return BlaeckTextStateRef(_core, (int16_t)_registerStateChannel(channelName)); }
-BlaeckBoolStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, BlaeckBoolTag) { return BlaeckBoolStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_bool)); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, BlaeckNumericTag type) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, _tagType(type))); }
-BlaeckTextStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, const char *value) { return BlaeckTextStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_string, value)); }
-BlaeckTextStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, const __FlashStringHelper *value) { return BlaeckTextStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_string, value, true)); }
-BlaeckBoolStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, bool *value) { return BlaeckBoolStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_bool, value)); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, byte *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_byte, value)); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, short *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_short, value)); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, unsigned short *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_ushort, value)); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, int *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, BLAECK_INT_TYPE, value)); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, unsigned int *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, BLAECK_UINT_TYPE, value)); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, long *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_long, value)); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, unsigned long *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_ulong, value)); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, float *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, Blaeck_float, value)); }
-BlaeckNumericStateRef BlaeckDeviceBase::addStateChannel(BlaeckString channelName, double *value) { return BlaeckNumericStateRef(_core, (int16_t)_registerStateChannel(channelName, BLAECK_DOUBLE_TYPE, value)); }
-
-void BlaeckDeviceBase::writeState(BlaeckString channelName, const char *text) { _writeStateText(channelName, text, false); }
-void BlaeckDeviceBase::writeState(BlaeckString channelName, const __FlashStringHelper *text) { _writeStateText(channelName, reinterpret_cast<const char *>(text), true); }
-void BlaeckDeviceBase::writeState(BlaeckString channelName) { _writeStateCurrent(channelName); }
-void BlaeckDeviceBase::writeState(BlaeckString channelName, bool value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
-void BlaeckDeviceBase::writeState(BlaeckString channelName, byte value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
-void BlaeckDeviceBase::writeState(BlaeckString channelName, short value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
-void BlaeckDeviceBase::writeState(BlaeckString channelName, unsigned short value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
-void BlaeckDeviceBase::writeState(BlaeckString channelName, int value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
-void BlaeckDeviceBase::writeState(BlaeckString channelName, unsigned int value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
-void BlaeckDeviceBase::writeState(BlaeckString channelName, long value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
-void BlaeckDeviceBase::writeState(BlaeckString channelName, unsigned long value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
-void BlaeckDeviceBase::writeState(BlaeckString channelName, float value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
-void BlaeckDeviceBase::writeState(BlaeckString channelName, double value) { _writeStateNumber(channelName, (long)value, (unsigned long)value, (double)value); }
-
-void BlaeckDeviceBase::writeCommandState(BlaeckString command)
-{
-  if (_core != nullptr)
-    _core->_writeCommandState(command.data(), command.inFlash());
-}
 
 BlaeckEventChannelRef BlaeckDeviceBase::addEventChannel(BlaeckString channelName, BlaeckString eventTypes)
 {
@@ -4478,5 +3249,737 @@ void BlaeckDeviceBase::write(BlaeckString signalName, float value, unsigned long
 void BlaeckDeviceBase::write(BlaeckString signalName, double value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
 void BlaeckDeviceBase::write(BlaeckString signalName, const char *value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
 void BlaeckDeviceBase::write(BlaeckString signalName, const __FlashStringHelper *value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
+
+// ----- Properties -----
+
+blaeck_detail::PropertyEntry *BlaeckPropertyRefBase::_entry() const
+{
+  if (_owner == nullptr || _index < 0 || static_cast<uint16_t>(_index) >= _owner->_propertyCount)
+    return nullptr;
+  return &_owner->_properties[_index];
+}
+
+blaeck_detail::PropertyPresentation *BlaeckPropertyRefBase::_presentation() const
+{
+  blaeck_detail::PropertyEntry *e = _entry();
+  if (e == nullptr)
+    return nullptr;
+  if (e->presentation == nullptr)
+  {
+    e->presentation = new (std::nothrow) blaeck_detail::PropertyPresentation();
+    if (e->presentation == nullptr)
+    {
+      if (_owner->_rejectedStringCount != UINT16_MAX)
+        ++_owner->_rejectedStringCount;
+      if (_owner->_debugStream != nullptr)
+        _owner->_debugStream->println(F("No RAM for a property's presentation; it is sent without."));
+    }
+  }
+  return e->presentation;
+}
+
+void BlaeckPropertyRefBase::_setFlags(uint32_t mask, uint32_t value) const
+{
+  blaeck_detail::PropertyEntry *e = _entry();
+  if (e == nullptr)
+    return;
+  const uint32_t flags = (e->flags & ~mask) | (value & mask);
+  // Only a real change marks the list: a modifier may be called on every loop() pass.
+  if (flags != e->flags)
+  {
+    e->flags = flags;
+    _owner->_entityCatalogDirty = true;
+  }
+}
+
+void BlaeckPropertyRefBase::_setText(detail::StoredString blaeck_detail::PropertyPresentation::*field,
+                                     BlaeckString text) const
+{
+  // An empty text is none; a host may refuse a blank one.
+  if (blaeck_detail::flashStrEmpty(text))
+    text = nullptr;
+  blaeck_detail::PropertyEntry *e = _entry();
+  if (e == nullptr || (text == nullptr && e->presentation == nullptr))
+    return;
+  blaeck_detail::PropertyPresentation *pr = _presentation();
+  if (pr == nullptr || !((pr->*field) != text))
+    return;
+  if (_owner->_storeString(pr->*field, text))
+    _owner->_entityCatalogDirty = true;
+}
+
+void BlaeckPropertyRefBase::_setRange(float mn, float mx, float st) const
+{
+  blaeck_detail::PropertyEntry *e = _entry();
+  if (e == nullptr)
+    return;
+  Print *debug = _owner->_debugStream;
+  if (!(mx > mn) && debug != nullptr)
+    debug->println(F("withRange(): max is not above min, so no range is set."));
+  if (st != 0.0f && !(st > 0.0f) && debug != nullptr)
+    debug->println(F("withRange(): a step must be above 0, so no step is set."));
+  const bool hasRange = mx > mn;
+  const bool hasStep = st > 0.0f;
+  if (e->rangeMin != mn || e->rangeMax != mx || e->rangeStep != st)
+  {
+    e->rangeMin = mn;
+    e->rangeMax = mx;
+    e->rangeStep = st;
+    _owner->_entityCatalogDirty = true;
+  }
+  _setFlags(blaeck_detail::PROPERTY_HAS_RANGE | blaeck_detail::PROPERTY_HAS_STEP,
+            (hasRange ? blaeck_detail::PROPERTY_HAS_RANGE : 0) |
+                (hasStep ? blaeck_detail::PROPERTY_HAS_STEP : 0));
+}
+
+void BlaeckPropertyRefBase::_setDisplayPrecision(uint8_t decimals) const
+{
+  blaeck_detail::PropertyPresentation *pr = _presentation();
+  if (pr == nullptr)
+    return;
+  if (pr->displayPrecision != decimals)
+  {
+    pr->displayPrecision = decimals;
+    _owner->_entityCatalogDirty = true;
+  }
+  _setFlags(blaeck_detail::PROPERTY_HAS_DISPLAY_PRECISION, blaeck_detail::PROPERTY_HAS_DISPLAY_PRECISION);
+}
+
+void BlaeckPropertyRefBase::_setReporting(double delta, uint32_t minIntervalMs) const
+{
+  blaeck_detail::PropertyEntry *e = _entry();
+  if (e == nullptr || e->reporting == nullptr)
+    return;
+  if (!(delta >= 0) || isinf(delta))
+  {
+    if (_owner->_debugStream != nullptr)
+      _owner->_debugStream->println(F("writeOnChange(): delta must be 0 or above; kept as it was."));
+    return;
+  }
+  e->reporting->changeDelta = delta;
+  e->reporting->minIntervalMs = minIntervalMs;
+}
+
+bool Blaeck::_nameRefused(BlaeckString name, bool isCommand)
+{
+  const __FlashStringHelper *why = nullptr;
+  size_t length = 0;
+  if (name != nullptr)
+    while (name.read(length) != 0)
+      ++length;
+  if (length == 0)
+    why = F("the name is empty");
+  else if (name.read(0) == '#')
+    why = F("a name can't start with #");
+  else if (length >= 7 && name.read(0) == 'B' && name.read(1) == 'L' && name.read(2) == 'A' &&
+           name.read(3) == 'E' && name.read(4) == 'C' && name.read(5) == 'K' && name.read(6) == '.')
+    why = F("BLAECK. is reserved for the built-in commands");
+  else if (length >= MAX_PARSED_COMMAND_COUNT)
+    why = F("the name is too long to be received");
+  else if (_findProperty(name) >= 0)
+    why = F("an input or sensor has the name already");
+  else if (!isCommand)
+  {
+    for (uint16_t i = 0; i < _commandSlots(); ++i)
+      if (_commandHandlers[i].inUse && BlaeckString(_commandHandlers[i].command) == name)
+      {
+        why = F("a button or command has the name already");
+        break;
+      }
+  }
+  if (why == nullptr)
+    return false;
+  if (_debugStream != nullptr)
+  {
+    _debugStream->print(F("Dropped '"));
+    if (name != nullptr)
+      name.printTo(*_debugStream);
+    _debugStream->print(F("': "));
+    _debugStream->print(why);
+    _debugStream->println('.');
+  }
+  return true;
+}
+
+int Blaeck::_findProperty(BlaeckString name) const
+{
+  if (name == nullptr)
+    return -1;
+  for (uint16_t i = 0; i < _propertyCount; ++i)
+    if (BlaeckString(_properties[i].name) == name)
+      return (int)i;
+  return -1;
+}
+
+int Blaeck::_registerProperty(byte deviceId, BlaeckString name, uint8_t kind, bool writable, dataType type,
+                              void *address, void (*getter)(), uint8_t getterType, uint16_t textSize,
+                              BlaeckString options, BlaeckPropertyCallback onChange)
+{
+  if (_nameRefused(name, false))
+  {
+    ++_rejectedPropertyCount;
+    return -1;
+  }
+  if ((address == nullptr && getter == nullptr) ||
+      (kind == BLAECK_VALUE_TEXT && getter == nullptr && (textSize < 1 || textSize > 256)))
+  {
+    if (_debugStream != nullptr)
+    {
+      _debugStream->print(F("Dropped '"));
+      name.printTo(*_debugStream);
+      _debugStream->println(F("': no variable, or a text size that isn't 1 to 256."));
+    }
+    ++_rejectedPropertyCount;
+    return -1;
+  }
+  if (kind == BLAECK_VALUE_ENUM &&
+      !blaeck_detail::optionsAccepted(options, _debugStream, name.data(), name.inFlash()))
+  {
+    ++_rejectedPropertyCount;
+    return -1;
+  }
+  if (_propertyCount >= MAX_TABLE_ENTRIES || !_properties.reserve(_propertyCount + 1))
+  {
+    _warnNoRoom(F("property"), name);
+    ++_rejectedPropertyCount;
+    return -1;
+  }
+
+  PropertyEntry &p = _properties[_propertyCount];
+  // The slot may hold what an earlier, rejected registration left.
+  delete p.reporting;
+  p.reporting = new (std::nothrow) ReportingState();
+  delete p.presentation;
+  p.presentation = nullptr;
+  if (p.reporting == nullptr || !_storeString(p.name, name) ||
+      !_storeString(p.options, kind == BLAECK_VALUE_ENUM ? options : BlaeckString()))
+  {
+    if (p.reporting == nullptr)
+      _warnNoRoom(F("property"), name);
+    ++_rejectedPropertyCount;
+    return -1;
+  }
+  p.address = address;
+  p.getter = getter;
+  p.getterType = getterType;
+  p.callback = onChange;
+  p.rangeMin = p.rangeMax = p.rangeStep = 0.0f;
+  p.flags = 0;
+  p.textSize = kind == BLAECK_VALUE_TEXT ? (getter != nullptr ? 256 : textSize) : 0;
+  p.type = type;
+  p.kind = kind;
+  p.deviceId = deviceId;
+  p.writable = writable;
+  _entityCatalogDirty = true;
+  return (int)_propertyCount++;
+}
+
+void Blaeck::_propertyValue(const PropertyEntry &p, byte *out) const
+{
+  memset(out, 0, 8);
+  switch (p.getterType)
+  {
+  case blaeck_detail::GETTER_NONE: memcpy(out, p.address, _signalValueSize(p.type)); break;
+  case blaeck_detail::GETTER_BOOL: { bool v = reinterpret_cast<bool (*)()>(p.getter)(); memcpy(out, &v, sizeof v); } break;
+  case blaeck_detail::GETTER_BYTE: { byte v = reinterpret_cast<byte (*)()>(p.getter)(); memcpy(out, &v, sizeof v); } break;
+  case blaeck_detail::GETTER_SHORT: { short v = reinterpret_cast<short (*)()>(p.getter)(); memcpy(out, &v, sizeof v); } break;
+  case blaeck_detail::GETTER_USHORT: { unsigned short v = reinterpret_cast<unsigned short (*)()>(p.getter)(); memcpy(out, &v, sizeof v); } break;
+  case blaeck_detail::GETTER_INT: { int v = reinterpret_cast<int (*)()>(p.getter)(); memcpy(out, &v, sizeof v); } break;
+  case blaeck_detail::GETTER_UINT: { unsigned int v = reinterpret_cast<unsigned int (*)()>(p.getter)(); memcpy(out, &v, sizeof v); } break;
+  case blaeck_detail::GETTER_LONG: { long v = reinterpret_cast<long (*)()>(p.getter)(); memcpy(out, &v, sizeof v); } break;
+  case blaeck_detail::GETTER_ULONG: { unsigned long v = reinterpret_cast<unsigned long (*)()>(p.getter)(); memcpy(out, &v, sizeof v); } break;
+  case blaeck_detail::GETTER_FLOAT: { float v = reinterpret_cast<float (*)()>(p.getter)(); memcpy(out, &v, sizeof v); } break;
+  case blaeck_detail::GETTER_DOUBLE: { double v = reinterpret_cast<double (*)()>(p.getter)(); memcpy(out, &v, sizeof v); } break;
+  default: break;
+  }
+}
+
+const char *Blaeck::_propertyText(const PropertyEntry &p, bool &inFlash) const
+{
+  inFlash = false;
+  if (p.getterType == blaeck_detail::GETTER_TEXT)
+  {
+    const char *text = reinterpret_cast<const char *(*)()>(p.getter)();
+    return text != nullptr ? text : "";
+  }
+  return static_cast<const char *>(p.address);
+}
+
+// The length of a property's text: up to the terminator, and never past its buffer.
+static byte _propertyTextLength(const char *text, uint16_t textSize)
+{
+  const size_t limit = textSize > 0 ? static_cast<size_t>(textSize - 1) : 255;
+  return static_cast<byte>(_textLength(text, false, limit > 255 ? 255 : limit));
+}
+
+void Blaeck::_emitPropertyValue(const PropertyEntry &p)
+{
+  if (p.kind == BLAECK_VALUE_TEXT)
+  {
+    bool inFlash;
+    const char *text = _propertyText(p, inFlash);
+    const byte length = _propertyTextLength(text, p.textSize);
+    _emitByte(length);
+    if (length > 0)
+      _emitTextBytes(text, inFlash, length);
+    return;
+  }
+  byte value[8];
+  _propertyValue(p, value);
+  _emitBytes(value, _signalValueSize(p.type));
+}
+
+// Stores v in a variable of the given type. False if it doesn't fit the type.
+static bool _storeNumber(void *address, dataType type, double v)
+{
+  switch (type)
+  {
+  case Blaeck_byte: if (v < 0 || v > 255) return false; *(byte *)address = (byte)v; return true;
+  case Blaeck_short: case Blaeck_int:
+    if (v < -32768.0 || v > 32767.0) return false; { int16_t x = (int16_t)v; memcpy(address, &x, 2); } return true;
+  case Blaeck_ushort: case Blaeck_uint:
+    if (v < 0 || v > 65535.0) return false; { uint16_t x = (uint16_t)v; memcpy(address, &x, 2); } return true;
+  case Blaeck_long:
+    if (v < -2147483648.0 || v > 2147483647.0) return false; { int32_t x = (int32_t)v; memcpy(address, &x, 4); } return true;
+  case Blaeck_ulong:
+    if (v < 0 || v > 4294967295.0) return false; { uint32_t x = (uint32_t)v; memcpy(address, &x, 4); } return true;
+  case Blaeck_float: { float x = (float)v; memcpy(address, &x, sizeof x); } return true;
+  case Blaeck_double: { double x = v; memcpy(address, &x, sizeof x); } return true;
+  default: return false;
+  }
+}
+
+static bool _isIntegerType(dataType type)
+{
+  return type != Blaeck_float && type != Blaeck_double && type != Blaeck_bool && type != Blaeck_string;
+}
+
+byte Blaeck::_receiveProperty(uint16_t index)
+{
+  PropertyEntry &p = _properties[index];
+  if (_deviceMissing(p.deviceId))
+    return BLAECK_ACK_DEVICE_NOT_RESPONDING;
+  if (!p.writable)
+    return BLAECK_ACK_READ_ONLY;
+  if (_parsedParamCount < 1 || _parsedParamPtrs[0] == nullptr)
+    return BLAECK_ACK_MISSING_VALUE;
+  char *v = const_cast<char *>(_parsedParamPtrs[0]);
+  // An empty value is valid only for text, where it clears the field.
+  if (v[0] == '\0' && p.kind != BLAECK_VALUE_TEXT)
+    return BLAECK_ACK_MISSING_VALUE;
+
+  switch (p.kind)
+  {
+  case BLAECK_VALUE_NUMBER:
+  {
+    // The whole string must be a number: atof() would read "abc" as 0.
+    char *end = nullptr;
+    double number = strtod(v, &end);
+    if (end == v || *end != '\0' || isnan(number) || isinf(number))
+      return BLAECK_ACK_OUT_OF_RANGE;
+    if ((p.flags & blaeck_detail::PROPERTY_HAS_RANGE) &&
+        (number < p.rangeMin || number > p.rangeMax))
+      return BLAECK_ACK_OUT_OF_RANGE;
+    // On its step: a value within a thousandth of a step of one is stored as exactly that.
+    if (p.flags & blaeck_detail::PROPERTY_HAS_STEP)
+    {
+      const double steps = (number - p.rangeMin) / p.rangeStep;
+      const double nearest = floor(steps + 0.5);
+      if (fabs(steps - nearest) < 1e-3)
+        number = p.rangeMin + nearest * p.rangeStep;
+    }
+    if (_isIntegerType(p.type))
+    {
+      if (number != floor(number))
+        return BLAECK_ACK_NOT_AN_INTEGER;
+    }
+    if (!_storeNumber(p.address, p.type, number))
+      return BLAECK_ACK_OUT_OF_RANGE;
+    return BLAECK_ACK_OK;
+  }
+  case BLAECK_VALUE_BOOL:
+    if (strcmp(v, "0") != 0 && strcmp(v, "1") != 0)
+      return BLAECK_ACK_BAD_SWITCH;
+    *(bool *)p.address = v[0] == '1';
+    return BLAECK_ACK_OK;
+  case BLAECK_VALUE_ENUM:
+  {
+    // An option's name, matched exactly, or its index.
+    long option = _flashCsvIndexOf(p.options, v);
+    if (option < 0)
+    {
+      char *end = nullptr;
+      long n = strtol(v, &end, 10);
+      if (end != v && *end == '\0')
+        option = n;
+    }
+    if (option < 0 || option >= (long)_flashCsvOptionCount(p.options) ||
+        !_storeNumber(p.address, p.type, (double)option))
+      return BLAECK_ACK_BAD_SELECT;
+    return BLAECK_ACK_OK;
+  }
+  case BLAECK_VALUE_TEXT:
+  {
+    _percentDecodeInPlace(v);
+    const size_t length = strlen(v);
+    if (length + 1 > p.textSize)
+      return BLAECK_ACK_TOO_LONG;
+    memcpy(p.address, v, length + 1);
+    return BLAECK_ACK_OK;
+  }
+  default:
+    return BLAECK_ACK_UNKNOWN;
+  }
+}
+
+bool Blaeck::_writePropertyFrame(uint16_t index)
+{
+  if (!_mayWriteFrame() || index >= _propertyCount)
+    return false;
+  // A host must know the property before a value of it arrives.
+  _flushCatalogs();
+  PropertyEntry &p = _properties[index];
+  ReportingState &r = *p.reporting;
+
+  // The value is read once, so the frame and the new baseline agree.
+  byte value[8];
+  bool inFlash = false;
+  const char *text = nullptr;
+  bool baseline = true;
+  if (p.kind == BLAECK_VALUE_TEXT)
+  {
+    text = _propertyText(p, inFlash);
+    baseline = _prepareTextSnapshot(r, _propertyTextLength(text, p.textSize));
+  }
+  else
+    _propertyValue(p, value);
+
+  // Layout: Property (0x95) in the protocol spec.
+  if (!_frameOpen(0x95, 0))
+    return false;
+  _emitByte((byte)(index & 0xFF));
+  _emitByte((byte)((index >> 8) & 0xFF));
+  _emitByte(_dtypeCode(p.type));
+  if (p.kind == BLAECK_VALUE_TEXT)
+  {
+    const byte length = _propertyTextLength(text, p.textSize);
+    _emitByte(length);
+    if (length > 0)
+      _emitTextBytes(text, inFlash, length);
+  }
+  else
+    _emitBytes(value, _signalValueSize(p.type));
+  if (!_frameClose())
+  {
+    r.valid = false;
+    return false;
+  }
+  if (baseline)
+  {
+    if (p.kind == BLAECK_VALUE_TEXT)
+    {
+      // Captured up to the same length the frame carried.
+      r.textLength = _propertyTextLength(text, p.textSize);
+      memcpy(r.text, text, r.textLength);
+      r.text[r.textLength] = '\0';
+    }
+    else
+      _captureValue(r, p.type, value, false);
+  }
+  r.valid = baseline;
+  r.lastWriteMs = static_cast<uint32_t>(millis());
+  return true;
+}
+
+// Whether a property differs from its baseline by at least its writeOnChange() delta.
+static bool _propertyChanged(const ReportingState &r, dataType type, const byte *value,
+                             const char *text, byte textLength)
+{
+  if (!r.valid)
+    return true;
+  if (type == Blaeck_string)
+    return textLength != r.textLength || (textLength != 0 && memcmp(text, r.text, textLength) != 0);
+  return _valueChanged(r, type, value, false, r.changeDelta);
+}
+
+void Blaeck::_writeChangedProperties()
+{
+  const uint32_t now = static_cast<uint32_t>(millis());
+  for (uint16_t i = 0; i < _propertyCount; ++i)
+  {
+    PropertyEntry &p = _properties[i];
+    ReportingState &r = *p.reporting;
+    if (_deviceMissing(p.deviceId))
+      continue;
+    if (r.valid && static_cast<uint32_t>(now - r.lastWriteMs) < r.minIntervalMs)
+      continue;
+    byte value[8];
+    const char *text = nullptr;
+    byte textLength = 0;
+    if (p.kind == BLAECK_VALUE_TEXT)
+    {
+      bool inFlash;
+      text = _propertyText(p, inFlash);
+      textLength = _propertyTextLength(text, p.textSize);
+    }
+    else
+      _propertyValue(p, value);
+    if (_propertyChanged(r, p.type, value, text, textLength))
+      if (!_writePropertyFrame(i))
+        return;
+  }
+}
+
+void Blaeck::_writePropertyByName(byte deviceId, BlaeckString name)
+{
+  const int index = _findProperty(name);
+  if (index < 0 || _properties[index].deviceId != deviceId)
+  {
+    if (_debugStream != nullptr)
+    {
+      _debugStream->print(F("writeProperty(): no property '"));
+      if (name != nullptr)
+        name.printTo(*_debugStream);
+      _debugStream->println(F("' on this device."));
+    }
+    return;
+  }
+  _writePropertyFrame((uint16_t)index);
+}
+
+void Blaeck::writeEntities(unsigned long msg_id)
+{
+  _entityCatalogDirty = false;
+  writeEntitiesFrame(msg_id);
+}
+
+void Blaeck::writeEntitiesFrame(unsigned long msg_id)
+{
+  // Layout: Entity List (0x90) in the protocol spec. Properties for now; events and buttons
+  // join the list later.
+  if (!_frameOpen(0x90, msg_id))
+    return;
+  for (uint16_t i = 0; i < _propertyCount; ++i)
+  {
+    const PropertyEntry &p = _properties[i];
+    const blaeck_detail::PropertyPresentation *pr = p.presentation;
+    uint32_t flags = p.flags | (p.writable ? 0x3UL : 0x1UL);
+    if (pr != nullptr)
+    {
+      if (pr->unit != nullptr)
+        flags |= blaeck_detail::PROPERTY_HAS_UNIT;
+      if (pr->displayName != nullptr)
+        flags |= blaeck_detail::PROPERTY_HAS_DISPLAY_NAME;
+      if (pr->icon != nullptr)
+        flags |= blaeck_detail::PROPERTY_HAS_ICON;
+      if (pr->deviceClass != nullptr)
+        flags |= blaeck_detail::PROPERTY_HAS_DEVICE_CLASS;
+    }
+    else
+      flags &= ~blaeck_detail::PROPERTY_HAS_DISPLAY_PRECISION;
+
+    _emitDeviceId(p.deviceId);
+    _emitByte(0); // EntryKind: property
+    _emitFlashStr0(p.name);
+    _emitByte(p.kind);
+    _emitByte((byte)(flags & 0xFF));
+    _emitByte((byte)((flags >> 8) & 0xFF));
+    _emitByte((byte)((flags >> 16) & 0xFF));
+    _emitByte((byte)((flags >> 24) & 0xFF));
+    _emitByte(_dtypeCode(p.type));
+    _emitPropertyValue(p);
+    if (p.kind == BLAECK_VALUE_ENUM)
+      _emitFlashStr0(p.options);
+    if (p.kind == BLAECK_VALUE_TEXT)
+    {
+      const uint16_t maxLength = p.textSize > 0 ? (uint16_t)(p.textSize - 1) : 0;
+      _emitByte((byte)(maxLength & 0xFF));
+      _emitByte((byte)((maxLength >> 8) & 0xFF));
+    }
+    if (flags & blaeck_detail::PROPERTY_HAS_RANGE)
+    {
+      fltCvt.val = p.rangeMin;
+      _emitBytes(fltCvt.bval, 4);
+      fltCvt.val = p.rangeMax;
+      _emitBytes(fltCvt.bval, 4);
+    }
+    if (flags & blaeck_detail::PROPERTY_HAS_STEP)
+    {
+      fltCvt.val = p.rangeStep;
+      _emitBytes(fltCvt.bval, 4);
+    }
+    if (flags & blaeck_detail::PROPERTY_HAS_UNIT)
+      _emitFlashStr0(pr->unit);
+    if (flags & blaeck_detail::PROPERTY_HAS_DISPLAY_NAME)
+      _emitFlashStr0(pr->displayName);
+    if (flags & blaeck_detail::PROPERTY_HAS_ICON)
+      _emitFlashStr0(pr->icon);
+    if (flags & blaeck_detail::PROPERTY_HAS_DEVICE_CLASS)
+      _emitFlashStr0(pr->deviceClass);
+    if (flags & blaeck_detail::PROPERTY_HAS_DISPLAY_PRECISION)
+      _emitByte(pr->displayPrecision);
+  }
+  if (!_frameClose())
+    return;
+  // The list carried each current value, so none is due again until it changes.
+  const uint32_t now = static_cast<uint32_t>(millis());
+  for (uint16_t i = 0; i < _propertyCount; ++i)
+  {
+    PropertyEntry &p = _properties[i];
+    ReportingState &r = *p.reporting;
+    r.valid = false;
+    if (p.kind == BLAECK_VALUE_TEXT)
+    {
+      bool inFlash;
+      const char *text = _propertyText(p, inFlash);
+      const byte length = _propertyTextLength(text, p.textSize);
+      if (!_prepareTextSnapshot(r, length))
+        continue;
+      r.textLength = length;
+      memcpy(r.text, text, length);
+      r.text[length] = '\0';
+    }
+    else
+    {
+      byte value[8];
+      _propertyValue(p, value);
+      _captureValue(r, p.type, value, false);
+    }
+    r.valid = true;
+    r.lastWriteMs = now;
+  }
+}
+
+int BlaeckDeviceBase::_registerProperty(BlaeckString name, uint8_t kind, bool writable, dataType type,
+                                        void *address, void (*getter)(), uint8_t getterType,
+                                        uint16_t textSize, BlaeckString options,
+                                        BlaeckPropertyCallback onChange)
+{
+  return _core != nullptr ? _core->_registerProperty(_deviceId, name, kind, writable, type, address, getter,
+                                                     getterType, textSize, options, onChange)
+                          : -1;
+}
+
+void BlaeckDeviceBase::writeProperty(BlaeckString name)
+{
+  if (_core != nullptr)
+    _core->_writePropertyByName(_deviceId, name);
+}
+
+#define BLAECK_NUMBER_INPUT(T, DT)                                                                    \
+  BlaeckNumberPropertyRef BlaeckDeviceBase::addNumberInput(BlaeckString name, T *value, BlaeckPropertyCallback onChange) \
+  {                                                                                                   \
+    return BlaeckNumberPropertyRef(_core, (int16_t)_registerProperty(name, BLAECK_VALUE_NUMBER, true, DT, value, \
+                                   nullptr, blaeck_detail::GETTER_NONE, 0, BlaeckString(), onChange)); \
+  }
+BLAECK_NUMBER_INPUT(byte, Blaeck_byte)
+BLAECK_NUMBER_INPUT(short, Blaeck_short)
+BLAECK_NUMBER_INPUT(unsigned short, Blaeck_ushort)
+BLAECK_NUMBER_INPUT(int, BLAECK_INT_TYPE)
+BLAECK_NUMBER_INPUT(unsigned int, BLAECK_UINT_TYPE)
+BLAECK_NUMBER_INPUT(long, Blaeck_long)
+BLAECK_NUMBER_INPUT(unsigned long, Blaeck_ulong)
+BLAECK_NUMBER_INPUT(float, Blaeck_float)
+BLAECK_NUMBER_INPUT(double, BLAECK_DOUBLE_TYPE)
+#undef BLAECK_NUMBER_INPUT
+
+BlaeckTextPropertyRef BlaeckDeviceBase::addTextInput(BlaeckString name, char *buffer, size_t size,
+                                                     BlaeckPropertyCallback onChange)
+{
+  return BlaeckTextPropertyRef(_core, (int16_t)_registerProperty(name, BLAECK_VALUE_TEXT, true, Blaeck_string, buffer,
+                               nullptr, blaeck_detail::GETTER_NONE, size > 0xFFFF ? 0 : (uint16_t)size,
+                               BlaeckString(), onChange));
+}
+
+BlaeckPropertyRef BlaeckDeviceBase::addSwitch(BlaeckString name, bool *value, BlaeckPropertyCallback onChange)
+{
+  return BlaeckPropertyRef(_core, (int16_t)_registerProperty(name, BLAECK_VALUE_BOOL, true, Blaeck_bool, value,
+                           nullptr, blaeck_detail::GETTER_NONE, 0, BlaeckString(), onChange));
+}
+
+#define BLAECK_SELECT(T, DT)                                                                          \
+  BlaeckPropertyRef BlaeckDeviceBase::addSelect(BlaeckString name, T *index, BlaeckString options,   \
+                                                BlaeckPropertyCallback onChange)                      \
+  {                                                                                                   \
+    return BlaeckPropertyRef(_core, (int16_t)_registerProperty(name, BLAECK_VALUE_ENUM, true, DT, index, \
+                             nullptr, blaeck_detail::GETTER_NONE, 0, options, onChange));             \
+  }
+BLAECK_SELECT(byte, Blaeck_byte)
+BLAECK_SELECT(short, Blaeck_short)
+BLAECK_SELECT(unsigned short, Blaeck_ushort)
+BLAECK_SELECT(int, BLAECK_INT_TYPE)
+BLAECK_SELECT(unsigned int, BLAECK_UINT_TYPE)
+BLAECK_SELECT(long, Blaeck_long)
+BLAECK_SELECT(unsigned long, Blaeck_ulong)
+#undef BLAECK_SELECT
+
+#define BLAECK_NUMBER_SENSOR(T, DT, G)                                                                \
+  BlaeckNumberPropertyRef BlaeckDeviceBase::addSensor(BlaeckString name, T *value)                  \
+  {                                                                                                   \
+    return BlaeckNumberPropertyRef(_core, (int16_t)_registerProperty(name, BLAECK_VALUE_NUMBER, false, DT, value, \
+                                   nullptr, blaeck_detail::GETTER_NONE, 0, BlaeckString(), nullptr)); \
+  }                                                                                                   \
+  BlaeckNumberPropertyRef BlaeckDeviceBase::addSensor(BlaeckString name, T (*value)())              \
+  {                                                                                                   \
+    return BlaeckNumberPropertyRef(_core, (int16_t)_registerProperty(name, BLAECK_VALUE_NUMBER, false, DT, nullptr, \
+                                   reinterpret_cast<void (*)()>(value), G, 0, BlaeckString(), nullptr)); \
+  }
+BLAECK_NUMBER_SENSOR(byte, Blaeck_byte, blaeck_detail::GETTER_BYTE)
+BLAECK_NUMBER_SENSOR(short, Blaeck_short, blaeck_detail::GETTER_SHORT)
+BLAECK_NUMBER_SENSOR(unsigned short, Blaeck_ushort, blaeck_detail::GETTER_USHORT)
+BLAECK_NUMBER_SENSOR(int, BLAECK_INT_TYPE, blaeck_detail::GETTER_INT)
+BLAECK_NUMBER_SENSOR(unsigned int, BLAECK_UINT_TYPE, blaeck_detail::GETTER_UINT)
+BLAECK_NUMBER_SENSOR(long, Blaeck_long, blaeck_detail::GETTER_LONG)
+BLAECK_NUMBER_SENSOR(unsigned long, Blaeck_ulong, blaeck_detail::GETTER_ULONG)
+BLAECK_NUMBER_SENSOR(float, Blaeck_float, blaeck_detail::GETTER_FLOAT)
+BLAECK_NUMBER_SENSOR(double, BLAECK_DOUBLE_TYPE, blaeck_detail::GETTER_DOUBLE)
+#undef BLAECK_NUMBER_SENSOR
+
+BlaeckPropertyRef BlaeckDeviceBase::addSensor(BlaeckString name, bool *value)
+{
+  return BlaeckPropertyRef(_core, (int16_t)_registerProperty(name, BLAECK_VALUE_BOOL, false, Blaeck_bool, value,
+                           nullptr, blaeck_detail::GETTER_NONE, 0, BlaeckString(), nullptr));
+}
+
+BlaeckPropertyRef BlaeckDeviceBase::addSensor(BlaeckString name, bool (*value)())
+{
+  return BlaeckPropertyRef(_core, (int16_t)_registerProperty(name, BLAECK_VALUE_BOOL, false, Blaeck_bool, nullptr,
+                           reinterpret_cast<void (*)()>(value), blaeck_detail::GETTER_BOOL, 0, BlaeckString(),
+                           nullptr));
+}
+
+#define BLAECK_ENUM_SENSOR(T, DT, G)                                                                  \
+  BlaeckPropertyRef BlaeckDeviceBase::addSensor(BlaeckString name, T *index, BlaeckString options)  \
+  {                                                                                                   \
+    return BlaeckPropertyRef(_core, (int16_t)_registerProperty(name, BLAECK_VALUE_ENUM, false, DT, index, \
+                             nullptr, blaeck_detail::GETTER_NONE, 0, options, nullptr));              \
+  }                                                                                                   \
+  BlaeckPropertyRef BlaeckDeviceBase::addSensor(BlaeckString name, T (*index)(), BlaeckString options) \
+  {                                                                                                   \
+    return BlaeckPropertyRef(_core, (int16_t)_registerProperty(name, BLAECK_VALUE_ENUM, false, DT, nullptr, \
+                             reinterpret_cast<void (*)()>(index), G, 0, options, nullptr));          \
+  }
+BLAECK_ENUM_SENSOR(byte, Blaeck_byte, blaeck_detail::GETTER_BYTE)
+BLAECK_ENUM_SENSOR(short, Blaeck_short, blaeck_detail::GETTER_SHORT)
+BLAECK_ENUM_SENSOR(unsigned short, Blaeck_ushort, blaeck_detail::GETTER_USHORT)
+BLAECK_ENUM_SENSOR(int, BLAECK_INT_TYPE, blaeck_detail::GETTER_INT)
+BLAECK_ENUM_SENSOR(unsigned int, BLAECK_UINT_TYPE, blaeck_detail::GETTER_UINT)
+BLAECK_ENUM_SENSOR(long, Blaeck_long, blaeck_detail::GETTER_LONG)
+BLAECK_ENUM_SENSOR(unsigned long, Blaeck_ulong, blaeck_detail::GETTER_ULONG)
+#undef BLAECK_ENUM_SENSOR
+
+BlaeckTextPropertyRef BlaeckDeviceBase::addSensor(BlaeckString name, const char *buffer, size_t size)
+{
+  return BlaeckTextPropertyRef(_core, (int16_t)_registerProperty(name, BLAECK_VALUE_TEXT, false, Blaeck_string,
+                               const_cast<char *>(buffer), nullptr, blaeck_detail::GETTER_NONE,
+                               size > 0xFFFF ? 0 : (uint16_t)size, BlaeckString(), nullptr));
+}
+
+BlaeckTextPropertyRef BlaeckDeviceBase::addSensor(BlaeckString name, const char *(*value)())
+{
+  return BlaeckTextPropertyRef(_core, (int16_t)_registerProperty(name, BLAECK_VALUE_TEXT, false, Blaeck_string,
+                               nullptr, reinterpret_cast<void (*)()>(value), blaeck_detail::GETTER_TEXT, 0,
+                               BlaeckString(), nullptr));
+}
 
 } // namespace blaeck

@@ -38,7 +38,7 @@ jobs:
             options+=(--project-option="build_flags=-DUSE_TCP=1")
             options+=(--project-option="lib_deps=arduino-libraries/Ethernet@^2.0.2")
           fi
-          for ex in Basic Signals Commands StateChannels EventChannels WriteModes WaveformGenerator; do
+          for ex in Basic Signals Commands Properties EventChannels WriteModes WaveformGenerator; do
             pio ci --board=megaatmega2560 --lib="." "${options[@]}" "examples/$ex"
           done
       - name: Build connection fixtures

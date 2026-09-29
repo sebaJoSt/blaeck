@@ -28,14 +28,14 @@ error is retained. `end()` closes the transport; it does not reset the instance 
 another `begin()`.
 
 RAM is the only limit. On AVR, with the default settings, a signal costs 12 bytes, an event type
-6, an event channel 13, a state channel 35, a device 10 and a command 66 - the largest there is.
+6, an event channel 13, a device 10, a property about 40 and a command 66 - the largest there is.
 A signal with a unit, icon or other description takes 18 bytes more. Every eight entries of a
 table share about 4 bytes of bookkeeping, and the last group of eight may hold up to seven
 unused slots. Each configuration string passed as ordinary RAM text is copied, at about its
 length plus 7 bytes (a reference count, the terminator and the heap's own header); an `F()`
 string costs nothing extra. A Mega's 8 kB is gone at a few hundred of anything, where an ESP32
-has room for thousands. A command that reports its own value with `withOwnState()` adds a state
-channel too.
+has room for thousands. A property's presentation - unit, label, icon, device class - takes
+about 20 bytes more, only once it has one.
 
 Entries are added in `setup()`, and a table never moves or frees what it holds, so the heap
 doesn't fragment. `clearAllSignals()` and the other clear calls keep the space and reuse it.
@@ -79,7 +79,7 @@ Blaeck registration rejections:
 It is safe on the Blaeck stream because no data has been written yet at the end of `setup()`.
 
 To ask in code: `hasRejections()` for any table at all, or `hasRejectedSignals()`,
-`hasRejectedCommands()`, `hasRejectedStateChannels()` and `hasRejectedEventChannels()` for one.
+`hasRejectedCommands()` and `hasRejectedEventChannels()` for one.
 
 ## Naming the device
 
@@ -108,14 +108,13 @@ and a name built at runtime has to live in a global buffer.
 
 ## Compile-time settings
 
-The rest are `#define`s. Four of them switch a feature off, which reclaims the flash and SRAM it
-would have cost:
+The rest are `#define`s. Three of them switch a feature off, which reclaims the flash and SRAM
+it would have cost:
 
 | Define | Set to 0 to drop |
 |---|---|
 | `BLAECK_ENABLE_SIGNAL_META` | Everything a signal declares about itself. Saves 2 bytes of SRAM per signal on AVR, and 18 per described signal |
-| `BLAECK_ENABLE_COMMAND_META` | Everything a command declares. The typed helpers then behave like plain `onCommand()` |
-| `BLAECK_ENABLE_STATE_CHANNELS` | State channels |
+| `BLAECK_ENABLE_COMMAND_META` | Everything a button declares beyond its name |
 | `BLAECK_ENABLE_EVENTS` | Events |
 
 Your sketch needs no `#ifdef` around any of it. The calls still compile and simply store

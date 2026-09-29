@@ -11,7 +11,8 @@
 
   Features:
   - EEPROM stores which signals are activated.
-  - Typed commands activate or deactivate signal ranges in the Blaeck catalog.
+  - Two number inputs pick a range; buttons activate or deactivate it. A host that is
+    logging stops when the signals change, since its columns no longer fit.
   - Preset buttons carry their arguments in the press itself.
 
   Author: Sebastian Strobl,
@@ -87,30 +88,26 @@ void setup()
 
   Serial.begin(115200);
 
-  // Sized explicitly for the six commands and two state channels this example declares.
   device.begin(Serial);
 
   device.DeviceName = "ConfigurableSignals";
   device.DeviceFWVersion = FW_VERSION;
 
-  // Typed: each becomes a dashboard control. The bounds are numbers keeping their value on a
-  // state channel of their own; applying them is a button.
+  // Each becomes a dashboard control. The bounds are number inputs a host sets; applying them
+  // is a button.
   //
   // A bound is a setting, not a measurement, so it is not a signal: a signal is a column in
-  // every logged row, and these two would be a constant repeated on each one. The state
-  // channel is where a value that only changes when someone changes it belongs. Boxes rather
+  // every logged row, and these two would be a constant repeated on each one. Boxes rather
   // than sliders, because the pair is picked by number - a slider invites dragging past the
   // bound you meant.
-  device.onNumberCommand("SIGNAL_FIRST", onSetSignalFirst)
+  device.addNumberInput(F("SignalFirst"), &signalFirst, onSignalFirst)
       .withRange(1.0f, (float)MAXIMUM_SIGNALS, 1.0f)
       .withMode(BLAECK_NUMBER_MODE_BOX)
-      .withDisplayName(F("Range from"))
-      .withOwnState(F("Signal_First"), &signalFirst);
-  device.onNumberCommand("SIGNAL_LAST", onSetSignalLast)
+      .withDisplayName(F("Range from"));
+  device.addNumberInput(F("SignalLast"), &signalLast, onSignalLast)
       .withRange(1.0f, (float)MAXIMUM_SIGNALS, 1.0f)
       .withMode(BLAECK_NUMBER_MODE_BOX)
-      .withDisplayName(F("Range to"))
-      .withOwnState(F("Signal_Last"), &signalLast);
+      .withDisplayName(F("Range to"));
   device.onButtonCommand("SIGNAL_ACTIVATE", onSignalActivate)
       .withDisplayName(F("Activate range"));
   device.onButtonCommand("SIGNAL_DEACTIVATE", onSignalDeactivate)
@@ -171,4 +168,6 @@ void UpdateLoggingSignals()
       device.addSignal(F("Sine_"), &sine[i].value).withNameSuffix(i);
     }
   }
+  // The host learns of the new signals only from a new device list.
+  device.writeDevices();
 }

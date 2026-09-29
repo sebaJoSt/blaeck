@@ -16,7 +16,7 @@ An editor shows these comments when a sketch author hovers a call.
 - Put a warning where the mistake happens, rather than repeating it across the API.
 - Keep descriptions consistent with the implementation. Do not describe a warning as
   a compile error or a pointer as a copied value.
-- Refer to other methods as calls, such as `writeState(channelName)` or `tick()`.
+- Refer to other methods as calls, such as `writeProperty(name)` or `tick()`.
 - Use `device` as the instance name: `Blaeck device;`. Do not give a variable the same
   name as its class; that can interfere with editor completion.
 
@@ -28,18 +28,18 @@ example.
 
 ```cpp
   /*!
-    @brief   Copies the name of a select command's option at a given position.
+    @brief   Copies the name of a select's option at a given position.
 
-    @param   command  The select command's name.
-    @param   index    Position in the withOptions() list, starting at 0.
+    @param   name     The select's or sensor's name.
+    @param   index    Position in its options, starting at 0.
     @param   out      Where the name is copied. Left empty if this returns false.
     @param   outSize  Size of out, including the terminator.
-    @return  False if the command is not a select, the index is past the end, or the
-             name does not fit. A name is never cut short.
+    @return  False if it has no options, the index is past the end, or the name
+             does not fit. A name is never cut short.
 
     @code
       char name[12];
-      device.getSelectOptionNameAt("SET_WAVE", waveIndex, name, sizeof(name));
+      device.getSelectOptionNameAt(F("Waveform"), waveIndex, name, sizeof(name));
     @endcode
   */
 ```

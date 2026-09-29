@@ -76,8 +76,8 @@ static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
 // The API stays, so a sketch compiles either way, and the matching catalog request is
 // answered with an empty frame so a host does not wait for it.
 
-// Command metadata: what onNumberCommand() and the other typed commands declare, sent in
-// the 0xA0 Command List. Off, the typed commands work like onCommand().
+// Button metadata: what a button declares beyond its name, sent in the 0xA0 Command List. Off,
+// buttons are listed without it.
 #ifndef BLAECK_ENABLE_COMMAND_META
   #define BLAECK_ENABLE_COMMAND_META 1
 #endif
@@ -86,12 +86,6 @@ static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
 // 0xF0 Signal Config. Off, those calls store nothing.
 #ifndef BLAECK_ENABLE_SIGNAL_META
   #define BLAECK_ENABLE_SIGNAL_META 1
-#endif
-
-// State channels: addStateChannel() and writeState(), with the 0x90 State Channel List
-// and 0x95 values. A typed command's withOwnState() uses a state channel too.
-#ifndef BLAECK_ENABLE_STATE_CHANNELS
-  #define BLAECK_ENABLE_STATE_CHANNELS 1
 #endif
 
 // Events: addEventChannel(), addEventType() and writeEvent(), with the 0x80 Event Channel
@@ -106,7 +100,7 @@ static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
 #define BLAECK_BUILTIN_WRITE_DATA "BLAECK.WRITE_DATA"
 #define BLAECK_BUILTIN_GET_DEVICES "BLAECK.GET_DEVICES"
 #define BLAECK_BUILTIN_WRITE_COMMANDS "BLAECK.WRITE_COMMANDS"
-#define BLAECK_BUILTIN_WRITE_STATE_CHANNELS "BLAECK.WRITE_STATE_CHANNELS"
+#define BLAECK_BUILTIN_WRITE_ENTITIES "BLAECK.WRITE_ENTITIES"
 #define BLAECK_BUILTIN_WRITE_EVENT_CHANNELS "BLAECK.WRITE_EVENT_CHANNELS"
 #define BLAECK_BUILTIN_ACTIVATE "BLAECK.ACTIVATE"
 #define BLAECK_BUILTIN_DEACTIVATE "BLAECK.DEACTIVATE"
@@ -124,18 +118,13 @@ static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
   X(BLAECK_BUILTIN_WRITE_DATA)          \
   X(BLAECK_BUILTIN_GET_DEVICES)         \
   X(BLAECK_BUILTIN_WRITE_COMMANDS)      \
-  X(BLAECK_BUILTIN_WRITE_STATE_CHANNELS)\
+  X(BLAECK_BUILTIN_WRITE_ENTITIES)     \
   X(BLAECK_BUILTIN_WRITE_EVENT_CHANNELS)\
   X(BLAECK_BUILTIN_ACTIVATE)            \
   X(BLAECK_BUILTIN_DEACTIVATE)          \
   X(BLAECK_BUILTIN_PAUSE_WRITES)        \
   X(BLAECK_BUILTIN_RESUME_WRITES)
 
-// Longest select option a state channel can report, terminator included. A stack buffer
-// used while a frame is built, not storage per channel.
-#ifndef BLAECK_STATE_MAX_OPTION_CHARS
-  #define BLAECK_STATE_MAX_OPTION_CHARS 24
-#endif
 
 #ifndef BLAECK_USB_PACKET_BYTES
   #define BLAECK_USB_PACKET_BYTES 64
@@ -177,39 +166,6 @@ typedef enum DataType : uint8_t
 // the one mapping, and the schema hash, the device list and the state frames all go through
 // it. Reorder this list or insert a type and nothing on the wire moves.
 
-// Type tags for addStateChannel(), for a channel with no variable behind it. They are separate
-// types rather than one enum because the tag picks which handle comes back, so withUnit() on a
-// text channel fails to compile.
-struct BlaeckTextTag
-{
-};
-struct BlaeckBoolTag
-{
-};
-struct BlaeckNumericTag
-{
-  /*!
-    @brief   Which numeric type the tag names.
-
-    @code
-      device.addStateChannel(F("Temperature"), BlaeckFloat);
-    @endcode
-  */
-  dataType t;
-};
-
-constexpr BlaeckTextTag BlaeckText{};
-constexpr BlaeckBoolTag BlaeckBool{};
-constexpr BlaeckNumericTag BlaeckByte{Blaeck_byte};
-constexpr BlaeckNumericTag BlaeckShort{Blaeck_short};
-constexpr BlaeckNumericTag BlaeckUShort{Blaeck_ushort};
-constexpr BlaeckNumericTag BlaeckInt{Blaeck_int};
-constexpr BlaeckNumericTag BlaeckUInt{Blaeck_uint};
-constexpr BlaeckNumericTag BlaeckLong{Blaeck_long};
-constexpr BlaeckNumericTag BlaeckULong{Blaeck_ulong};
-constexpr BlaeckNumericTag BlaeckFloat{Blaeck_float};
-constexpr BlaeckNumericTag BlaeckDouble{Blaeck_double};
-
 // How a signal's value behaves over time, so a host knows whether to keep statistics on it.
 // NONE, the default, means no statistics.
 enum BlaeckStateClass
@@ -240,23 +196,6 @@ enum BlaeckSignalMetaFlag
   BLAECK_SIG_HAS_DISPLAY_NAME = 0x0800
 };
 static const byte BLAECK_SIG_STATE_CLASS_SHIFT = 3;
-
-// The 0x90 flag word. Laid out differently from the signal flags above, so the names are
-// separate. A text channel never sets unit, state class or display precision.
-enum BlaeckStateChannelFlag
-{
-  BLAECK_SCH_HAS_ICON = 0x0001,
-  BLAECK_SCH_DIAGNOSTIC = 0x0002,
-  BLAECK_SCH_HAS_STATE_VALUE = 0x0004,
-  BLAECK_SCH_HAS_DEVICE_CLASS = 0x0008,
-  BLAECK_SCH_DISABLED_BY_DEFAULT = 0x0010,
-  BLAECK_SCH_FORCE_UPDATE = 0x0020,
-  BLAECK_SCH_HAS_OPTIONS = 0x0040,
-  BLAECK_SCH_HAS_UNIT = 0x0080,
-  BLAECK_SCH_STATE_CLASS_MASK = 0x0700, // bits 8-10
-  BLAECK_SCH_HAS_DISPLAY_PRECISION = 0x0800
-};
-static const byte BLAECK_SCH_STATE_CLASS_SHIFT = 8;
 
 #if BLAECK_ENABLE_SIGNAL_META
 // What a signal declares beyond its name and type. Allocated only for signals that declare
@@ -299,7 +238,7 @@ constexpr double BLAECK_ANY_CHANGE = 0;
 // timestamp - in microseconds it lies about 585,000 years ahead - so 0 stays one.
 constexpr unsigned long long BLAECK_NOW = ~0ULL;
 
-struct SignalReporting
+struct ReportingState
 {
   byte value[sizeof(double) > sizeof(unsigned long) ? sizeof(double) : sizeof(unsigned long)] = {};
   double intervalDelta = 0;
@@ -312,7 +251,7 @@ struct SignalReporting
   char *text = nullptr;
   uint16_t textCapacity = 0;
   byte textLength = 0;
-  ~SignalReporting() { delete[] text; }
+  ~ReportingState() { delete[] text; }
 };
 
 struct Signal
@@ -337,7 +276,7 @@ struct Signal
   // The signal's number on the wire: its position in the device list, which groups signals by
   // device. Set by _computeSchemaHash() whenever the signals change.
   uint16_t WireIndex = 0;
-  SignalReporting *Reporting = nullptr;
+  ReportingState *Reporting = nullptr;
 #if BLAECK_ENABLE_SIGNAL_META
   // Null until the sketch describes the signal. Owned by the entry.
   SignalMeta *Meta = nullptr;
@@ -352,41 +291,19 @@ enum BlaeckTimestampMode
   BLAECK_RTC = BLAECK_UNIX // Deprecated alias
 };
 
-// paramCount is 0 only for a plain command or a button. A typed command that arrives without
-// its value is rejected before any handler runs.
+// paramCount is 0 only for a command or a button sent without parameters.
 typedef void (*BlaeckCommandHandler)(const char *command, const char *const *params, byte paramCount);
 typedef void (*BlaeckAnyCommandHandler)(const char *command, const char *const *params, byte paramCount);
-
-// Returns a text state channel's current value when it is sent. It runs while a frame is
-// being built, so it should return quickly. The text is copied at once, so a static local
-// buffer is fine. nullptr means no value right now.
-typedef const char *(*BlaeckStateTextGetter)();
-
-// The same for numeric channels, one type per getter.
-typedef bool (*BlaeckStateBoolGetter)();
-typedef byte (*BlaeckStateByteGetter)();
-typedef short (*BlaeckStateShortGetter)();
-typedef unsigned short (*BlaeckStateUShortGetter)();
-typedef int (*BlaeckStateIntGetter)();
-typedef unsigned int (*BlaeckStateUIntGetter)();
-typedef long (*BlaeckStateLongGetter)();
-typedef unsigned long (*BlaeckStateULongGetter)();
-typedef float (*BlaeckStateFloatGetter)();
-typedef double (*BlaeckStateDoubleGetter)();
 
 // What kind of control a command is, as listed in the command catalog.
 enum BlaeckCommandKind
 {
   BLAECK_CMD_PLAIN = 0,  // onCommand(): listed, but not offered as a control
-  BLAECK_CMD_NUMBER = 1, // a value in [min, max]
-  BLAECK_CMD_SWITCH = 2, // 0 or 1
-  BLAECK_CMD_SELECT = 3, // one of a list of options
-  BLAECK_CMD_BUTTON = 4, // no value
-  BLAECK_CMD_TEXT = 5    // free text, percent-encoded in transit
+  BLAECK_CMD_BUTTON = 4  // no value
 };
 
-// Where a host files a command's control. CONFIG is a device setting, DIAGNOSTIC fits only a
-// button such as identify or self-test. Either keeps the control off a host's default views.
+// Where a host files a control or value. CONFIG is a device setting, DIAGNOSTIC is information
+// about the device. Either keeps it off a host's default views.
 enum BlaeckEntityCategory
 {
   BLAECK_CAT_NONE = 0,      // a main control (default)
@@ -394,7 +311,7 @@ enum BlaeckEntityCategory
   BLAECK_CAT_DIAGNOSTIC = 2
 };
 
-// How a host should show a number command's input. Only a hint; the range still bounds it.
+// How a host should show a number input. Only a hint; the range still bounds it.
 enum BlaeckNumberMode
 {
   BLAECK_NUMBER_MODE_AUTO = 0,   // the host decides (default)
@@ -402,65 +319,56 @@ enum BlaeckNumberMode
   BLAECK_NUMBER_MODE_SLIDER = 2
 };
 
-// How a host should show a text command's input. PASSWORD only masks the field on screen; the
-// value still travels as plain text.
+// How a host should show a text input. PASSWORD only masks the field on screen; the value
+// still travels as plain text.
 enum BlaeckTextMode
 {
   BLAECK_TEXT_MODE_PLAIN = 0,   // default
   BLAECK_TEXT_MODE_PASSWORD = 1
 };
 
-// The longest text value a host is expected to accept. withMaxLength() warns above it, because
-// a host may reject the whole control rather than shorten it.
-#define BLAECK_TEXT_MAX_LENGTH 255
-
-// What a typed command's state name refers to. Set by the library from how the command was
-// declared.
-enum BlaeckStateSource
-{
-  BLAECK_STATE_SIGNAL = 0, // an addSignal() signal
-  BLAECK_STATE_CHANNEL = 1 // a state channel the command owns (see withOwnState())
-};
-
 // Why a command was accepted or rejected, sent back to the host after each command.
 enum BlaeckCommandAckReason
 {
   BLAECK_ACK_OK = 0,            // accepted
-  BLAECK_ACK_UNKNOWN = 1,       // no handler for it
-  BLAECK_ACK_OUT_OF_RANGE = 2,  // number outside [min, max]
+  BLAECK_ACK_UNKNOWN = 1,       // no input, sensor, button or command of that name
+  BLAECK_ACK_OUT_OF_RANGE = 2,  // number outside [min, max], or too big for its variable
   BLAECK_ACK_BAD_SWITCH = 3,    // switch value not 0 or 1
   BLAECK_ACK_BAD_SELECT = 4,    // not one of the select's options
-  BLAECK_ACK_TOO_LONG = 5,      // text longer than its declared maximum
-  BLAECK_ACK_MISSING_VALUE = 6, // a typed command without its value
+  BLAECK_ACK_TOO_LONG = 5,      // text longer than its buffer holds
+  BLAECK_ACK_MISSING_VALUE = 6, // an input without its value
   BLAECK_ACK_TRUNCATED = 7,     // too long or too many parameters to receive whole
-  BLAECK_ACK_DEVICE_NOT_RESPONDING = 8 // its device from addDevice() is marked missing
+  BLAECK_ACK_DEVICE_NOT_RESPONDING = 8, // its device from addDevice() is marked missing
+  BLAECK_ACK_NOT_AN_INTEGER = 9, // a number with a fraction for an input bound to an integer
+  BLAECK_ACK_READ_ONLY = 10      // a sensor, which a host cannot set
 };
 
-// Warns when a call's return value is ignored. onNumberCommand() and onSelectCommand() use it,
-// because dropping their handle skips the required withRange() or withOptions().
-#if defined(__GNUC__)
-#define BLAECK_NODISCARD __attribute__((warn_unused_result))
-#else
-#define BLAECK_NODISCARD
-#endif
+// Runs after a host has set an input, not when the sketch changes the variable itself. The
+// variable already holds the new value.
+typedef void (*BlaeckPropertyCallback)();
+
+// What a property's value is, as listed in the entity list. With the access, it is what the
+// sketch declared: addNumberInput() is a writable number, addSensor() with a bool a read-only
+// bool, and so on.
+enum BlaeckValueKind : uint8_t
+{
+  BLAECK_VALUE_NUMBER = 0,
+  BLAECK_VALUE_BOOL = 1,
+  BLAECK_VALUE_ENUM = 2,
+  BLAECK_VALUE_TEXT = 3
+};
+
 
 class BlaeckSignalRefBase;
 class BlaeckNumericSignalRef;
 class BlaeckTextSignalRef;
 class BlaeckBoolSignalRef;
 class BlaeckCommandRefBase;
-class BlaeckNumberCommandRef;
-class BlaeckNumberCommandNeedsRange;
-class BlaeckSwitchCommandRef;
-class BlaeckSelectCommandRef;
-class BlaeckSelectCommandNeedsOptions;
 class BlaeckButtonCommandRef;
-class BlaeckTextCommandRef;
-class BlaeckStateRefBase;
-class BlaeckNumericStateRef;
-class BlaeckTextStateRef;
-class BlaeckBoolStateRef;
 class BlaeckEventChannelRef;
+class BlaeckPropertyRef;
+class BlaeckNumberPropertyRef;
+class BlaeckTextPropertyRef;
 class BlaeckDeviceRef;
 class Blaeck;
 
@@ -542,61 +450,6 @@ inline bool flashStrEmpty(BlaeckString value)
 bool optionsAccepted(BlaeckString optionsCsv, Print *debug,
                      const char *name, bool nameInFlash);
 
-// Checks that a channel can take a getter: it must not already read a variable, and the
-// getter must return the channel's type.
-bool stateGetterAccepted(const void *stateValue, dataType want, dataType have,
-                         const __FlashStringHelper *method, Print *debug,
-                         const char *name, bool nameInFlash);
-
-// Turns what a switch's getter returned into "1" or "0". Accepts 1/on/true/yes and
-// 0/off/false/no in any case, and returns nullptr for anything else.
-inline const char *switchStateText(const char *value)
-{
-  if (value == nullptr)
-    return nullptr;
-
-  // Lowercase into a buffer that fits the longest word; anything longer can't match.
-  // strcasecmp is missing on some cores.
-  char w[6];
-  byte n = 0;
-  while (value[n] != '\0')
-  {
-    if (n >= sizeof(w) - 1)
-      return nullptr;
-    char c = value[n];
-    w[n] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
-    n++;
-  }
-  w[n] = '\0';
-
-  // Static, so the returned pointer stays valid after the call.
-  static const char kOn[] = "1";
-  static const char kOff[] = "0";
-
-  switch (n)
-  {
-  case 1:
-    if (w[0] == '1') return kOn;
-    if (w[0] == '0') return kOff;
-    break;
-  case 2:
-    if (w[0] == 'o' && w[1] == 'n') return kOn;
-    if (w[0] == 'n' && w[1] == 'o') return kOff;
-    break;
-  case 3:
-    if (w[0] == 'y' && w[1] == 'e' && w[2] == 's') return kOn;
-    if (w[0] == 'o' && w[1] == 'f' && w[2] == 'f') return kOff;
-    break;
-  case 4:
-    if (w[0] == 't' && w[1] == 'r' && w[2] == 'u' && w[3] == 'e') return kOn;
-    break;
-  case 5:
-    if (w[0] == 'f' && w[1] == 'a' && w[2] == 'l' && w[3] == 's' && w[4] == 'e') return kOff;
-    break;
-  }
-  return nullptr;
-}
-
 struct CommandHandlerEntry
 {
   char command[MAX_COMMAND_NAME_COUNT];
@@ -606,70 +459,87 @@ struct CommandHandlerEntry
   uint8_t deviceId = 0;
 #if BLAECK_ENABLE_COMMAND_META
   uint8_t kind = BLAECK_CMD_PLAIN;
-  float meta_min = 0.0f;
-  float meta_max = 0.0f;
-  float meta_step = 0.0f;
-  detail::StoredString unit;
   detail::StoredString deviceClass;
   detail::StoredString icon;
   detail::StoredString displayName;
-  detail::StoredString options;
-  detail::StoredString stateSignal;
   // Buttons only: the arguments a press sends, or nullptr for none.
   detail::StoredString pressPayload;
-  uint8_t stateSource = BLAECK_STATE_SIGNAL;
   uint8_t category = BLAECK_CAT_NONE;
   bool disabledByDefault = false;
-  // BlaeckNumberMode on a number command, BlaeckTextMode on a text command.
-  uint8_t mode = 0;
 #endif
 };
 
-struct StateChannelEntry
+// A property's presentation, kept apart so that a property without any costs one pointer.
+struct PropertyPresentation
 {
-  // A heap copy, or a flash pointer when nameInFlash. Read it through the helpers only.
-  const char *name = nullptr;
-  bool nameInFlash = false;
-  detail::StoredString icon;
-  // A getter asked for the value each time it is sent. valueType says which member is in
-  // use: getStateText for text, getNumber (cast to the right type) for everything else.
-  union
-  {
-    BlaeckStateTextGetter getStateText = nullptr;
-    void (*getNumber)();
-  };
-  detail::StoredString deviceClass;
-  detail::StoredString options;
   detail::StoredString unit;
-  // The variable the channel reports, when it has one instead of a getter.
-  const void *stateValue = nullptr;
-  dataType valueType = Blaeck_string;
-  // State class and the has-display-precision bit, which no other member can hold. The rest
-  // of the flag word is built from the members when the catalog is written.
-  uint16_t metaFlags = 0;
+  detail::StoredString displayName;
+  detail::StoredString icon;
+  detail::StoredString deviceClass;
   uint8_t displayPrecision = 0;
-  // The channel belongs to a command's withOwnState(). addStateChannel() and writeState()
-  // refuse its name.
-  bool ownedByCommand = false;
-  bool diagnostic = false;
-  bool disabledByDefault = false;
-  bool forceUpdate = false;
-  // stateValue points at a byte holding a select's option index, and the channel reports
-  // that option's name.
-  bool stateIsSelectIndex = false;
-  // The channel reports an option name directly; it is checked against the options list.
-  bool stateIsSelectName = false;
-  // The getter belongs to a switch, so its text is turned into "1" or "0".
-  bool stateIsSwitchBool = false;
-  // Set after the first warning about a value that can't be reported, so it prints once.
-  // Mutable because the entry is read through a const reference when the value is fetched.
-  mutable bool stateWarned = false;
-  // Set after the first warning about text cut to 255 bytes.
-  bool truncationWarned = false;
-  bool textInFlash = false;
-  bool inUse = false;
-  // The device from addDevice() the channel belongs to, 0 for the board itself.
+};
+
+// Bits of a property's flag word in the entity list. The access (bits 0-1) and the has-bits of
+// the presentation texts are filled in when the list is written; the rest are kept here.
+static const uint32_t PROPERTY_HAS_RANGE = 1UL << 2;
+static const uint32_t PROPERTY_HAS_STEP = 1UL << 3;
+static const uint32_t PROPERTY_HAS_UNIT = 1UL << 4;
+static const uint32_t PROPERTY_HAS_DISPLAY_NAME = 1UL << 5;
+static const uint32_t PROPERTY_HAS_ICON = 1UL << 6;
+static const uint32_t PROPERTY_HAS_DEVICE_CLASS = 1UL << 7;
+static const uint8_t PROPERTY_STATE_CLASS_SHIFT = 8;
+static const uint32_t PROPERTY_STATE_CLASS_MASK = 7UL << 8;
+static const uint32_t PROPERTY_HAS_DISPLAY_PRECISION = 1UL << 11;
+static const uint8_t PROPERTY_CATEGORY_SHIFT = 12;
+static const uint32_t PROPERTY_CATEGORY_MASK = 3UL << 12;
+static const uint32_t PROPERTY_DISABLED_BY_DEFAULT = 1UL << 14;
+static const uint32_t PROPERTY_FORCE_UPDATE = 1UL << 15;
+static const uint8_t PROPERTY_MODE_SHIFT = 16;
+static const uint32_t PROPERTY_MODE_MASK = 3UL << 16;
+
+// A property getter's C++ return type. A getter is stored as void (*)() and called as this.
+enum : uint8_t
+{
+  GETTER_NONE = 0,
+  GETTER_BOOL, GETTER_BYTE, GETTER_SHORT, GETTER_USHORT, GETTER_INT, GETTER_UINT,
+  GETTER_LONG, GETTER_ULONG, GETTER_FLOAT, GETTER_DOUBLE, GETTER_TEXT
+};
+
+// One input or sensor.
+struct PropertyEntry
+{
+  detail::StoredString name;
+  // Where the value lives: a variable or text buffer, or a getter, stored as void (*)() and
+  // called as the function type the value's type says.
+  void *address = nullptr;
+  void (*getter)() = nullptr;
+  BlaeckPropertyCallback callback = nullptr;
+  // An enum's options, comma-separated.
+  detail::StoredString options;
+  float rangeMin = 0.0f;
+  float rangeMax = 0.0f;
+  float rangeStep = 0.0f;
+  // The baseline a change is measured from. Allocated when the property is added.
+  ReportingState *reporting = nullptr;
+  PropertyPresentation *presentation = nullptr;
+  uint32_t flags = 0;
+  // A text property's buffer size, terminator included.
+  uint16_t textSize = 0;
+  dataType type = Blaeck_float;
+  uint8_t kind = BLAECK_VALUE_NUMBER;
   uint8_t deviceId = 0;
+  // The getter's C++ return type, one of the GETTER_ codes, so it is called as declared.
+  uint8_t getterType = 0;
+  bool writable = false;
+
+  PropertyEntry() {}
+  PropertyEntry(const PropertyEntry &) = delete;
+  PropertyEntry &operator=(const PropertyEntry &) = delete;
+  ~PropertyEntry()
+  {
+    delete reporting;
+    delete presentation;
+  }
 };
 
 struct EventChannelEntry
@@ -711,10 +581,8 @@ struct EventTypeEntry
 
 } // namespace blaeck_detail
 
-// The shared part of the handles returned by the typed command registrations. Each kind's
-// handle exposes only the modifiers that make sense for it, so a range on a text command is
-// a compile error. A rejected registration returns a handle that ignores every call.
-// With BLAECK_ENABLE_COMMAND_META=0 the modifiers store nothing.
+// The shared part of the button handle. A rejected registration returns a handle that ignores
+// every call. With BLAECK_ENABLE_COMMAND_META=0 the modifiers store nothing.
 class BlaeckCommandRefBase
 {
 protected:
@@ -726,92 +594,6 @@ protected:
   // Marks the command catalog as changed, so it is sent again.
   void _markDirty() const;
 
-  void _setStateSignal(BlaeckString signalName)
-  {
-#if BLAECK_ENABLE_COMMAND_META
-    if (auto *e = _entry())
-    {
-      // Only a real change marks the catalog. The modifiers here and below may be called
-      // on every loop() pass, and each mark resends the catalog.
-      if (e->stateSignal != signalName || e->stateSource != BLAECK_STATE_SIGNAL)
-      {
-        if (!_storeString(e->stateSignal, signalName))
-          return;
-        e->stateSource = BLAECK_STATE_SIGNAL;
-        _markDirty();
-      }
-    }
-#else
-    (void)signalName;
-#endif
-  }
-
-  // Gives the command a state channel of its own, reading a variable or a getter.
-  void _setOwnState(BlaeckString channelName, dataType valueType, const void *value,
-                    bool selectIndex = false);
-
-  void _setOwnState(BlaeckString channelName, BlaeckStateTextGetter getStateText);
-
-  // A max not above min means no range, so nothing would be checked. Say so.
-  void _warnRangeIgnored(float mn, float mx) const;
-
-  // A step that isn't positive (or is NaN) means no step. Say so.
-  void _warnStepIgnored(float st) const;
-
-  // A step below 0.001 is sent, but a host may reject the whole control for it.
-  void _warnStepTooFine(float st) const;
-
-  // A maximum length above BLAECK_TEXT_MAX_LENGTH is refused, not clamped.
-  void _warnMaxLengthTooLong(unsigned int maxLength) const;
-
-  // Refuses an options list with no entries or a blank one.
-  bool _optionsAccepted(BlaeckString optionsCsv) const;
-
-  void _setRange(float mn, float mx, float st)
-  {
-#if BLAECK_ENABLE_COMMAND_META
-    if (auto *e = _entry())
-    {
-      if (e->meta_min != mn || e->meta_max != mx || e->meta_step != st)
-      {
-        e->meta_min = mn;
-        e->meta_max = mx;
-        e->meta_step = st;
-        _markDirty();
-      }
-      if (!(mx > mn))
-        _warnRangeIgnored(mn, mx);
-      // A step of 0 means none, on purpose.
-      if (st != 0.0f && !(st > 0.0f))
-        _warnStepIgnored(st);
-      else if (st > 0.0f && st < 0.001f)
-        _warnStepTooFine(st);
-    }
-#else
-    (void)mn; (void)mx; (void)st;
-#endif
-  }
-
-  void _setUnit(BlaeckString unit)
-  {
-#if BLAECK_ENABLE_COMMAND_META
-    if (blaeck_detail::flashStrEmpty(unit))
-      unit = nullptr;
-    if (auto *e = _entry())
-    {
-      if (e->unit != unit)
-      {
-        if (!_storeString(e->unit, unit))
-          return;
-        _markDirty();
-      }
-    }
-#else
-    (void)unit;
-#endif
-  }
-
-  // An empty device class is treated as none; a host may reject a blank one.
   void _setDeviceClass(BlaeckString deviceClass)
   {
 #if BLAECK_ENABLE_COMMAND_META
@@ -888,49 +670,6 @@ protected:
 #endif
   }
 
-  void _setOptions(BlaeckString optionsCsv)
-  {
-#if BLAECK_ENABLE_COMMAND_META
-    if (auto *e = _entry())
-    {
-      // A refused list leaves whatever the entry had before.
-      if (!_optionsAccepted(optionsCsv))
-        return;
-      if (e->options != optionsCsv)
-      {
-        if (!_storeString(e->options, optionsCsv))
-          return;
-        _markDirty();
-      }
-    }
-#else
-    (void)optionsCsv;
-#endif
-  }
-
-  // Stored in meta_max, which a text command uses for nothing else.
-  void _setMaxLength(unsigned int maxLength)
-  {
-#if BLAECK_ENABLE_COMMAND_META
-    if (auto *e = _entry())
-    {
-      // The entry keeps the length it was registered with.
-      if (maxLength > BLAECK_TEXT_MAX_LENGTH)
-      {
-        _warnMaxLengthTooLong(maxLength);
-        return;
-      }
-      if (e->meta_max != (float)maxLength)
-      {
-        e->meta_max = (float)maxLength;
-        _markDirty();
-      }
-    }
-#else
-    (void)maxLength;
-#endif
-  }
-
   void _setCategory(uint8_t category)
   {
 #if BLAECK_ENABLE_COMMAND_META
@@ -963,23 +702,6 @@ protected:
 #endif
   }
 
-  // Only number and text handles offer withMode(), so the kind needs no check here.
-  void _setMode(uint8_t mode)
-  {
-#if BLAECK_ENABLE_COMMAND_META
-    if (auto *e = _entry())
-    {
-      if (e->mode != mode)
-      {
-        e->mode = mode;
-        _markDirty();
-      }
-    }
-#else
-    (void)mode;
-#endif
-  }
-
   bool _storeString(detail::StoredString &slot, BlaeckString value);
 
   Blaeck *_owner;
@@ -996,16 +718,14 @@ public:
   /*!
     @brief   Sets the label a host shows instead of the command name.
 
-    Only the label changes. When the control is used, the host still sends the
-    command name, such as SET_FREQ, so adding a label later breaks nothing.
+    Only the label changes. When the button is pressed, the host still sends the
+    command name, such as STATUS, so adding a label later breaks nothing.
 
     @param   displayName  The label.
     @return  The same handle, for chaining.
 
     @code
-      device.onNumberCommand("SET_FREQ", onSetFreq)
-          .withRange(0.0f, 2.0f, 0.01f)
-          .withDisplayName(F("Frequency"));
+      device.onButtonCommand("STATUS", onStatus).withDisplayName(F("Request status"));
     @endcode
   */
   TYPE &withDisplayName(BlaeckString displayName)
@@ -1040,7 +760,7 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.onTextCommand("SET_LABEL", onSetLabel).withMaxLength(32).config();
+      device.onButtonCommand("FACTORY_RESET", onFactoryReset).config();
     @endcode
   */
   TYPE &config()
@@ -1091,325 +811,6 @@ protected:
 };
 
 // The state modifiers, for every kind except a button, which has no state to report.
-template <class TYPE>
-class BlaeckCommandRefStateful : public BlaeckCommandRefShared<TYPE>
-{
-public:
-  /*!
-    @brief   Reports the command's current value through an existing signal.
-
-    A host then shows what the device actually holds, not just what was last sent.
-    Use this when the value should be logged with the data; use withOwnState() when
-    it shouldn't.
-
-    @param   signalName  A signal added with addSignal().
-    @return  The same handle, for chaining.
-
-    @code
-      device.addSignal(F("LED_State"), &ledState);
-      device.onSwitchCommand("LED", onLED).withStateFromSignal(F("LED_State"));
-    @endcode
-  */
-  TYPE &withStateFromSignal(BlaeckString signalName)
-  {
-    this->_setStateSignal(signalName);
-    return this->_self();
-  }
-
-  /*!
-    @brief   Reports the command's current value on a state channel of its own, read
-             from a getter.
-
-    For a value that shouldn't be logged. The channel belongs to the command, so
-    addStateChannel() and writeState() refuse its name. Call writeCommandState()
-    after a change; otherwise the value is sent only when a host asks.
-
-    @param   channelName   Name of the channel.
-    @param   getStateText  Returns the current value as text.
-    @return  The same handle, for chaining.
-
-    @warning The getter runs while a frame is being built, so it must not write a
-             frame itself, for example by calling writeState().
-
-    @code
-      device.onNumberCommand("SET_OFFSET", onSetOffset)
-          .withRange(-100.0f, 100.0f, 0.1f)
-          .withOwnState(F("Offset"), offsetText);
-    @endcode
-  */
-  TYPE &withOwnState(BlaeckString channelName, BlaeckStateTextGetter getStateText)
-  {
-    this->_setOwnState(channelName, getStateText);
-    return this->_self();
-  }
-
-protected:
-  BlaeckCommandRefStateful(Blaeck *owner, int16_t index) : BlaeckCommandRefShared<TYPE>(owner, index) {}
-};
-
-class BlaeckNumberCommandRef : public BlaeckCommandRefStateful<BlaeckNumberCommandRef>
-{
-public:
-  BlaeckNumberCommandRef(Blaeck *owner, int16_t index) : BlaeckCommandRefStateful<BlaeckNumberCommandRef>(owner, index) {}
-
-  // Otherwise the withOwnState() below would hide the inherited getter form.
-  using BlaeckCommandRefStateful<BlaeckNumberCommandRef>::withOwnState;
-
-  /*!
-    @brief   Sets the unit a host shows next to the input.
-
-    Only a label; the handler gets the number as sent.
-
-    @param   unit  The unit. Non-ASCII characters must be UTF-8:
-                   F("\xC2\xB0" "C") is degrees Celsius.
-    @return  The same handle, for chaining.
-
-    @code
-      device.onNumberCommand("SET_FREQ", onSetFreq).withRange(0.0f, 2.0f, 0.01f).withUnit(F("Hz"));
-    @endcode
-  */
-  BlaeckNumberCommandRef &withUnit(BlaeckString unit)
-  {
-    _setUnit(unit);
-    return *this;
-  }
-
-  /*!
-    @brief   Asks a host to show the input as a typed box or a slider.
-
-    Only a hint. Without it the host chooses, which suits most controls.
-
-    @param   mode  BLAECK_NUMBER_MODE_BOX or BLAECK_NUMBER_MODE_SLIDER.
-                   BLAECK_NUMBER_MODE_AUTO is the default.
-    @return  The same handle, for chaining.
-
-    @note    A slider can send values like 21.200000000000003 for a step of 0.1.
-             The library doesn't round them, so round in the handler if it matters.
-
-    @code
-      device.onNumberCommand("SET_FREQ", onSetFreq)
-          .withRange(0.0f, 2.0f, 0.01f)
-          .withMode(BLAECK_NUMBER_MODE_BOX);
-    @endcode
-  */
-  BlaeckNumberCommandRef &withMode(BlaeckNumberMode mode)
-  {
-    _setMode((uint8_t)mode);
-    return *this;
-  }
-
-  /*!
-    @brief   Sets what kind of quantity the control sets, such as "temperature".
-
-    A host uses it for the icon, and may show the value in the user's own units.
-    Any conversion happens in the host, so values always reach the device in the
-    unit declared with withUnit(), and the range stays in that unit too.
-
-    @param   deviceClass  A number device class in lower case:
-                          "temperature", "pressure", "power", "voltage" and so on.
-                          Numbers don't take "enum", "timestamp" or "date".
-    @return  The same handle, for chaining.
-
-    @warning A class the host doesn't know makes it drop the control, so leave it
-             out rather than guess. Declare the unit too; a converting class
-             without one gives wrong values.
-
-    @code
-      device.onNumberCommand("SET_TEMP", onSetTemp)
-          .withRange(5.0f, 30.0f, 0.5f)
-          .withUnit(F("\xC2\xB0" "C"))
-          .withDeviceClass(F("temperature"));
-    @endcode
-  */
-  BlaeckNumberCommandRef &withDeviceClass(BlaeckString deviceClass)
-  {
-    _setDeviceClass(deviceClass);
-    return *this;
-  }
-
-  /*!
-    @brief   Reports the command's current value on a state channel of its own, read
-             from a numeric variable.
-
-    There is an overload for each numeric type.
-
-    @param   channelName  Name of the channel.
-    @param   value        The variable to read. It must outlive the sketch, so use a
-                          global.
-    @return  The same handle, for chaining.
-
-    @code
-      device.onNumberCommand("SET_AMP", onSetAmp)
-          .withRange(0.0f, 100.0f, 0.1f)
-          .withOwnState(F("Amplitude"), &Amplitude);
-    @endcode
-  */
-  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, byte *value)
-  {
-    _setOwnState(channelName, Blaeck_byte, value);
-    return *this;
-  }
-
-  // Reports a short variable as the command's state.
-  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, short *value)
-  {
-    _setOwnState(channelName, Blaeck_short, value);
-    return *this;
-  }
-
-  // Reports an unsigned short variable as the command's state.
-  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, unsigned short *value)
-  {
-    _setOwnState(channelName, Blaeck_ushort, value);
-    return *this;
-  }
-
-  // Reports an int variable as the command's state. An int is 16-bit on AVR, 32-bit elsewhere.
-  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, int *value)
-  {
-#ifdef __AVR__
-    _setOwnState(channelName, Blaeck_int, value);
-#else
-    _setOwnState(channelName, Blaeck_long, value);
-#endif
-    return *this;
-  }
-
-  // Reports an unsigned int variable as the command's state. 16-bit on AVR, 32-bit elsewhere.
-  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, unsigned int *value)
-  {
-#ifdef __AVR__
-    _setOwnState(channelName, Blaeck_uint, value);
-#else
-    _setOwnState(channelName, Blaeck_ulong, value);
-#endif
-    return *this;
-  }
-
-  // Reports a long variable as the command's state.
-  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, long *value)
-  {
-    _setOwnState(channelName, Blaeck_long, value);
-    return *this;
-  }
-
-  // Reports an unsigned long variable as the command's state.
-  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, unsigned long *value)
-  {
-    _setOwnState(channelName, Blaeck_ulong, value);
-    return *this;
-  }
-
-  // Reports a float variable as the command's state.
-  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, float *value)
-  {
-    _setOwnState(channelName, Blaeck_float, value);
-    return *this;
-  }
-
-  // Reports a double variable as the command's state. On AVR a double is a 4-byte float and
-  // is sent as one.
-  BlaeckNumberCommandRef &withOwnState(BlaeckString channelName, double *value)
-  {
-#ifdef __AVR__
-    _setOwnState(channelName, Blaeck_float, value);
-#else
-    _setOwnState(channelName, Blaeck_double, value);
-#endif
-    return *this;
-  }
-};
-
-class BlaeckSwitchCommandRef : public BlaeckCommandRefStateful<BlaeckSwitchCommandRef>
-{
-public:
-  BlaeckSwitchCommandRef(Blaeck *owner, int16_t index) : BlaeckCommandRefStateful<BlaeckSwitchCommandRef>(owner, index) {}
-
-  // Otherwise the withOwnState() below would hide the inherited getter form. On a switch, the
-  // getter's text is read as on (1/on/true/yes) or off (0/off/false/no) in any case, and
-  // anything else reports no value.
-  using BlaeckCommandRefStateful<BlaeckSwitchCommandRef>::withOwnState;
-
-  /*!
-    @brief   Says whether the switch controls a mains socket or something else.
-
-    Changes only the icon and wording a host uses. Most switches don't need it.
-
-    @param   deviceClass  "outlet" for a socket, "switch" for anything else. No other
-                          values are valid for a switch.
-    @return  The same handle, for chaining.
-
-    @code
-      device.onSwitchCommand("SET_RELAY", onSetRelay).withDeviceClass(F("outlet"));
-    @endcode
-  */
-  BlaeckSwitchCommandRef &withDeviceClass(BlaeckString deviceClass)
-  {
-    _setDeviceClass(deviceClass);
-    return *this;
-  }
-
-  /*!
-    @brief   Reports the switch's current position on a state channel of its own,
-             read from a bool.
-
-    @param   channelName  Name of the channel.
-    @param   value        The bool to read. Use a global.
-    @return  The same handle, for chaining.
-
-    @code
-      device.onSwitchCommand("SET_ENABLE", onSetEnable)
-          .withOwnState(F("Enabled"), &Enabled);
-    @endcode
-  */
-  BlaeckSwitchCommandRef &withOwnState(BlaeckString channelName, bool *value)
-  {
-    _setOwnState(channelName, Blaeck_bool, value);
-    return *this;
-  }
-};
-
-class BlaeckSelectCommandRef : public BlaeckCommandRefStateful<BlaeckSelectCommandRef>
-{
-public:
-  BlaeckSelectCommandRef(Blaeck *owner, int16_t index) : BlaeckCommandRefStateful<BlaeckSelectCommandRef>(owner, index) {}
-
-  // Otherwise the withOwnState() below would hide the inherited getter form.
-  using BlaeckCommandRefStateful<BlaeckSelectCommandRef>::withOwnState;
-
-  /*!
-    @brief   Reports the selected option on a state channel of its own, read from an
-             index variable.
-
-    The library looks the index up in the options list and sends the option's name.
-    This is usually the same variable the handler sets.
-
-    @param   channelName  Name of the channel.
-    @param   index        The index variable, counting from 0. Use a global.
-    @return  The same handle, for chaining.
-
-    @code
-      device.onSelectCommand("SET_WAVE", onSetWave)
-          .withOptions(F("Sine,Square,Triangle,Sawtooth"))
-          .withOwnState(F("Wave"), &waveIndex);
-    @endcode
-  */
-  BlaeckSelectCommandRef &withOwnState(BlaeckString channelName, byte *index)
-  {
-    _setOwnState(channelName, Blaeck_string, index, true);
-    return *this;
-  }
-
-  // Reports the selected option from a buffer holding its name. The sketch keeps the buffer
-  // up to date; the name is checked against the options list.
-  BlaeckSelectCommandRef &withOwnState(BlaeckString channelName, const char *value)
-  {
-    _setOwnState(channelName, Blaeck_string, value);
-    return *this;
-  }
-
-};
-
 class BlaeckButtonCommandRef : public BlaeckCommandRefShared<BlaeckButtonCommandRef>
 {
 public:
@@ -1463,158 +864,6 @@ public:
   }
 };
 
-class BlaeckTextCommandRef : public BlaeckCommandRefStateful<BlaeckTextCommandRef>
-{
-public:
-  BlaeckTextCommandRef(Blaeck *owner, int16_t index) : BlaeckCommandRefStateful<BlaeckTextCommandRef>(owner, index) {}
-
-  // Otherwise the withOwnState() below would hide the inherited getter form.
-  using BlaeckCommandRefStateful<BlaeckTextCommandRef>::withOwnState;
-
-  /*!
-    @brief   Reports the control's current text on a state channel of its own, read
-             from a buffer.
-
-    @param   channelName  Name of the channel.
-    @param   value        The buffer holding the text. Use a global.
-    @return  The same handle, for chaining.
-
-    @code
-      device.onTextCommand("SET_LABEL", onSetLabel)
-          .withMaxLength(sizeof(DeviceLabel) - 1)
-          .withOwnState(F("DeviceLabel"), DeviceLabel);
-    @endcode
-  */
-  BlaeckTextCommandRef &withOwnState(BlaeckString channelName, const char *value)
-  {
-    _setOwnState(channelName, Blaeck_string, value);
-    return *this;
-  }
-
-  /*!
-    @brief   Sets the longest text the control accepts.
-
-    Longer text is rejected before the handler runs, so the handler can copy what it
-    gets without checking.
-
-    @param   maxLength  In bytes after decoding, at most 255, which is also the
-                        default. sizeof(buffer) - 1 is usually right.
-    @return  The same handle, for chaining.
-
-    @note    A value above 255 is ignored, with a warning on the debug stream, because
-             a host may reject a text control that declares more.
-
-    @code
-      device.onTextCommand("SET_LABEL", onSetLabel)
-          .withMaxLength(sizeof(DeviceLabel) - 1);
-    @endcode
-  */
-  BlaeckTextCommandRef &withMaxLength(unsigned int maxLength)
-  {
-    _setMaxLength(maxLength);
-    return *this;
-  }
-
-  /*!
-    @brief   Asks a host to mask the field while it is typed.
-
-    @param   mode  BLAECK_TEXT_MODE_PASSWORD to mask it. BLAECK_TEXT_MODE_PLAIN is the
-                   default.
-    @return  The same handle, for chaining.
-
-    @warning This only hides the text on screen. It still travels as plain text.
-
-    @code
-      device.onTextCommand("SET_API_KEY", onSetApiKey)
-          .withMaxLength(sizeof(ApiKey) - 1)
-          .withMode(BLAECK_TEXT_MODE_PASSWORD);
-    @endcode
-  */
-  BlaeckTextCommandRef &withMode(BlaeckTextMode mode)
-  {
-    _setMode((uint8_t)mode);
-    return *this;
-  }
-};
-
-// A number command needs a range and a select needs its options; without them a host guesses.
-// So onNumberCommand() and onSelectCommand() return one of these two handles, whose only method
-// is the required one, and which returns the full handle.
-class BlaeckNumberCommandNeedsRange : public BlaeckCommandRefBase
-{
-public:
-  BlaeckNumberCommandNeedsRange(Blaeck *owner, int16_t index) : BlaeckCommandRefBase(owner, index) {}
-
-  /*!
-    @brief   Sets the range of values the command accepts.
-
-    A value outside it is rejected before the handler runs. The other modifiers are
-    available on the handle this returns.
-
-    @param   min   Lowest value accepted.
-    @param   max   Highest value accepted. Must be above min, or the command gets no
-                   range and accepts anything.
-    @param   step  How finely a host's control moves. It isn't enforced. Pass 0 to let
-                   the host choose, which is usually a step of 1.
-    @return  The command's full handle, for chaining.
-
-    @note    A host may reject a step below 0.001, and the control with it.
-
-    @code
-      device.onNumberCommand("SET_FREQ", onSetFreq).withRange(0.0f, 2.0f, 0.01f);
-    @endcode
-  */
-  BlaeckNumberCommandRef withRange(float min, float max, float step)
-  {
-    _setRange(min, max, step);
-    return BlaeckNumberCommandRef(_owner, _index);
-  }
-};
-
-class BlaeckSelectCommandNeedsOptions : public BlaeckCommandRefBase
-{
-public:
-  BlaeckSelectCommandNeedsOptions(Blaeck *owner, int16_t index) : BlaeckCommandRefBase(owner, index) {}
-
-  /*!
-    @brief   Sets the options the select offers.
-
-    A value that is neither an option's name nor a valid index is rejected before
-    the handler runs. The handler always gets the index as text, so
-    atoi(params[0]) is enough; getSelectOptionNameAt() gives the name. The other
-    modifiers are available on the handle this returns.
-
-    @param   optionsCsv  Comma-separated option names. The first
-                         has index 0.
-    @return  The command's full handle, for chaining.
-
-    @note    Don't call an option "none": a host may take it to mean nothing is
-             selected.
-
-    @warning A list that is empty or has a blank entry is refused, with a warning
-             on the debug stream.
-
-    @code
-      device.onSelectCommand("SET_WAVE", onSetWave)
-          .withOptions(F("Sine,Square,Triangle,Sawtooth"));
-    @endcode
-  */
-  BlaeckSelectCommandRef withOptions(BlaeckString optionsCsv)
-  {
-    _setOptions(optionsCsv);
-    return BlaeckSelectCommandRef(_owner, _index);
-  }
-};
-
-// The shared part of the handles addSignal() returns, which describe how a signal is shown:
-//
-//   device.addSignal("FreeMemory", &FreeMemory)
-//       .withUnit(F("B"))
-//       .diagnostic();
-//
-// Numeric, text and bool signals each get their own handle, so a modifier that makes no sense
-// for the type (a unit on a bool, say) fails to compile. A rejected handle ignores every call.
-// Reporting policies remain available when signal metadata is off.
 class BlaeckSignalRefBase
 {
 protected:
@@ -1948,7 +1197,7 @@ private:
 
 // The handle for a text signal. It has no unit, state class or display precision, because a
 // host would then treat the value as a number and reject the text. Keep it in step with
-// BlaeckTextStateRef, which becomes the same kind of entity on a host.
+// a text sensor, which becomes the same kind of entity on a host.
 class BlaeckTextSignalRef : public BlaeckSignalRefShared<BlaeckTextSignalRef>
 {
 public:
@@ -2006,584 +1255,6 @@ private:
   BlaeckBoolSignalRef(Blaeck *owner, int16_t index) : BlaeckSignalRefShared<BlaeckBoolSignalRef>(owner, index) {}
   friend class Blaeck;
   friend class BlaeckDeviceBase;
-};
-
-// The shared part of the handles addStateChannel() returns. As with signals there is one per
-// value type, so a unit on a text channel fails to compile. A rejected channel's handle, or any
-// handle with BLAECK_ENABLE_STATE_CHANNELS=0, ignores every call.
-class BlaeckStateRefBase
-{
-protected:
-  BlaeckStateRefBase(Blaeck *owner, int16_t index) : _owner(owner), _index(index) {}
-
-  // The entry this handle names, or nullptr when registration was rejected. Defined out of
-  // line, like the two below, because Blaeck is incomplete here.
-  blaeck_detail::StateChannelEntry * _entry() const;
-
-  // Marks the state catalog as changed, so it is sent again.
-  void _markDirty() const;
-
-  // The debug stream, or nullptr.
-  Print *_debugStream() const;
-
-  void _setStateClass(BlaeckStateClass stateClass)
-  {
-#if BLAECK_ENABLE_STATE_CHANNELS
-    if (auto *e = _entry())
-    {
-      // Only a real change marks the catalog, here and in every modifier on these handles.
-      const uint16_t flags =
-          (uint16_t)((e->metaFlags & ~BLAECK_SCH_STATE_CLASS_MASK) |
-                     (((uint16_t)stateClass << BLAECK_SCH_STATE_CLASS_SHIFT) &
-                      BLAECK_SCH_STATE_CLASS_MASK));
-      if (e->metaFlags != flags)
-      {
-        e->metaFlags = flags;
-        _markDirty();
-      }
-    }
-#else
-    (void)stateClass;
-#endif
-  }
-
-  void _setDisplayPrecision(uint8_t decimals)
-  {
-#if BLAECK_ENABLE_STATE_CHANNELS
-    if (auto *e = _entry())
-    {
-      const uint16_t flags = (uint16_t)(e->metaFlags | BLAECK_SCH_HAS_DISPLAY_PRECISION);
-      if (e->displayPrecision != decimals || e->metaFlags != flags)
-      {
-        e->displayPrecision = decimals;
-        e->metaFlags = flags;
-        _markDirty();
-      }
-    }
-#else
-    (void)decimals;
-#endif
-  }
-
-  bool _storeString(detail::StoredString &slot, BlaeckString value);
-
-  Blaeck *_owner;
-  int16_t _index;
-};
-
-// Modifiers every state channel handle has. TYPE is the deriving handle.
-template <class TYPE>
-class BlaeckStateRefShared : public BlaeckStateRefBase
-{
-public:
-  /*!
-    @brief   Sets the icon a host shows next to the channel.
-
-    @param   icon  A Material Design Icons name.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addStateChannel(F("Status"), BlaeckText).withIcon(F("mdi:pulse"));
-    @endcode
-  */
-  TYPE &withIcon(BlaeckString icon)
-  {
-    if (blaeck_detail::flashStrEmpty(icon))
-      icon = nullptr;
-    if (auto *e = _entry())
-    {
-      if (e->icon != icon)
-      {
-        if (!_storeString(e->icon, icon))
-          return _self();
-        _markDirty();
-      }
-    }
-    return _self();
-  }
-
-  /*!
-    @brief   Marks the channel as diagnostic, such as a status line.
-
-    A host usually keeps these off its default dashboard.
-
-    @param   on  false undoes it.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addStateChannel(F("Status"), BlaeckText).withIcon(F("mdi:pulse")).diagnostic();
-    @endcode
-  */
-  TYPE &diagnostic(bool on = true)
-  {
-    if (auto *e = _entry())
-    {
-      if (e->diagnostic != on)
-      {
-        e->diagnostic = on;
-        _markDirty();
-      }
-    }
-    return _self();
-  }
-
-  /*!
-    @brief   Sets what kind of value the channel carries, such as "timestamp".
-
-    @param   deviceClass  The device class.
-    @return  The same handle, for chaining.
-
-    @warning Use a class that fits the channel's type: "timestamp" or "date" for
-             text, "voltage" and the like for a number. A wrong one can make a host
-             drop the channel.
-
-    @code
-      device.addStateChannel(F("LastSeen"), BlaeckText).withDeviceClass(F("timestamp"));
-    @endcode
-  */
-  TYPE &withDeviceClass(BlaeckString deviceClass)
-  {
-    if (blaeck_detail::flashStrEmpty(deviceClass))
-      deviceClass = nullptr;
-    if (auto *e = _entry())
-    {
-      if (e->deviceClass != deviceClass)
-      {
-        if (!_storeString(e->deviceClass, deviceClass))
-          return _self();
-        _markDirty();
-      }
-    }
-    return _self();
-  }
-
-  /*!
-    @brief   Asks a host to create the channel disabled, until someone enables it.
-
-    The device sends values either way.
-
-    @param   on  false undoes it.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addStateChannel(F("BuildInfo"), BlaeckText).disabledByDefault();
-    @endcode
-  */
-  TYPE &disabledByDefault(bool on = true)
-  {
-    if (auto *e = _entry())
-    {
-      if (e->disabledByDefault != on)
-      {
-        e->disabledByDefault = on;
-        _markDirty();
-      }
-    }
-    return _self();
-  }
-
-  /*!
-    @brief   Asks a host to record every value, even one equal to the last.
-
-    Otherwise a host may ignore repeats, and a device that stopped looks the same as
-    one reporting a steady value.
-
-    @param   on  false undoes it.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addStateChannel(F("Heartbeat"), BlaeckText).forceUpdate();
-    @endcode
-  */
-  TYPE &forceUpdate(bool on = true)
-  {
-    if (auto *e = _entry())
-    {
-      if (e->forceUpdate != on)
-      {
-        e->forceUpdate = on;
-        _markDirty();
-      }
-    }
-    return _self();
-  }
-
-protected:
-  BlaeckStateRefShared(Blaeck *owner, int16_t index) : BlaeckStateRefBase(owner, index) {}
-
-private:
-  TYPE &_self() { return *static_cast<TYPE *>(this); }
-};
-
-// The handle for a numeric state channel. Keep it in step with BlaeckNumericSignalRef, which
-// becomes the same kind of entity on a host.
-class BlaeckNumericStateRef : public BlaeckStateRefShared<BlaeckNumericStateRef>
-{
-public:
-  BlaeckNumericStateRef(Blaeck *owner, int16_t index) : BlaeckStateRefShared<BlaeckNumericStateRef>(owner, index) {}
-
-  /*!
-    @brief   Sets the unit a host shows after the value.
-
-    @param   unit  The unit. Non-ASCII characters must be UTF-8.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addStateChannel(F("Amplitude"), &Amplitude).withUnit(F("V"));
-    @endcode
-  */
-  BlaeckNumericStateRef &withUnit(BlaeckString unit)
-  {
-    if (blaeck_detail::flashStrEmpty(unit))
-      unit = nullptr;
-    if (auto *e = _entry())
-    {
-      // Keep the flag in step with the pointer, including when the unit is removed.
-      const uint16_t flags = (unit != nullptr) ? (uint16_t)(e->metaFlags | BLAECK_SCH_HAS_UNIT)
-                                               : (uint16_t)(e->metaFlags & ~BLAECK_SCH_HAS_UNIT);
-      if (e->unit != unit || e->metaFlags != flags)
-      {
-        if (!_storeString(e->unit, unit))
-          return *this;
-        e->metaFlags = flags;
-        _markDirty();
-      }
-    }
-    return *this;
-  }
-
-  /*!
-    @brief   Sets how the value behaves over time, so a host can keep statistics.
-
-    State channel values aren't logged as data, so this is the only way a host keeps
-    their history.
-
-    @param   stateClass  One of the BlaeckStateClass values.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addStateChannel(F("Amplitude"), &Amplitude)
-          .withStateClass(BLAECK_STATE_CLASS_MEASUREMENT);
-    @endcode
-  */
-  BlaeckNumericStateRef &withStateClass(BlaeckStateClass stateClass)
-  {
-    _setStateClass(stateClass);
-    return *this;
-  }
-
-  /*!
-    @brief   Sets how many decimal places a host shows.
-
-    The value sent is not rounded.
-
-    @param   decimals  0 shows a whole number.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addStateChannel(F("Amplitude"), &Amplitude).withDisplayPrecision(2);
-    @endcode
-  */
-  BlaeckNumericStateRef &withDisplayPrecision(uint8_t decimals)
-  {
-    _setDisplayPrecision(decimals);
-    return *this;
-  }
-
-  /*!
-    @brief   Reads the channel's value from a getter each time it is sent.
-
-    For a value calculated from other variables, so it is never out of date. The
-    catalog is sent at startup, when channels change, and whenever a host asks.
-
-    @param   getStateValue  Returns the value. Its type must match the channel's; a
-                            getter of another type is refused, with a warning on the
-                            debug stream.
-    @return  The same handle, for chaining.
-
-    @warning The getter runs while a frame is being built, so it must not write a
-             frame itself. Keep it to reading variables and calculating.
-
-    @code
-      device.addStateChannel(F("Efficiency"), BlaeckFloat).withStateValue(efficiency);
-    @endcode
-  */
-  BlaeckNumericStateRef &withStateValue(BlaeckStateByteGetter getStateValue)
-  {
-    if (auto *e = _entry())
-    {
-    const dataType want = Blaeck_byte;
-      if (!blaeck_detail::stateGetterAccepted(e->stateValue, want, e->valueType,
-                                              F("withStateValue"), _debugStream(), e->name, e->nameInFlash))
-        return *this;
-      if (e->getNumber != (void (*)())getStateValue)
-      {
-        e->getNumber = (void (*)())getStateValue;
-        _markDirty();
-      }
-    }
-    return *this;
-  }
-
-  BlaeckNumericStateRef &withStateValue(BlaeckStateShortGetter getStateValue)
-  {
-    if (auto *e = _entry())
-    {
-    const dataType want = Blaeck_short;
-      if (!blaeck_detail::stateGetterAccepted(e->stateValue, want, e->valueType,
-                                              F("withStateValue"), _debugStream(), e->name, e->nameInFlash))
-        return *this;
-      if (e->getNumber != (void (*)())getStateValue)
-      {
-        e->getNumber = (void (*)())getStateValue;
-        _markDirty();
-      }
-    }
-    return *this;
-  }
-
-  BlaeckNumericStateRef &withStateValue(BlaeckStateUShortGetter getStateValue)
-  {
-    if (auto *e = _entry())
-    {
-    const dataType want = Blaeck_ushort;
-      if (!blaeck_detail::stateGetterAccepted(e->stateValue, want, e->valueType,
-                                              F("withStateValue"), _debugStream(), e->name, e->nameInFlash))
-        return *this;
-      if (e->getNumber != (void (*)())getStateValue)
-      {
-        e->getNumber = (void (*)())getStateValue;
-        _markDirty();
-      }
-    }
-    return *this;
-  }
-
-  BlaeckNumericStateRef &withStateValue(BlaeckStateIntGetter getStateValue)
-  {
-    if (auto *e = _entry())
-    {
-#ifdef __AVR__
-    const dataType want = Blaeck_int;
-#else
-    const dataType want = Blaeck_long;
-#endif
-      if (!blaeck_detail::stateGetterAccepted(e->stateValue, want, e->valueType,
-                                              F("withStateValue"), _debugStream(), e->name, e->nameInFlash))
-        return *this;
-      if (e->getNumber != (void (*)())getStateValue)
-      {
-        e->getNumber = (void (*)())getStateValue;
-        _markDirty();
-      }
-    }
-    return *this;
-  }
-
-  BlaeckNumericStateRef &withStateValue(BlaeckStateUIntGetter getStateValue)
-  {
-    if (auto *e = _entry())
-    {
-#ifdef __AVR__
-    const dataType want = Blaeck_uint;
-#else
-    const dataType want = Blaeck_ulong;
-#endif
-      if (!blaeck_detail::stateGetterAccepted(e->stateValue, want, e->valueType,
-                                              F("withStateValue"), _debugStream(), e->name, e->nameInFlash))
-        return *this;
-      if (e->getNumber != (void (*)())getStateValue)
-      {
-        e->getNumber = (void (*)())getStateValue;
-        _markDirty();
-      }
-    }
-    return *this;
-  }
-
-  BlaeckNumericStateRef &withStateValue(BlaeckStateLongGetter getStateValue)
-  {
-    if (auto *e = _entry())
-    {
-    const dataType want = Blaeck_long;
-      if (!blaeck_detail::stateGetterAccepted(e->stateValue, want, e->valueType,
-                                              F("withStateValue"), _debugStream(), e->name, e->nameInFlash))
-        return *this;
-      if (e->getNumber != (void (*)())getStateValue)
-      {
-        e->getNumber = (void (*)())getStateValue;
-        _markDirty();
-      }
-    }
-    return *this;
-  }
-
-  BlaeckNumericStateRef &withStateValue(BlaeckStateULongGetter getStateValue)
-  {
-    if (auto *e = _entry())
-    {
-    const dataType want = Blaeck_ulong;
-      if (!blaeck_detail::stateGetterAccepted(e->stateValue, want, e->valueType,
-                                              F("withStateValue"), _debugStream(), e->name, e->nameInFlash))
-        return *this;
-      if (e->getNumber != (void (*)())getStateValue)
-      {
-        e->getNumber = (void (*)())getStateValue;
-        _markDirty();
-      }
-    }
-    return *this;
-  }
-
-  BlaeckNumericStateRef &withStateValue(BlaeckStateFloatGetter getStateValue)
-  {
-    if (auto *e = _entry())
-    {
-    const dataType want = Blaeck_float;
-      if (!blaeck_detail::stateGetterAccepted(e->stateValue, want, e->valueType,
-                                              F("withStateValue"), _debugStream(), e->name, e->nameInFlash))
-        return *this;
-      if (e->getNumber != (void (*)())getStateValue)
-      {
-        e->getNumber = (void (*)())getStateValue;
-        _markDirty();
-      }
-    }
-    return *this;
-  }
-
-  BlaeckNumericStateRef &withStateValue(BlaeckStateDoubleGetter getStateValue)
-  {
-    if (auto *e = _entry())
-    {
-#ifdef __AVR__
-    const dataType want = Blaeck_float;
-#else
-    const dataType want = Blaeck_double;
-#endif
-      if (!blaeck_detail::stateGetterAccepted(e->stateValue, want, e->valueType,
-                                              F("withStateValue"), _debugStream(), e->name, e->nameInFlash))
-        return *this;
-      if (e->getNumber != (void (*)())getStateValue)
-      {
-        e->getNumber = (void (*)())getStateValue;
-        _markDirty();
-      }
-    }
-    return *this;
-  }
-
-};
-
-// The handle for a text state channel. Keep it in step with BlaeckTextSignalRef.
-class BlaeckTextStateRef : public BlaeckStateRefShared<BlaeckTextStateRef>
-{
-public:
-  BlaeckTextStateRef(Blaeck *owner, int16_t index) : BlaeckStateRefShared<BlaeckTextStateRef>(owner, index) {}
-
-  /*!
-    @brief   Reads the channel's text from a getter each time it is sent.
-
-    Without a getter, the channel has no value until writeState() sends one.
-
-    @param   getStateText  Returns the text. A static local buffer is fine.
-    @return  The same handle, for chaining.
-
-    @warning The getter runs while a frame is being built, so it must not write a
-             frame itself: calling writeState() or writeEvent() there corrupts the
-             frame being built.
-
-    @code
-      device.addStateChannel(F("Offset"), BlaeckText).withStateText(offsetText);
-    @endcode
-  */
-  BlaeckTextStateRef &withStateText(BlaeckStateTextGetter getStateText)
-  {
-    if (auto *e = _entry())
-    {
-      if (!blaeck_detail::stateGetterAccepted(e->stateValue, Blaeck_string, e->valueType,
-                                              F("withStateText"), _debugStream(), e->name, e->nameInFlash))
-        return *this;
-      if (e->getStateText != getStateText)
-      {
-        e->getStateText = getStateText;
-        _markDirty();
-      }
-    }
-    return *this;
-  }
-
-  /*!
-    @brief   Sets the fixed list of values the channel can report.
-
-    @param   optionsCsv  Comma-separated values.
-    @return  The same handle, for chaining.
-
-    @note    A host may also need withDeviceClass(F("enum")), and may reject a value
-             that isn't in the list.
-
-    @warning A list that is empty or has a blank entry is refused, with a warning on
-             the debug stream.
-
-    @code
-      device.addStateChannel(F("Mode"), BlaeckText)
-          .withDeviceClass(F("enum"))
-          .withOptions(F("idle,running,fault"));
-    @endcode
-  */
-  BlaeckTextStateRef &withOptions(BlaeckString optionsCsv)
-  {
-    if (auto *e = _entry())
-    {
-      if (!blaeck_detail::optionsAccepted(optionsCsv, _debugStream(), e->name, e->nameInFlash))
-        return *this;
-      if (e->options != optionsCsv)
-      {
-        if (!_storeString(e->options, optionsCsv))
-          return *this;
-        _markDirty();
-      }
-    }
-    return *this;
-  }
-};
-
-// The handle for a bool state channel, shown by a host as an on/off sensor. Its device classes
-// come from the same list as a bool signal's.
-class BlaeckBoolStateRef : public BlaeckStateRefShared<BlaeckBoolStateRef>
-{
-public:
-  BlaeckBoolStateRef(Blaeck *owner, int16_t index) : BlaeckStateRefShared<BlaeckBoolStateRef>(owner, index) {}
-
-  /*!
-    @brief   Reads the channel's value from a getter each time it is sent.
-
-    @param   getStateValue  Returns the value.
-    @return  The same handle, for chaining.
-
-    @warning The getter runs while a frame is being built, so it must not write a
-             frame itself.
-
-    @code
-      device.addStateChannel(F("Running"), BlaeckBool).withStateValue(isRunning);
-    @endcode
-  */
-  BlaeckBoolStateRef &withStateValue(BlaeckStateBoolGetter getStateValue)
-  {
-    if (auto *e = _entry())
-    {
-    const dataType want = Blaeck_bool;
-      if (!blaeck_detail::stateGetterAccepted(e->stateValue, want, e->valueType,
-                                              F("withStateValue"), _debugStream(), e->name, e->nameInFlash))
-        return *this;
-      if (e->getNumber != (void (*)())getStateValue)
-      {
-        e->getNumber = (void (*)())getStateValue;
-        _markDirty();
-      }
-    }
-    return *this;
-  }
 };
 
 class BlaeckEventChannelRef
@@ -2653,9 +1324,347 @@ private:
 };
 
 // What the board and each device from addDevice() declare and report through: signals,
-// commands, state channels and events, and the writes that find them by name. Blaeck
+// properties, commands and events, and the writes that find them by name. Blaeck
 // inherits it for the board, BlaeckDeviceRef for a device. Names are looked up within the
 // device the call is made on, so `pump.write("Flow", v)` finds only the pump's signal.
+// The handles addNumberInput(), addTextInput(), addSwitch(), addSelect() and addSensor()
+// return. Each exposes the modifiers that fit its kind of value. A rejected property returns a
+// handle that ignores every call.
+class BlaeckPropertyRefBase
+{
+protected:
+  BlaeckPropertyRefBase(Blaeck *owner, int16_t index) : _owner(owner), _index(index) {}
+
+  // The entry this handle names, or nullptr when registration was rejected. Defined out of
+  // line, like the helpers below, because Blaeck is incomplete here.
+  blaeck_detail::PropertyEntry *_entry() const;
+  // The entry's presentation, allocated on first use. nullptr without an entry or RAM.
+  blaeck_detail::PropertyPresentation *_presentation() const;
+  // Sets the bits in mask to value, marking the entity list changed if they differ.
+  void _setFlags(uint32_t mask, uint32_t value) const;
+  void _setText(detail::StoredString blaeck_detail::PropertyPresentation::*field, BlaeckString text) const;
+  void _setRange(float mn, float mx, float st) const;
+  void _setDisplayPrecision(uint8_t decimals) const;
+  void _setReporting(double delta, uint32_t minIntervalMs) const;
+
+  Blaeck *_owner;
+  int16_t _index;
+};
+
+// Modifiers every property handle has. TYPE is the deriving handle, so each call returns that
+// type and the chain keeps its kind's methods.
+template <class TYPE>
+class BlaeckPropertyRefShared : public BlaeckPropertyRefBase
+{
+public:
+  /*!
+    @brief   Sets the label a host shows instead of the name.
+
+    Only the label changes. A host still sets the value by its name, so adding a label
+    later breaks nothing.
+
+    @param   displayName  The label. RAM text is copied; an F() literal stays in flash.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addSwitch(F("OutputEnabled"), &enabled).withDisplayName(F("Output enabled"));
+    @endcode
+  */
+  TYPE &withDisplayName(BlaeckString displayName)
+  {
+    _setText(&blaeck_detail::PropertyPresentation::displayName, displayName);
+    return _self();
+  }
+
+  /*!
+    @brief   Sets the icon a host shows next to the value.
+
+    @param   icon  A Material Design Icons name, such as "mdi:tag".
+    @return  The same handle, for chaining.
+
+    @code
+      device.addTextInput(F("Label"), label, sizeof(label)).withIcon(F("mdi:tag"));
+    @endcode
+  */
+  TYPE &withIcon(BlaeckString icon)
+  {
+    _setText(&blaeck_detail::PropertyPresentation::icon, icon);
+    return _self();
+  }
+
+  /*!
+    @brief   Says what the value is, in a host's vocabulary.
+
+    A host picks its icon and wording from it, such as "temperature" or "door". A name
+    the host doesn't know costs that one entry, so declare nothing rather than guess.
+
+    @param   deviceClass  The class name.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addSensor(F("DoorOpen"), &doorOpen).withDeviceClass(F("door"));
+    @endcode
+  */
+  TYPE &withDeviceClass(BlaeckString deviceClass)
+  {
+    _setText(&blaeck_detail::PropertyPresentation::deviceClass, deviceClass);
+    return _self();
+  }
+
+  /*!
+    @brief   Files the property with the device's settings rather than its main values.
+
+    @return  The same handle, for chaining.
+
+    @code
+      device.addTextInput(F("Label"), label, sizeof(label)).config();
+    @endcode
+  */
+  TYPE &config()
+  {
+    _setFlags(blaeck_detail::PROPERTY_CATEGORY_MASK,
+              (uint32_t)BLAECK_CAT_CONFIG << blaeck_detail::PROPERTY_CATEGORY_SHIFT);
+    return _self();
+  }
+
+  /*!
+    @brief   Files the property as information about the device rather than what it does.
+
+    @return  The same handle, for chaining.
+
+    @code
+      device.addSensor(F("Uptime"), &uptime).diagnostic();
+    @endcode
+  */
+  TYPE &diagnostic()
+  {
+    _setFlags(blaeck_detail::PROPERTY_CATEGORY_MASK,
+              (uint32_t)BLAECK_CAT_DIAGNOSTIC << blaeck_detail::PROPERTY_CATEGORY_SHIFT);
+    return _self();
+  }
+
+  /*!
+    @brief   Registers the property with a host switched off, until someone enables it.
+
+    @param   on  False to undo it.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addSensor(F("BuildNumber"), &buildNumber).disabledByDefault();
+    @endcode
+  */
+  TYPE &disabledByDefault(bool on = true)
+  {
+    _setFlags(blaeck_detail::PROPERTY_DISABLED_BY_DEFAULT,
+              on ? blaeck_detail::PROPERTY_DISABLED_BY_DEFAULT : 0);
+    return _self();
+  }
+
+  /*!
+    @brief   Asks a host to record every value it receives, even one equal to the last.
+
+    @param   on  False to undo it.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addSensor(F("Heartbeat"), &beat).forceUpdate();
+    @endcode
+  */
+  TYPE &forceUpdate(bool on = true)
+  {
+    _setFlags(blaeck_detail::PROPERTY_FORCE_UPDATE, on ? blaeck_detail::PROPERTY_FORCE_UPDATE : 0);
+    return _self();
+  }
+
+  /*!
+    @brief   Sets when a change is sent: by how much the value must change, and how often.
+
+    A property is always sent when it changes, checked on every tick(). Without this call,
+    any change counts and it is sent at most every 100 ms. A host's write is sent at once,
+    and so is writeProperty().
+
+    @param   delta          How much a number must change; 0 or BLAECK_ANY_CHANGE for any.
+                            Ignored for bool, enum and text.
+    @param   minIntervalMs  At least this long between two sends; 0 for no limit.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addSensor(F("Temperature"), &temperature).writeOnChange(0.1, 1000);
+    @endcode
+  */
+  TYPE &writeOnChange(double delta, uint32_t minIntervalMs = 100)
+  {
+    _setReporting(delta, minIntervalMs);
+    return _self();
+  }
+
+protected:
+  BlaeckPropertyRefShared(Blaeck *owner, int16_t index) : BlaeckPropertyRefBase(owner, index) {}
+
+private:
+  TYPE &_self() { return static_cast<TYPE &>(*this); }
+};
+
+// The handle for a switch, a select, and a sensor of a bool or an enum.
+class BlaeckPropertyRef : public BlaeckPropertyRefShared<BlaeckPropertyRef>
+{
+public:
+  /*!
+    @brief   Creates an empty handle, to keep a property's handle in a global.
+
+    Assign what addSwitch(), addSelect() or addSensor() returns. Until then, calls on it
+    do nothing.
+  */
+  BlaeckPropertyRef() : BlaeckPropertyRefShared<BlaeckPropertyRef>(nullptr, -1) {}
+  BlaeckPropertyRef(Blaeck *owner, int16_t index) : BlaeckPropertyRefShared<BlaeckPropertyRef>(owner, index) {}
+};
+
+// The handle for a number input and a number sensor.
+class BlaeckNumberPropertyRef : public BlaeckPropertyRefShared<BlaeckNumberPropertyRef>
+{
+public:
+  /*!
+    @brief   Creates an empty handle, to keep a property's handle in a global.
+
+    Assign what addNumberInput() or addSensor() returns. Until then, calls on it do
+    nothing.
+
+    @code
+      BlaeckNumberPropertyRef outputSensor;
+      outputSensor = device.addSensor(F("Output"), &output);
+    @endcode
+  */
+  BlaeckNumberPropertyRef() : BlaeckPropertyRefShared<BlaeckNumberPropertyRef>(nullptr, -1) {}
+  BlaeckNumberPropertyRef(Blaeck *owner, int16_t index)
+      : BlaeckPropertyRefShared<BlaeckNumberPropertyRef>(owner, index) {}
+
+  /*!
+    @brief   Sets the values an input accepts, and the step it is stored on.
+
+    A value outside [min, max] is refused. With a step, a value within a thousandth of a
+    step of min + n * step is stored as exactly that, so 0.9 arriving as 0.90000004
+    stays 0.9; a value further off is kept as sent.
+
+    @param   min   Lowest accepted value.
+    @param   max   Highest accepted value; must be above min.
+    @param   step  The step a host offers and the value is stored on; 0 for none.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addNumberInput(F("Setpoint"), &setpoint).withRange(5.0f, 30.0f, 0.5f);
+    @endcode
+  */
+  BlaeckNumberPropertyRef &withRange(float min, float max, float step = 0.0f)
+  {
+    _setRange(min, max, step);
+    return *this;
+  }
+
+  /*!
+    @brief   Sets the unit a host shows after the value.
+
+    @param   unit  The unit, such as "\xC2\xB0" "C" for degrees Celsius.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addSensor(F("Temperature"), &temperature).withUnit(F("\xC2\xB0" "C"));
+    @endcode
+  */
+  BlaeckNumberPropertyRef &withUnit(BlaeckString unit)
+  {
+    _setText(&blaeck_detail::PropertyPresentation::unit, unit);
+    return *this;
+  }
+
+  /*!
+    @brief   Says how a host should treat the values over time.
+
+    @param   stateClass  BLAECK_STATE_CLASS_MEASUREMENT for a reading, or one of the
+                         total classes for a meter.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addSensor(F("Energy"), &energy).withStateClass(BLAECK_STATE_CLASS_TOTAL_INCREASING);
+    @endcode
+  */
+  BlaeckNumberPropertyRef &withStateClass(BlaeckStateClass stateClass)
+  {
+    _setFlags(blaeck_detail::PROPERTY_STATE_CLASS_MASK,
+              ((uint32_t)stateClass << blaeck_detail::PROPERTY_STATE_CLASS_SHIFT) &
+                  blaeck_detail::PROPERTY_STATE_CLASS_MASK);
+    return *this;
+  }
+
+  /*!
+    @brief   Sets how many decimal places a host shows.
+
+    @param   decimals  Places after the point; 0 shows an integer.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addSensor(F("Temperature"), &temperature).withDisplayPrecision(1);
+    @endcode
+  */
+  BlaeckNumberPropertyRef &withDisplayPrecision(uint8_t decimals)
+  {
+    _setDisplayPrecision(decimals);
+    return *this;
+  }
+
+  /*!
+    @brief   Sets how a host shows an input: a typed box or a slider.
+
+    @param   mode  BLAECK_NUMBER_MODE_BOX, BLAECK_NUMBER_MODE_SLIDER or, the default,
+                   BLAECK_NUMBER_MODE_AUTO.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addNumberInput(F("Amplitude"), &amplitude)
+          .withRange(0.0f, 100.0f, 1.0f).withMode(BLAECK_NUMBER_MODE_SLIDER);
+    @endcode
+  */
+  BlaeckNumberPropertyRef &withMode(BlaeckNumberMode mode)
+  {
+    _setFlags(blaeck_detail::PROPERTY_MODE_MASK,
+              ((uint32_t)mode << blaeck_detail::PROPERTY_MODE_SHIFT) & blaeck_detail::PROPERTY_MODE_MASK);
+    return *this;
+  }
+};
+
+// The handle for a text input and a text sensor.
+class BlaeckTextPropertyRef : public BlaeckPropertyRefShared<BlaeckTextPropertyRef>
+{
+public:
+  /*!
+    @brief   Creates an empty handle, to keep a property's handle in a global.
+
+    Assign what addTextInput() or addSensor() returns. Until then, calls on it do
+    nothing.
+  */
+  BlaeckTextPropertyRef() : BlaeckPropertyRefShared<BlaeckTextPropertyRef>(nullptr, -1) {}
+  BlaeckTextPropertyRef(Blaeck *owner, int16_t index)
+      : BlaeckPropertyRefShared<BlaeckTextPropertyRef>(owner, index) {}
+
+  /*!
+    @brief   Asks a host to mask an input while it is typed.
+
+    Only the field on screen is masked; the value still travels as plain text.
+
+    @param   mode  BLAECK_TEXT_MODE_PASSWORD, or BLAECK_TEXT_MODE_PLAIN, the default.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addTextInput(F("Token"), token, sizeof(token)).withMode(BLAECK_TEXT_MODE_PASSWORD);
+    @endcode
+  */
+  BlaeckTextPropertyRef &withMode(BlaeckTextMode mode)
+  {
+    _setFlags(blaeck_detail::PROPERTY_MODE_MASK,
+              ((uint32_t)mode << blaeck_detail::PROPERTY_MODE_SHIFT) & blaeck_detail::PROPERTY_MODE_MASK);
+    return *this;
+  }
+};
+
 class BlaeckDeviceBase
 {
 public:
@@ -2665,7 +1674,7 @@ public:
     @brief   Adds a variable to be sampled and logged over time.
 
     A signal is a reading that is sent on every interval and kept as history. For
-    a setting or a status that shouldn't be logged, use addStateChannel().
+    a setting or a status that shouldn't be logged, use an input or addSensor().
 
     The variable is read each time data is sent, so it must be a global.
 
@@ -2701,114 +1710,227 @@ public:
   BlaeckTextSignalRef addSignal(BlaeckString signalName, const char *value);
   BlaeckTextSignalRef addSignal(BlaeckString signalName, const __FlashStringHelper *value);
 
-  // ----- State channels -----
-  // With BLAECK_ENABLE_STATE_CHANNELS=0 these compile but do nothing.
+  // ----- Properties -----
+  // A property is a current value a host shows (a sensor) or shows and sets (an input). It is
+  // not logged: for history, add a signal on the same variable. A property is sent when it
+  // changes, checked on every tick(); see writeOnChange() on the handle.
 
   /*!
-    @brief   Adds a state channel, for a current value that is shown but not logged.
+    @brief   Adds a number a host can set, stored in a variable.
 
-    Use it for a status or a setting. Unlike a signal, it is sent when it changes,
-    not on every interval.
+    A value from a host is checked before it is stored: it must be a number, within
+    withRange() if one is set, and without a fraction for an integer variable.
 
-    The second argument sets the type. Pass a variable and the channel reads it when
-    it is sent. Pass a tag such as BlaeckText or BlaeckFloat and the channel only
-    carries what writeState() sends. Pass an F() text for a fixed value that
-    writeState(channelName) sends without copying it into RAM.
-
-    @param   channelName  The name a host shows. RAM text is copied; an F() literal stays in flash. At most 15
-                          characters on AVR and 31 elsewhere; a longer name is refused.
-    @return  A handle for describing how a host shows the channel.
+    @param   name      The name a host shows and sets the value by. RAM text is copied;
+                       an F() literal stays in flash. Unique on the board among inputs,
+                       sensors, buttons and commands.
+    @param   value     The variable, a global. There is an overload for each number type.
+    @param   onChange  Optional. Runs after a host has set the value.
+    @return  A handle for the range, unit and presentation.
+    @note    A rejected name or a board out of RAM drops the property, and the handle
+             ignores every call; hasRejections() reports it.
 
     @code
-      device.addStateChannel(F("Status"), BlaeckText).withIcon(F("mdi:pulse")).diagnostic();
-      device.addStateChannel(F("Amplitude"), &Amplitude).withUnit(F("V"));
+      device.addNumberInput(F("Setpoint"), &setpoint)
+          .withRange(5.0f, 30.0f, 0.5f)
+          .withUnit(F("\xC2\xB0" "C"));
     @endcode
   */
-  BlaeckTextStateRef addStateChannel(BlaeckString channelName, BlaeckTextTag);
-  BlaeckBoolStateRef addStateChannel(BlaeckString channelName, BlaeckBoolTag);
-  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, BlaeckNumericTag type);
-  BlaeckTextStateRef addStateChannel(BlaeckString channelName, const char *value);
-  BlaeckTextStateRef addStateChannel(BlaeckString channelName, const __FlashStringHelper *value);
-  BlaeckBoolStateRef addStateChannel(BlaeckString channelName, bool *value);
-  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, byte *value);
-  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, short *value);
-  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, unsigned short *value);
-  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, int *value);
-  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, unsigned int *value);
-  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, long *value);
-  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, unsigned long *value);
-  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, float *value);
-  BlaeckNumericStateRef addStateChannel(BlaeckString channelName, double *value);
+  BlaeckNumberPropertyRef addNumberInput(BlaeckString name, byte *value, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckNumberPropertyRef addNumberInput(BlaeckString name, short *value, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckNumberPropertyRef addNumberInput(BlaeckString name, unsigned short *value, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckNumberPropertyRef addNumberInput(BlaeckString name, int *value, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckNumberPropertyRef addNumberInput(BlaeckString name, unsigned int *value, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckNumberPropertyRef addNumberInput(BlaeckString name, long *value, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckNumberPropertyRef addNumberInput(BlaeckString name, unsigned long *value, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckNumberPropertyRef addNumberInput(BlaeckString name, float *value, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckNumberPropertyRef addNumberInput(BlaeckString name, double *value, BlaeckPropertyCallback onChange = nullptr);
 
   /*!
-    @brief   Sends a text value on a state channel.
+    @brief   Adds text a host can set, stored in a buffer.
 
-    A host shows it, but it isn't logged as data.
+    A host's text is decoded and copied into the buffer, terminator included. Longer
+    text than the buffer holds is refused; an empty value clears it.
 
-    @param   channelName  A channel added with addStateChannel().
-    @param   text         The value, RAM or F() text. It is read during this call, not
-                          kept. Anything past 255 bytes is cut off, with a warning on
-                          the debug stream the first time.
-
-    @warning The value is dropped if the channel doesn't exist, carries a number
-             (use writeState(channelName)), or belongs to a command (use
-             writeCommandState()). The debug stream says which.
+    @param   name      The name a host shows and sets the value by.
+    @param   buffer    The buffer, a global.
+    @param   size      Its size, terminator included, such as sizeof(label). At most 256.
+    @param   onChange  Optional. Runs after a host has set the value.
+    @return  A handle for the presentation.
 
     @code
-      char text[40];
-      snprintf(text, sizeof(text), "up %lu s", millis() / 1000UL);
-      device.writeState(F("Status"), text);
+      char label[33] = "lab-heater";
+      device.addTextInput(F("Label"), label, sizeof(label)).config();
     @endcode
   */
-  void writeState(BlaeckString channelName, const char *text);
-  void writeState(BlaeckString channelName, const __FlashStringHelper *text);
-  void writeState(BlaeckString channelName, decltype(nullptr)) { writeState(channelName, static_cast<const char *>(nullptr)); }
-
-  // Sends the channel's current value, read from its variable, getter or fixed text.
-  void writeState(BlaeckString channelName);
+  BlaeckTextPropertyRef addTextInput(BlaeckString name, char *buffer, size_t size, BlaeckPropertyCallback onChange = nullptr);
 
   /*!
-    @brief   Sends a number on a state channel that was added with a type tag.
+    @brief   Adds an on/off switch a host can set, stored in a bool.
 
-    The value is converted to the channel's type, so 20 on a float channel sends 20.0.
+    A host sends 0 or 1; anything else is refused.
 
-    @param   channelName  A channel added with a tag such as BlaeckFloat. A channel
-                          with a variable or getter refuses this.
-    @param   value        The value.
+    @param   name      The name a host shows and sets the value by.
+    @param   value     The variable, a global.
+    @param   onChange  Optional. Runs after a host has set the value.
+    @return  A handle for the presentation.
 
     @code
-      device.writeState(F("Temperature"), 20.5f);
+      device.addSwitch(F("OutputEnabled"), &enabled);
     @endcode
   */
-  void writeState(BlaeckString channelName, bool value);
-  void writeState(BlaeckString channelName, byte value);
-  void writeState(BlaeckString channelName, short value);
-  void writeState(BlaeckString channelName, unsigned short value);
-  void writeState(BlaeckString channelName, int value);
-  void writeState(BlaeckString channelName, unsigned int value);
-  void writeState(BlaeckString channelName, long value);
-  void writeState(BlaeckString channelName, unsigned long value);
-  void writeState(BlaeckString channelName, float value);
-  void writeState(BlaeckString channelName, double value);
+  BlaeckPropertyRef addSwitch(BlaeckString name, bool *value, BlaeckPropertyCallback onChange = nullptr);
 
   /*!
-    @brief   Sends a command's current value on its withOwnState() channel.
+    @brief   Adds a choice from a list a host can set, stored as the option's index.
 
-    Call it after the value changes, usually from the handler.
+    A host sends an option's name or its index; the variable always holds the index,
+    counted from 0. Anything else is refused.
 
-    @param   command  The command's name, RAM or F() text. In a handler, pass its
-                      command argument.
-    @note    Does nothing for a command without withOwnState().
+    @param   name      The name a host shows and sets the value by.
+    @param   index     The variable, a global of any integer type.
+    @param   options   The options, comma-separated. At least one, none blank.
+    @param   onChange  Optional. Runs after a host has set the value.
+    @return  A handle for the presentation.
 
     @code
-      void onSetOffset(const char *command, const char *const *params, byte paramCount)
-      {
-        Offset = (float)atof(params[0]);
-        device.writeCommandState(command);
-      }
+      device.addSelect(F("Mode"), &mode, F("Off,Heat,Auto"));
     @endcode
   */
-  void writeCommandState(BlaeckString command);
+  BlaeckPropertyRef addSelect(BlaeckString name, byte *index, BlaeckString options, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckPropertyRef addSelect(BlaeckString name, short *index, BlaeckString options, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckPropertyRef addSelect(BlaeckString name, unsigned short *index, BlaeckString options, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckPropertyRef addSelect(BlaeckString name, int *index, BlaeckString options, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckPropertyRef addSelect(BlaeckString name, unsigned int *index, BlaeckString options, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckPropertyRef addSelect(BlaeckString name, long *index, BlaeckString options, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckPropertyRef addSelect(BlaeckString name, unsigned long *index, BlaeckString options, BlaeckPropertyCallback onChange = nullptr);
+
+  /*!
+    @brief   Adds a value a host shows but cannot set.
+
+    The argument decides the kind: a number variable, a bool, an integer index with its
+    options, a text buffer with its size, or a function returning any of these. A function
+    is called on every check, so it must return quickly and must not send anything itself.
+    A host that tries to set a sensor is refused.
+
+    @param   name   The name a host shows. Unique on the board among inputs, sensors,
+                    buttons and commands.
+    @param   value  The variable or function.
+    @return  A handle for the presentation.
+
+    @code
+      device.addSensor(F("Temperature"), &temperature)
+          .withUnit(F("\xC2\xB0" "C"))
+          .writeOnChange(0.1, 1000);
+    @endcode
+  */
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, byte *value);
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, short *value);
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, unsigned short *value);
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, int *value);
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, unsigned int *value);
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, long *value);
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, unsigned long *value);
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, float *value);
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, double *value);
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, byte (*value)());
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, short (*value)());
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, unsigned short (*value)());
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, int (*value)());
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, unsigned int (*value)());
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, long (*value)());
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, unsigned long (*value)());
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, float (*value)());
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, double (*value)());
+
+  /*!
+    @brief   Adds an on/off value a host shows but cannot set.
+
+    @param   name   The name a host shows.
+    @param   value  A bool variable, or a function returning bool.
+    @return  A handle for the presentation.
+
+    @code
+      device.addSensor(F("DoorOpen"), &doorOpen).withDeviceClass(F("door"));
+    @endcode
+  */
+  BlaeckPropertyRef addSensor(BlaeckString name, bool *value);
+  BlaeckPropertyRef addSensor(BlaeckString name, bool (*value)());
+
+  /*!
+    @brief   Adds one of a list of states, which a host shows by name but cannot set.
+
+    The variable or function gives the option's index, counted from 0. Without the
+    options, the same variable would be a number sensor.
+
+    @param   name     The name a host shows.
+    @param   index    An integer variable, or a function returning one.
+    @param   options  The options, comma-separated. At least one, none blank.
+    @return  A handle for the presentation.
+
+    @code
+      device.addSensor(F("State"), &stateIndex, F("Idle,Heating,Cooling"));
+    @endcode
+  */
+  BlaeckPropertyRef addSensor(BlaeckString name, byte *index, BlaeckString options);
+  BlaeckPropertyRef addSensor(BlaeckString name, short *index, BlaeckString options);
+  BlaeckPropertyRef addSensor(BlaeckString name, unsigned short *index, BlaeckString options);
+  BlaeckPropertyRef addSensor(BlaeckString name, int *index, BlaeckString options);
+  BlaeckPropertyRef addSensor(BlaeckString name, unsigned int *index, BlaeckString options);
+  BlaeckPropertyRef addSensor(BlaeckString name, long *index, BlaeckString options);
+  BlaeckPropertyRef addSensor(BlaeckString name, unsigned long *index, BlaeckString options);
+  BlaeckPropertyRef addSensor(BlaeckString name, byte (*index)(), BlaeckString options);
+  BlaeckPropertyRef addSensor(BlaeckString name, short (*index)(), BlaeckString options);
+  BlaeckPropertyRef addSensor(BlaeckString name, unsigned short (*index)(), BlaeckString options);
+  BlaeckPropertyRef addSensor(BlaeckString name, int (*index)(), BlaeckString options);
+  BlaeckPropertyRef addSensor(BlaeckString name, unsigned int (*index)(), BlaeckString options);
+  BlaeckPropertyRef addSensor(BlaeckString name, long (*index)(), BlaeckString options);
+  BlaeckPropertyRef addSensor(BlaeckString name, unsigned long (*index)(), BlaeckString options);
+
+  /*!
+    @brief   Adds text a host shows but cannot set.
+
+    @param   name    The name a host shows.
+    @param   buffer  The text buffer, a global. Its text is sent up to the terminator.
+    @param   size    Its size, terminator included. At most 256.
+    @return  A handle for the presentation.
+
+    @code
+      char lastError[40] = "";
+      device.addSensor(F("LastError"), lastError, sizeof(lastError)).diagnostic();
+    @endcode
+  */
+  BlaeckTextPropertyRef addSensor(BlaeckString name, const char *buffer, size_t size);
+
+  /*!
+    @brief   Adds text from a function, which a host shows but cannot set.
+
+    @param   name   The name a host shows.
+    @param   value  Returns the text. A static buffer is fine; nullptr means empty.
+    @return  A handle for the presentation.
+
+    @code
+      device.addSensor(F("Status"), statusText);
+    @endcode
+  */
+  BlaeckTextPropertyRef addSensor(BlaeckString name, const char *(*value)());
+
+  /*!
+    @brief   Sends a property's current value now, changed or not.
+
+    tick() sends a property when it changes; call this to send one at a moment the sketch
+    chooses, such as a short pulse tick() could miss.
+
+    @warning Not from an interrupt: it writes a frame. Set a flag there and call this in
+             loop().
+
+    @param   name  The property's name.
+
+    @code
+      device.writeProperty(F("Endstop"));
+    @endcode
+  */
+  void writeProperty(BlaeckString name);
 
   // ----- Events -----
   // With BLAECK_ENABLE_EVENTS=0 these compile but do nothing.
@@ -2984,8 +2106,8 @@ public:
   /*!
     @brief   Registers a command whose parameters the handler reads as it likes.
 
-    A host lists the command but can't build a control for it. For a control, use
-    onNumberCommand(), onSwitchCommand() or another typed command.
+    A host lists the command but can't build a control for it. For a value a host sets,
+    use an input such as addNumberInput(); for a press, onButtonCommand().
 
     @param   command  The command name. It can't start with `#` or `BLAECK.`.
     @param   handler  Called with the parameters as received.
@@ -2999,67 +2121,6 @@ public:
     @endcode
   */
   void onCommand(const char *command, BlaeckCommandHandler handler);
-
-  // ----- Typed commands -----
-  // Like onCommand(), but the returned handle describes the control, so a host can build one:
-  //
-  //   device.onNumberCommand("SET_FREQ", onSetFreq)
-  //       .withRange(0.0f, 2.0f, 0.01f)
-  //       .withUnit(F("Hz"));
-  //
-  // Values are checked against what is declared before the handler runs.
-
-  /*!
-    @brief   Registers a command that takes a number.
-
-    The handler reads the value with atof(params[0]). Text that isn't a number is
-    rejected before the handler runs.
-
-    @param   command  The command name.
-    @param   handler  Called with an accepted value.
-    @return  A handle whose only method is withRange(), which must come first.
-
-    @code
-      device.onNumberCommand("SET_FREQ", onSetFreq)
-          .withRange(0.0f, 2.0f, 0.01f)
-          .withUnit(F("Hz"));
-    @endcode
-  */
-  BLAECK_NODISCARD BlaeckNumberCommandNeedsRange onNumberCommand(const char *command, BlaeckCommandHandler handler);
-
-  /*!
-    @brief   Registers a command that switches something on or off.
-
-    The handler gets "0" or "1"; any other value is rejected before it runs.
-
-    @param   command  The command name.
-    @param   handler  Called with an accepted value.
-    @return  A handle for describing the control.
-
-    @code
-      device.onSwitchCommand("SET_ENABLE", onSetEnable)
-          .withOwnState(F("Enabled"), &Enabled);
-    @endcode
-  */
-  BlaeckSwitchCommandRef onSwitchCommand(const char *command, BlaeckCommandHandler handler);
-
-  /*!
-    @brief   Registers a command that picks one option from a list.
-
-    A host may send the option's name or its index; the handler always gets the
-    index, so it reads atoi(params[0]).
-
-    @param   command  The command name.
-    @param   handler  Called with an accepted value.
-    @return  A handle whose only method is withOptions(), which must come first.
-
-    @code
-      device.onSelectCommand("SET_WAVE", onSetWave)
-          .withOptions(F("Sine,Square,Triangle,Sawtooth"))
-          .withOwnState(F("Wave"), &waveIndex);
-    @endcode
-  */
-  BLAECK_NODISCARD BlaeckSelectCommandNeedsOptions onSelectCommand(const char *command, BlaeckCommandHandler handler);
 
   /*!
     @brief   Registers a command that is a button press.
@@ -3075,23 +2136,6 @@ public:
     @endcode
   */
   BlaeckButtonCommandRef onButtonCommand(const char *command, BlaeckCommandHandler handler);
-
-  /*!
-    @brief   Registers a command that takes text.
-
-    The handler gets the text decoded, and never longer than withMaxLength().
-
-    @param   command  The command name.
-    @param   handler  Called with an accepted value.
-    @return  A handle for describing the control.
-
-    @code
-      device.onTextCommand("SET_LABEL", onSetLabel)
-          .withMaxLength(sizeof(DeviceLabel) - 1)
-          .config();
-    @endcode
-  */
-  BlaeckTextCommandRef onTextCommand(const char *command, BlaeckCommandHandler handler);
 
 protected:
   BlaeckDeviceBase(Blaeck *core, byte deviceId) : _core(core), _deviceId(deviceId) {}
@@ -3109,12 +2153,10 @@ private:
   // nothing (-1) and sends nothing.
   int _registerSignal(BlaeckString signalName, dataType type, void *address, bool textInFlash = false);
   int _registerCommand(const char *command, BlaeckCommandHandler handler, uint8_t kind);
-  int _registerStateChannel(BlaeckString channelName, dataType valueType = Blaeck_string, const void *value = nullptr,
-                            bool textInFlash = false);
   int _registerEventChannel(BlaeckString channelName, BlaeckString eventTypes);
-  void _writeStateText(BlaeckString channelName, const char *text, bool textInFlash);
-  void _writeStateCurrent(BlaeckString channelName);
-  void _writeStateNumber(BlaeckString channelName, long s, unsigned long u, double d);
+  int _registerProperty(BlaeckString name, uint8_t kind, bool writable, dataType type, void *address,
+                        void (*getter)(), uint8_t getterType, uint16_t textSize, BlaeckString options,
+                        BlaeckPropertyCallback onChange);
 };
 
 // The handle for a device from addDevice(): another board, or a part of this one, that a host
@@ -3170,9 +2212,8 @@ public:
 
     A host is told, and the device's signals return to data frames. Each signal that
     reports on change is sent again at the next chance, since the host lost track of it.
-    Values the sketch pushes itself, such as state channels, are not resent; send them
-    again if they may have changed. Calling it on a device that was not missing changes
-    nothing.
+    Its properties are not resent; send them again with writeProperty() if they may have
+    changed. Calling it on a device that was not missing changes nothing.
 
     @code
       if (pumpAnswered)
@@ -3233,8 +2274,8 @@ private:
   friend class BlaeckDeviceBase;
   friend class BlaeckSignalRefBase;
   friend class BlaeckCommandRefBase;
-  friend class BlaeckStateRefBase;
   friend class BlaeckEventChannelRef;
+  friend class BlaeckPropertyRefBase;
 };
 
 // Text to the attached Stream or connected TCP terminals.
@@ -3394,8 +2435,8 @@ public:
     sends it on its first call; call this only to send it earlier. If a host asks for
     the device list first, the list reports the restart instead, and this sends nothing.
 
-    The state channels, event channels, commands and signal descriptions follow it,
-    so a host that stayed connected gets them without asking.
+    The entity list, event channels, commands and signal descriptions follow it, so a
+    host that stayed connected gets them without asking.
 
     @code
       device.writeRestarted();
@@ -3475,35 +2516,6 @@ public:
     @endcode
   */
   void writeCommands();
-
-  // ----- State channels -----
-  // With BLAECK_ENABLE_STATE_CHANNELS=0 these compile but do nothing.
-
-  /*!
-    @brief   Removes every state channel, so a new set can be added.
-
-    The table keeps its size. Channels that belong to a command's withOwnState()
-    stay; clearAllCommandHandlers() removes those with their commands. The new list
-    is sent to the host automatically.
-
-    @code
-      device.clearAllStateChannels();
-      device.addStateChannel(F("Status"), BlaeckText);
-    @endcode
-  */
-  void clearAllStateChannels();
-
-  /*!
-    @brief   Sends the list of state channels, with their current values.
-
-    The device also sends it at startup, after the channels change, and when a host
-    sends <BLAECK.WRITE_STATE_CHANNELS>, so a sketch rarely needs to call it.
-
-    @code
-      device.writeStateChannels();
-    @endcode
-  */
-  void writeStateChannels();
 
   // ----- Events -----
   // With BLAECK_ENABLE_EVENTS=0 these compile but do nothing.
@@ -3656,12 +2668,11 @@ public:
   /*!
     @brief   Removes every command, including onAnyCommand().
 
-    The table keeps its size. The state channels those commands had from
-    withOwnState() are removed too, and both lists are sent to the host.
+    The table keeps its memory for new ones, and the new list is sent to the host.
 
     @code
       device.clearAllCommandHandlers();
-      device.onSwitchCommand("LED", onLED);
+      device.onCommand("LED", onLED);
     @endcode
   */
   void clearAllCommandHandlers();
@@ -3753,32 +2764,6 @@ public:
   static bool _channelNameEqualsFlash(const char *stored, bool inFlash, const __FlashStringHelper *candidate);
 
   /*!
-    @brief   Reports whether any state channel could not be added.
-
-    That happens when there isn't enough RAM, the name is too long, or a command's
-    withOwnState() already uses the name. A command's own channel counts too; if
-    it can't be added, the command reports no value.
-
-    @return  True if at least one was dropped.
-
-    @code
-      if (device.hasRejectedStateChannels())
-        device.printRejections(&Serial);
-    @endcode
-  */
-  bool hasRejectedStateChannels() const { return _rejectedStateChannelCount > 0; }
-  /*!
-    @brief   Returns how many state channels could not be added.
-
-    @return  How many were dropped.
-
-    @code
-      Serial.println(device.getRejectedStateChannelCount());
-    @endcode
-  */
-  uint16_t getRejectedStateChannelCount() const { return _rejectedStateChannelCount; }
-
-  /*!
     @brief   Reports whether any event channel or event type could not be added.
 
     printRejections() or the debug stream says which.
@@ -3838,42 +2823,44 @@ public:
   bool printRejections(Print *out);
 
   /*!
-    @brief   Copies the name of a select command's option at a given position.
+    @brief   Copies the name of a select's option at a given position.
 
-    @param   command  The select command's name.
-    @param   index    Position in the withOptions() list, starting at 0.
+    Works for addSelect() and for addSensor() with options.
+
+    @param   name     The select's or sensor's name.
+    @param   index    Position in its options, starting at 0.
     @param   out      Where the name is copied. Left empty if this returns false.
     @param   outSize  Size of out, including the terminator.
-    @return  False if the command is not a select, the index is past the end, or the
-             name doesn't fit. A name is never cut short.
+    @return  False if it has no options, the index is past the end, or the name
+             doesn't fit. A name is never cut short.
 
     @code
       char name[12];
-      device.getSelectOptionNameAt("SET_WAVE", waveIndex, name, sizeof(name));
+      device.getSelectOptionNameAt(F("Waveform"), waveIndex, name, sizeof(name));
     @endcode
   */
-  bool getSelectOptionNameAt(const char *command, byte index, char *out, byte outSize) const;
+  bool getSelectOptionNameAt(BlaeckString name, byte index, char *out, byte outSize) const;
 
   /*!
-    @brief   Returns the position of an option in a select command's list.
+    @brief   Returns the position of an option in a select's list.
 
-    Case-sensitive.
+    Case-sensitive. Works for addSelect() and for addSensor() with options.
 
-    @param   command     The select command's name.
+    @param   name        The select's or sensor's name.
     @param   optionName  The option to look for.
-    @return  Its position, starting at 0, or -1 if the command isn't a select or has
-             no such option.
+    @return  Its position, starting at 0, or -1 if it has no options or no such
+             option.
     @note    Useful for restoring a setting saved as a name. A saved index would point
              at the wrong option if a later firmware reorders the list.
 
     @code
       char saved[12];
       EEPROM.get(addr, saved);
-      long i = device.getSelectOptionIndexOf("SET_WAVE", saved);
+      long i = device.getSelectOptionIndexOf(F("Waveform"), saved);
       waveIndex = (i >= 0) ? (byte)i : 0;
     @endcode
   */
-  long getSelectOptionIndexOf(const char *command, const char *optionName) const;
+  long getSelectOptionIndexOf(BlaeckString name, const char *optionName) const;
 
   /*!
     @brief   Sets a function to refresh values before interval and full snapshots.
@@ -4200,9 +3187,10 @@ protected:
   void _setSignalInterval(int16_t index, BlaeckIntervalMode mode, double delta);
   void _setSignalOnChange(int16_t index, double delta, uint32_t minIntervalMs);
   void _setSignalOnChange(int16_t index, BlaeckIntervalMode mode);
-  SignalReporting *_ensureSignalReporting(int16_t index);
+  ReportingState *_ensureReporting(int16_t index);
   void _reportSignalPolicyError(const __FlashStringHelper *message);
   void _resetReportingBaselines();
+  bool _prepareTextSnapshot(ReportingState &reporting, size_t length);
   bool _prepareSignalSnapshot(Signal &signal);
   void _captureSignalSnapshot(Signal &signal);
   bool _signalChanged(const Signal &signal, double delta) const;
@@ -4223,7 +3211,6 @@ protected:
   void writeDevices(unsigned long messageID);
   void writeSignalConfig(unsigned long messageID);
   void writeCommands(unsigned long messageID);
-  void writeStateChannels(unsigned long messageID);
   void writeEventChannels(unsigned long messageID);
 
 #if BLAECK_ENABLE_SIGNAL_META
@@ -4238,7 +3225,6 @@ protected:
                             dataType type, void *address, bool textInFlash);
   void _writeSignalText(int signalIndex, const void *value, bool inFlash, unsigned long long timestamp);
   void _emitTextBytes(const void *text, bool inFlash, size_t length);
-  void _writeCommandState(const char *command, bool inFlash);
   // The lookups behind BlaeckDeviceBase's findSignalIndex(), addEventType() and writeEvent().
   int _findSignalIndex(byte deviceId, const char *signalName);
   int _findSignalIndex(byte deviceId, const __FlashStringHelper *signalName);
@@ -4249,35 +3235,17 @@ protected:
   int _registerCommand(byte deviceId, const char *command, BlaeckCommandHandler handler, uint8_t kind);
   // Resets an entry's metadata, so registering a name again starts from scratch.
   void _resetCommandMeta(uint16_t handlerIndex, uint8_t kind);
-  // Adds a state channel and returns its index, or -1 if it was rejected. Adding an existing
-  // name reuses its slot with the metadata cleared. Exactly one of channelName and flashName
-  // is set; a flash name is kept as a pointer, a RAM name is copied.
-  int _registerStateChannel(byte deviceId, const char *channelName, const __FlashStringHelper *flashName, dataType valueType = Blaeck_string,
-                              const void *value = nullptr, bool textInFlash = false);
-  void _writeStateText(byte deviceId, const char *name, bool nameInFlash, const char *text, bool textInFlash);
-  void _writeStateCurrent(byte deviceId, const char *name, bool nameInFlash);
-  void _writeStateNumber(byte deviceId, const char *channelName, long s, unsigned long u, double d, bool nameInFlash = false);
-  // As _registerStateChannel(). A redeclared event channel keeps its types.
+  // Adds an event channel and returns its index, or -1 if it was rejected. Adding an existing
+  // name reuses its slot and keeps its types. Exactly one of channelName and flashName is set;
+  // a flash name is kept as a pointer, a RAM name is copied.
   int _registerEventChannel(byte deviceId, const char *channelName, const __FlashStringHelper *flashName, BlaeckString eventTypes);
   // Adds one event type per comma-separated field, in order.
   void _addEventTypesCsv(uint16_t channelIndex, const detail::StoredString &eventTypes);
 #if BLAECK_ENABLE_COMMAND_META
   void writeCommandsFrame(unsigned long MessageID);
-  byte _validateTypedCommand(uint16_t handlerIndex);
-  // Adds the channel a command's withOwnState() uses. addStateChannel() refuses such names.
-  bool _addOwnedStateChannel(byte deviceId, BlaeckString channelName, BlaeckStateTextGetter getStateText,
-                             dataType valueType = Blaeck_string, const void *value = nullptr);
-  // Adds the withOwnState() channel and marks the catalogs for sending. False if the channel
-  // couldn't be added, and the command then reports no state.
-  bool _declareOwnState(uint16_t handlerIndex, BlaeckString channelName,
-                        BlaeckStateTextGetter getStateText, dataType valueType, const void *value,
-                        bool selectIndex = false);
-  bool _declareOwnState(uint16_t handlerIndex, BlaeckString channelName,
-                        BlaeckStateTextGetter getStateText);
-
+#endif
   static void _percentDecodeInPlace(char *s);
   static long _flashCsvIndexOf(BlaeckString csv, const char *value);
-#endif
   // Number of fields in a comma-separated string. Outside the command-metadata guard
   // because event channels use it too.
   static uint16_t _flashCsvOptionCount(BlaeckString csv);
@@ -4285,17 +3253,6 @@ protected:
   // True if any field is empty or only spaces. Such a list is refused, because dropping the
   // field would shift every later field's index.
   static bool _flashCsvHasBlankField(BlaeckString csv);
-#if BLAECK_ENABLE_STATE_CHANNELS
-  void writeStateChannelsFrame(unsigned long MessageID);
-  // Index of a declared channel, or -1 when the name was never declared.
-  int _findStateChannel(byte deviceId, const char *channelName) const;
-  int _findStateChannel(byte deviceId, const __FlashStringHelper *channelName) const;
-  int _findStateChannel(byte deviceId, BlaeckString channelName) const
-  {
-    return channelName.inFlash() ? _findStateChannel(deviceId, reinterpret_cast<const __FlashStringHelper *>(channelName.data()))
-                                 : _findStateChannel(deviceId, channelName.data());
-  }
-#endif
 #if BLAECK_ENABLE_EVENTS
   void writeEventChannelsFrame(unsigned long MessageID);
   // Index of a declared event channel, or -1 when the name was never declared.
@@ -4329,7 +3286,6 @@ protected:
   uint16_t _rejectedSignalMetaCount = 0;
 #endif
   uint16_t _rejectedCommandCount = 0;
-  uint16_t _rejectedStateChannelCount = 0;
   uint16_t _rejectedEventChannelCount = 0;
   uint16_t _rejectedEventTypeCount = 0;
   uint16_t _rejectedDeviceCount = 0;
@@ -4673,8 +3629,6 @@ protected:
   }
   void _setDeviceMissing(byte id, bool missing);
   void _writeDeviceRestarted(byte id);
-  // Needed even with BLAECK_ENABLE_STATE_CHANNELS=0, because the state handles still compile.
-  typedef blaeck_detail::StateChannelEntry StateChannelEntry;
 
   // Set when a catalog has changed since it was last sent; _flushCatalogs() sends it.
   bool _commandCatalogDirty = false;
@@ -4688,40 +3642,10 @@ protected:
   // purpose.
   void _flushCatalogs();
 
-  // The datatype's code in the device list. Used by the schema hash too, so it exists
-  // without state channels.
+  // The datatype's code in the device list and the entity list. Used by the schema hash too.
   static byte _dtypeCode(dataType t);
-#if BLAECK_ENABLE_STATE_CHANNELS
-  detail::ChunkList<StateChannelEntry> _stateChannels;
-  uint16_t _stateChannelSlots() const { return _stateChannels.capacity(); }
-  // A text channel's current value, or nullptr if it has none. buf is used only when an
-  // option index has to be turned into its name.
-  const char *_channelText(const StateChannelEntry &e, char *buf, byte bufSize, bool *inFlash = nullptr) const;
-
-  // Prints prefix and the channel's name to the debug stream, if there is one.
-  void _debugChannel(const __FlashStringHelper *prefix, const StateChannelEntry &e) const;
-
-  // Returns text if it is one of the channel's options, else nullptr (warning once).
-  const char *_checkedSelectName(const StateChannelEntry &e, const char *text) const;
-
-  // The 0x90 flag word for one channel.
-  uint16_t _stateChannelFlags(const StateChannelEntry &e, bool hasStateValue) const;
-
-  // Writes a numeric channel's value into out (at most 8 bytes) and returns its length. 0 for
-  // a text channel or one with no value.
-  byte _channelValueBytes(const StateChannelEntry &e, byte *out);
-
   // Compares a flash string with a RAM string.
   static bool _flashStringEqualsName(const __FlashStringHelper *flashName, const char *name);
-  // Sends a state value. writeState() checks the channel first; writeCommandState() calls this
-  // directly for a command's own channel.
-  void _writeStateFrame(int channelIndex, const char *text, const byte *pushed = nullptr, byte pushedLen = 0, bool textInFlash = false);
-  // A pushed number converted to the channel's type, as bytes.
-  byte _valueBytes(dataType declared, long s, unsigned long u, double d, byte *out);
-  // Finds the channel for a writeState() push, or returns -1 (with a warning) if the push is
-  // refused.
-  int _stateChannelForPush(byte deviceId, const char *channelName, bool wantText, bool nameInFlash = false);
-#endif
 #if BLAECK_ENABLE_EVENTS
   typedef blaeck_detail::EventChannelEntry EventChannelEntry;
   detail::ChunkList<EventChannelEntry> _eventChannels;
@@ -4752,16 +3676,43 @@ protected:
   uint16_t _parsedPrefixMsgId = 0;
   // Length of the prefix. The ack's hash covers what follows it.
   uint16_t _parsedPrefixLen = 0;
-#if BLAECK_ENABLE_STATE_CHANNELS
-  bool _stateCatalogDirty = false;
-#endif
 #if BLAECK_ENABLE_EVENTS
   bool _eventCatalogDirty = false;
 #endif
-#if BLAECK_ENABLE_COMMAND_META
-  // A select value sent by name, rewritten as its index for the handler.
-  char _selectIndexScratch[8] = {0};
-#endif
+
+  // ── Properties ────────────────────────────────────────────────────
+  // Added in order and never removed, so a property's index is its position in the entity
+  // list, which 0x95 frames carry.
+  typedef blaeck_detail::PropertyEntry PropertyEntry;
+  detail::ChunkList<PropertyEntry> _properties;
+  uint16_t _propertyCount = 0;
+  uint16_t _rejectedPropertyCount = 0;
+  bool _entityCatalogDirty = false;
+  // The input a host has just set: its callback runs and its value is sent after the ack.
+  int _propertyJustSet = -1;
+  int _registerProperty(byte deviceId, BlaeckString name, uint8_t kind, bool writable, dataType type,
+                        void *address, void (*getter)(), uint8_t getterType, uint16_t textSize,
+                        BlaeckString options, BlaeckPropertyCallback onChange);
+  // Why name can't be used for a property or command, printed on the debug stream; false if it
+  // can.
+  bool _nameRefused(BlaeckString name, bool isCommand);
+  int _findProperty(BlaeckString name) const;
+  // The current value: a number or bool into out (at most 8 bytes), or the text and whether it
+  // is in flash.
+  void _propertyValue(const PropertyEntry &p, byte *out) const;
+  const char *_propertyText(const PropertyEntry &p, bool &inFlash) const;
+  // Checks a host's value for the property, stores it and returns BLAECK_ACK_OK, or returns
+  // why it was refused.
+  byte _receiveProperty(uint16_t index);
+  // Sends one property's value as 0x95. False if the frame didn't go out whole.
+  bool _writePropertyFrame(uint16_t index);
+  // Emits a property's value as 0x90 and 0x95 carry it.
+  void _emitPropertyValue(const PropertyEntry &p);
+  // Sends each property whose value changed, as writeOnChange() allows.
+  void _writeChangedProperties();
+  void _writePropertyByName(byte deviceId, BlaeckString name);
+  void writeEntities(unsigned long messageID);
+  void writeEntitiesFrame(unsigned long messageID);
 
   void (*_beforeWriteCallback)() = nullptr;
 
@@ -4832,8 +3783,8 @@ protected:
   friend bool blaeck_detail::optionsAccepted(BlaeckString, Print *,
                                              const char *, bool);
   friend class BlaeckCommandRefBase;
-  friend class BlaeckStateRefBase;
   friend class BlaeckEventChannelRef;
+  friend class BlaeckPropertyRefBase;
   friend class BlaeckBeginRef;
   friend class BlaeckDeviceRef;
   friend class BlaeckDeviceBase;
@@ -4918,150 +3869,6 @@ inline void BlaeckCommandRefBase::_markDirty() const
     _owner->_commandCatalogDirty = true;
 }
 
-inline void BlaeckCommandRefBase::_warnRangeIgnored(float mn, float mx) const
-{
-#if BLAECK_ENABLE_COMMAND_META
-  if (_owner == nullptr || _owner->_debugStream == nullptr)
-    return;
-  _owner->_debugStream->print(F("withRange ignored, max must be above min: "));
-  if (auto *e = _entry())
-  {
-    _owner->_debugStream->print(e->command);
-    _owner->_debugStream->print(' ');
-  }
-  _owner->_debugStream->print('[');
-  _owner->_debugStream->print(mn);
-  _owner->_debugStream->print(F(", "));
-  _owner->_debugStream->print(mx);
-  _owner->_debugStream->println(F("]. Any value is accepted and no range is declared."));
-#else
-  (void)mn;
-  (void)mx;
-#endif
-}
-
-inline void BlaeckCommandRefBase::_warnStepIgnored(float st) const
-{
-#if BLAECK_ENABLE_COMMAND_META
-  if (_owner == nullptr || _owner->_debugStream == nullptr)
-    return;
-  _owner->_debugStream->print(F("step ignored, must be above zero: "));
-  if (auto *e = _entry())
-  {
-    _owner->_debugStream->print(e->command);
-    _owner->_debugStream->print(' ');
-  }
-  _owner->_debugStream->print(st);
-  _owner->_debugStream->println(F(". No resolution is declared and the host chooses one."));
-#else
-  (void)st;
-#endif
-}
-
-inline void BlaeckCommandRefBase::_warnStepTooFine(float st) const
-{
-#if BLAECK_ENABLE_COMMAND_META
-  if (_owner == nullptr || _owner->_debugStream == nullptr)
-    return;
-  _owner->_debugStream->print(F("step below 0.001: "));
-  if (auto *e = _entry())
-  {
-    _owner->_debugStream->print(e->command);
-    _owner->_debugStream->print(' ');
-  }
-  // Six places: the default two would print it as 0.00.
-  _owner->_debugStream->print(st, 6);
-  _owner->_debugStream->println(F(". Sent as declared, but Home Assistant refuses the whole "
-                                  "control rather than only the step."));
-#else
-  (void)st;
-#endif
-}
-
-inline void BlaeckCommandRefBase::_warnMaxLengthTooLong(unsigned int maxLength) const
-{
-#if BLAECK_ENABLE_COMMAND_META
-  if (_owner == nullptr || _owner->_debugStream == nullptr)
-    return;
-  _owner->_debugStream->print(F("max length above 255: "));
-  if (auto *e = _entry())
-  {
-    _owner->_debugStream->print(e->command);
-    _owner->_debugStream->print(' ');
-  }
-  _owner->_debugStream->print(maxLength);
-  _owner->_debugStream->println(F(". Ignored, and 255 kept: Home Assistant caps an entity's "
-                                  "state at 255 characters and refuses the control outright "
-                                  "above it."));
-#else
-  (void)maxLength;
-#endif
-}
-
-inline bool BlaeckCommandRefBase::_optionsAccepted(BlaeckString optionsCsv) const
-{
-#if BLAECK_ENABLE_COMMAND_META
-  auto *e = _entry();
-  return blaeck_detail::optionsAccepted(optionsCsv,
-                                        _owner != nullptr ? _owner->_debugStream : nullptr,
-                                        e != nullptr ? e->command : nullptr, false);
-#else
-  (void)optionsCsv;
-  return false;
-#endif
-}
-
-inline void BlaeckCommandRefBase::_setOwnState(BlaeckString channelName,
-                                               dataType valueType, const void *value,
-                                               bool selectIndex)
-{
-#if BLAECK_ENABLE_COMMAND_META && BLAECK_ENABLE_STATE_CHANNELS
-  if (auto *e = _entry())
-  {
-    detail::StoredString name = e->stateSignal;
-    if (!_storeString(name, channelName))
-      return;
-    if (_owner->_declareOwnState((uint16_t)_index, name, nullptr, valueType, value, selectIndex))
-    {
-      const bool changed = e->stateSignal != BlaeckString(name) || e->stateSource != BLAECK_STATE_CHANNEL;
-      e->stateSignal = name;
-      e->stateSource = BLAECK_STATE_CHANNEL;
-      if (changed)
-        _markDirty();
-    }
-  }
-#else
-  (void)channelName;
-  (void)valueType;
-  (void)value;
-  (void)selectIndex;
-#endif
-}
-
-inline void BlaeckCommandRefBase::_setOwnState(BlaeckString channelName, BlaeckStateTextGetter getStateText)
-{
-#if BLAECK_ENABLE_COMMAND_META && BLAECK_ENABLE_STATE_CHANNELS
-  if (auto *e = _entry())
-  {
-    detail::StoredString name = e->stateSignal;
-    if (!_storeString(name, channelName))
-      return;
-    // Link the state only if the channel was added; otherwise the command reports none.
-    if (_owner->_declareOwnState((uint16_t)_index, name, getStateText))
-    {
-      const bool changed = e->stateSignal != BlaeckString(name) || e->stateSource != BLAECK_STATE_CHANNEL;
-      e->stateSignal = name;
-      e->stateSource = BLAECK_STATE_CHANNEL;
-      if (changed)
-        _markDirty();
-    }
-  }
-#else
-  (void)channelName;
-  (void)getStateText;
-#endif
-}
-
 inline void BlaeckSignalRefBase::_setInterval(BlaeckIntervalMode mode, double delta)
 {
   if (_owner != nullptr)
@@ -5069,11 +3876,6 @@ inline void BlaeckSignalRefBase::_setInterval(BlaeckIntervalMode mode, double de
 }
 
 inline bool BlaeckCommandRefBase::_storeString(detail::StoredString &slot, BlaeckString value)
-{
-  return _owner != nullptr && _owner->_storeString(slot, value);
-}
-
-inline bool BlaeckStateRefBase::_storeString(detail::StoredString &slot, BlaeckString value)
 {
   return _owner != nullptr && _owner->_storeString(slot, value);
 }
@@ -5218,28 +4020,6 @@ inline void BlaeckSignalRefBase::_setNameSuffix(uint8_t suffix)
   s.HasSuffix = 1;
   // The suffix changes the name, and the name is part of the schema hash.
   _owner->_schemaHash = _owner->_computeSchemaHash();
-}
-
-inline blaeck_detail::StateChannelEntry * BlaeckStateRefBase::_entry() const
-{
-#if BLAECK_ENABLE_STATE_CHANNELS
-  if (_owner != nullptr && _index >= 0)
-    return &_owner->_stateChannels[_index];
-#endif
-  return nullptr;
-}
-
-inline void BlaeckStateRefBase::_markDirty() const
-{
-#if BLAECK_ENABLE_STATE_CHANNELS
-  if (_owner != nullptr)
-    _owner->_stateCatalogDirty = true;
-#endif
-}
-
-inline Print *BlaeckStateRefBase::_debugStream() const
-{
-  return _owner != nullptr ? _owner->_debugStream : nullptr;
 }
 
 inline BlaeckEventChannelRef BlaeckEventChannelRef::withIcon(BlaeckString icon)

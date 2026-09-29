@@ -1,23 +1,24 @@
 /*
   CommandTest.ino
 
-  Every way a command can be declared, crossed with the values a host might send it -
-  including the ones it must refuse.
+  Everything a host can send, crossed with the values it might send - including the ones the
+  board must refuse.
 
     P   plain     onCommand(), parses its own parameters
-    N   number    onNumberCommand(), bounded by withRange()
-    S   switch    onSwitchCommand(), 0 or 1
-    L   select    onSelectCommand(), one of a named list
+    N   number    addNumberInput(), bounded by withRange()
+    S   switch    addSwitch(), 0 or 1
+    L   select    addSelect(), one of a named list
     B   button    onButtonCommand(), no value at all
-    T   text      onTextCommand(), bounded by withMaxLength()
+    T   text      addTextInput(), bounded by its buffer
+    R   sensor    addSensor(), which a host cannot set
 
-  A typed command is checked before its handler runs, so a refused value is observable
-  only as an absence: the handler does not fire and the variable does not move. Every
-  handler here prints one line and nothing else does, so silence is the assertion.
+  An input's value is checked before it is stored, so a refused value is observable only as
+  an absence: the callback does not fire and the variable does not move. Every callback here
+  prints one line and nothing else does, so silence is the assertion.
 
   What to look for:
     Serial   PASS/FAIL at startup, then one CMD line per accepted command
-    Broker   the controls a host builds from the metadata, which the sketch cannot see
+    Broker   the controls a host builds from the entity list, which the sketch cannot see
 
   Author: Sebastian Strobl, https://github.com/sebaJoSt/blaeck
 */
@@ -27,19 +28,22 @@
 
 Blaeck device;
 
-// ---- what the commands write to -------------------------------------------------------------
+// ---- what the inputs hold -------------------------------------------------------------------
 int nInt = 0;
 float nFloat = 0.0f;
 byte nLevel = 0;
+int nBadRange = 0;
 bool sEnabled = false;
 bool sFlag = false;
-byte lIndex = 0;
-char lName[16] = "Sine";
+byte lWave = 0;
+byte lCase = 0;
+byte lRange = 0;
 char tLabel[32] = "unnamed";
 char tSecret[16] = "";
 long pRepeats = 0;
+char status[40] = "";
 
-// Signals, so a logging session has something to log and withStateFromSignal() has a target.
+// Signals, so a logging session has something to log.
 unsigned long Uptime = 0;
 
 // Every accepted command bumps this. A refused one must leave it alone.
@@ -66,7 +70,14 @@ void Accept(const char *command, const char *value)
   Serial.println(value);
 }
 
-// ---- handlers -------------------------------------------------------------------------------
+void AcceptNumber(const char *command, double value)
+{
+  char text[16];
+  device.toText(value, 4, text, sizeof(text));
+  Accept(command, text);
+}
+
+// ---- callbacks and handlers -----------------------------------------------------------------
 
 // Plain: nothing was checked, so everything is this handler's problem.
 void onPrint(const char *command, const char *const *params, byte paramCount)
@@ -80,87 +91,37 @@ void onPrint(const char *command, const char *const *params, byte paramCount)
   Accept(command, params[0]);
 }
 
-void onSetInt(const char *command, const char *const *params, byte paramCount)
-{
-  (void)paramCount;
-  nInt = atoi(params[0]);
-  device.writeCommandState(command);
-  Accept(command, params[0]);
-}
+// Inputs: the value is stored before these run, so they print the variable.
+void onInt() { AcceptNumber("N_int", nInt); }
+void onFloat() { AcceptNumber("N_float", nFloat); }
+void onLevel() { AcceptNumber("N_level", nLevel); }
+void onBadRange() { AcceptNumber("N_badrange", nBadRange); }
+void onEnabled() { Accept("S_enabled", sEnabled ? "1" : "0"); }
+void onFlag() { Accept("S_flag", sFlag ? "1" : "0"); }
 
-void onSetFloat(const char *command, const char *const *params, byte paramCount)
+// A select holds the position, whichever of name or position a host sent.
+void onWave()
 {
-  (void)paramCount;
-  nFloat = atof(params[0]);
-  device.writeCommandState(command);
-  Accept(command, params[0]);
-}
-
-void onSetLevel(const char *command, const char *const *params, byte paramCount)
-{
-  (void)paramCount;
-  nLevel = (byte)atoi(params[0]);
-  Accept(command, params[0]);
-}
-
-// Declared with a range the library must refuse, so this should be unreachable by value.
-void onSetBadRange(const char *command, const char *const *params, byte paramCount)
-{
-  (void)paramCount;
-  Accept(command, params[0]);
-}
-
-void onSetEnabled(const char *command, const char *const *params, byte paramCount)
-{
-  (void)paramCount;
-  sEnabled = atoi(params[0]) == 1;
-  device.writeCommandState(command);
-  Accept(command, params[0]);
-}
-
-void onSetFlag(const char *command, const char *const *params, byte paramCount)
-{
-  (void)paramCount;
-  sFlag = atoi(params[0]) == 1;
-  Accept(command, params[0]);
-}
-
-// A select hands over the position, whichever of the two a host sent - so the name has to be
-// read back if that is what the state channel carries.
-void onSetWave(const char *command, const char *const *params, byte paramCount)
-{
-  (void)paramCount;
-  byte index = (byte)atoi(params[0]);
-  if (!device.getSelectOptionNameAt(command, index, lName, sizeof(lName)))
+  char name[16];
+  if (!device.getSelectOptionNameAt(F("L_wave"), lWave, name, sizeof(name)))
   {
     Serial.println(F("CMD L_wave readback-failed"));
     return;
   }
-  device.writeCommandState(command);
-  Accept(command, lName);
+  Accept("L_wave", name);
 }
 
-void onSetCase(const char *command, const char *const *params, byte paramCount)
-{
-  (void)paramCount;
-  Accept(command, params[0]);
-}
-
-void onSetRange(const char *command, const char *const *params, byte paramCount)
-{
-  (void)paramCount;
-  lIndex = (byte)atoi(params[0]);
-  device.writeCommandState(command);
-  Accept(command, params[0]);
-}
+void onCase() { AcceptNumber("L_case", lCase); }
+void onRange() { AcceptNumber("L_range", lRange); }
+void onLabel() { Accept("T_label", tLabel); }
+// The value is masked in a host's input box, not on the wire and not here.
+void onSecret() { Accept("T_secret", tSecret); }
 
 void onPing(const char *command, const char *const *params, byte paramCount)
 {
   (void)params;
   (void)paramCount;
-  char text[40];
-  snprintf(text, sizeof(text), "alive, %lu accepted", Accepted + 1);
-  device.writeState(F("Status"), text);
+  snprintf(status, sizeof(status), "alive, %lu accepted", Accepted + 1);
   Accept(command, "pressed");
 }
 
@@ -169,24 +130,6 @@ void onReboot(const char *command, const char *const *params, byte paramCount)
   (void)params;
   (void)paramCount;
   Accept(command, "pressed");
-}
-
-void onSetLabel(const char *command, const char *const *params, byte paramCount)
-{
-  (void)paramCount;
-  strncpy(tLabel, params[0], sizeof(tLabel) - 1);
-  tLabel[sizeof(tLabel) - 1] = '\0';
-  device.writeCommandState(command);
-  Accept(command, params[0]);
-}
-
-void onSetSecret(const char *command, const char *const *params, byte paramCount)
-{
-  (void)paramCount;
-  strncpy(tSecret, params[0], sizeof(tSecret) - 1);
-  tSecret[sizeof(tSecret) - 1] = '\0';
-  // The value is masked in a host's input box, not on the wire and not here.
-  Accept(command, params[0]);
 }
 
 // The board this was built for, so a recording says which one produced it. A harness runs
@@ -231,83 +174,59 @@ void setup()
 {
   Serial.begin(115200);
 
-  // Pointed at the stream the frames go out on, deliberately: N_badrange makes the catalog
-  // writer warn, and that warning used to land inside the open 0xA0 frame - costing four
-  // controls and mangling a fifth. Keeping the two streams the same is what would catch it
-  // coming back.
+  // Pointed at the stream the frames go out on, deliberately: N_badrange makes a warning,
+  // and a warning must never land inside an open frame. Keeping the two streams the same is
+  // what would catch that.
   device.begin(Serial).withDebugStream(&Serial);
 
   device.DeviceName = "Command Test";
   device.DeviceHWVersion = HARNESS_BOARD;
   device.DeviceFWVersion = "1.0";
 
-  device.addSignal(F("Uptime"), &Uptime).withUnit(F("s"));
+  device.addSignal(F("Uptime"), &Uptime);
   device.addSignal(F("Level"), &nLevel);
   device.addSignal(F("Flag"), &sFlag);
-
-  device.addStateChannel(F("Status"), BlaeckText);
-  device.addStateChannel(F("Label"), tLabel);
 
   // ---- P: plain, so serial only and unchecked ------------------------------------------
   device.onCommand("P_print", onPrint);
 
   // ---- N: bounded numbers ---------------------------------------------------------------
-  device.onNumberCommand("N_int", onSetInt)
-      .withRange(0.0f, 100.0f, 1.0f)
-      .withOwnState(F("N_int_state"), &nInt);
-
-  device.onNumberCommand("N_float", onSetFloat)
+  device.addNumberInput(F("N_int"), &nInt, onInt).withRange(0.0f, 100.0f, 1.0f);
+  device.addNumberInput(F("N_float"), &nFloat, onFloat)
       .withRange(-5.0f, 5.0f, 0.25f)
       .withUnit(F("V"))
-      .withMode(BLAECK_NUMBER_MODE_BOX)
-      .withOwnState(F("N_float_state"), &nFloat);
-
-  // The only number pointing at a logged signal rather than its own state channel.
-  device.onNumberCommand("N_level", onSetLevel)
+      .withMode(BLAECK_NUMBER_MODE_BOX);
+  device.addNumberInput(F("N_level"), &nLevel, onLevel)
       .withRange(0.0f, 255.0f, 1.0f)
-      .withMode(BLAECK_NUMBER_MODE_SLIDER)
-      .withStateFromSignal(F("Level"));
-
-  // Refused at declaration: the library keeps the command and drops the range.
-  device.onNumberCommand("N_badrange", onSetBadRange)
-      .withRange(10.0f, 5.0f, 1.0f);
+      .withMode(BLAECK_NUMBER_MODE_SLIDER);
+  // Refused at declaration: the input stays, without a range.
+  device.addNumberInput(F("N_badrange"), &nBadRange, onBadRange).withRange(10.0f, 5.0f, 1.0f);
 
   // ---- S: switches ----------------------------------------------------------------------
-  device.onSwitchCommand("S_enabled", onSetEnabled)
-      .withOwnState(F("S_enabled_state"), &sEnabled);
-
-  device.onSwitchCommand("S_flag", onSetFlag)
-      .withStateFromSignal(F("Flag"));
+  device.addSwitch(F("S_enabled"), &sEnabled, onEnabled);
+  device.addSwitch(F("S_flag"), &sFlag, onFlag);
 
   // ---- L: selects -----------------------------------------------------------------------
-  device.onSelectCommand("L_wave", onSetWave)
-      .withOptions(F("Sine,Square,Triangle,Sawtooth"))
-      .withOwnState(F("L_wave_state"), lName);
-
+  device.addSelect(F("L_wave"), &lWave, F("Sine,Square,Triangle,Sawtooth"), onWave);
   // Two options differing only in case. A host lists both, so both must be reachable.
-  device.onSelectCommand("L_case", onSetCase)
-      .withOptions(F("Auto,AUTO"));
-
-  device.onSelectCommand("L_range", onSetRange)
-      .withOptions(F("1V,10V,100V"))
-      .withOwnState(F("L_range_state"), &lIndex);
+  device.addSelect(F("L_case"), &lCase, F("Auto,AUTO"), onCase);
+  device.addSelect(F("L_range"), &lRange, F("1V,10V,100V"), onRange);
 
   // ---- B: buttons, which carry no value --------------------------------------------------
   device.onButtonCommand("B_ping", onPing);
-
   device.onButtonCommand("B_reboot", onReboot)
       .withDeviceClass(F("restart"))
       .diagnostic()
       .disabledByDefault();
 
   // ---- T: text ---------------------------------------------------------------------------
-  device.onTextCommand("T_label", onSetLabel)
-      .withMaxLength(sizeof(tLabel) - 1)
-      .withOwnState(F("T_label_state"), tLabel);
-
-  device.onTextCommand("T_secret", onSetSecret)
-      .withMaxLength(sizeof(tSecret) - 1)
+  device.addTextInput(F("T_label"), tLabel, sizeof(tLabel), onLabel);
+  device.addTextInput(F("T_secret"), tSecret, sizeof(tSecret), onSecret)
       .withMode(BLAECK_TEXT_MODE_PASSWORD);
+
+  // ---- R: sensors, which a host cannot set -----------------------------------------------
+  device.addSensor(F("R_uptime"), &Uptime);
+  device.addSensor(F("Status"), status, sizeof(status));
 
   device.onCommand("WIDTHS", onWidths);
 
@@ -322,25 +241,14 @@ void RunLocalChecks()
   Serial.println();
   Serial.println(F("---- CommandTest ----"));
 
-  Check(F("every command registered"), !device.hasRejectedCommands());
-  if (device.hasRejectedCommands())
-  {
-    Serial.print(F("      dropped: "));
-    Serial.println(device.getRejectedCommandCount());
-  }
+  Check(F("everything registered"), !device.hasRejections());
+  if (device.hasRejections())
+    device.printRejections(&Serial);
 
-  Check(F("every state channel registered"), !device.hasRejectedStateChannels());
-  if (device.hasRejectedStateChannels())
-  {
-    Serial.print(F("      dropped: "));
-    Serial.println(device.getRejectedStateChannelCount());
-  }
-
-  Check(F("every signal registered"), !device.hasRejectedSignals());
   Check(F("nothing accepted before a host sends anything"), Accepted == 0);
   Check(F("defaults intact: nInt"), nInt == 0);
   Check(F("defaults intact: sEnabled"), sEnabled == false);
-  Check(F("defaults intact: lName"), strcmp(lName, "Sine") == 0);
+  Check(F("defaults intact: lWave"), lWave == 0);
   Check(F("defaults intact: tLabel"), strcmp(tLabel, "unnamed") == 0);
 
   Serial.print(F("---- "));

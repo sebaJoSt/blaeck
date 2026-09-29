@@ -3,11 +3,11 @@
 
   A second board shown as its own device. This board runs blaeck and is connected to the host;
   PumpBoard.ino runs on a second board, which this one polls over a serial link. A host shows
-  the pump's values and control under a device "Pump controller" below this board.
+  the pump's values and its speed input under a device "Pump controller" below this board.
 
   blaeck only reports the device. This sketch talks to PumpBoard, decides when it counts as
-  missing or restarted, forwards the SET_PUMP_SPEED command, and sends the pump's values again
-  when they may have changed without the host noticing.
+  missing or restarted, forwards a speed a host sets, and sends the pump's values again when
+  they may have changed without the host noticing.
 
   The circuit:
     - This board: an Arduino Mega, or another board with a second hardware serial port.
@@ -37,7 +37,10 @@ BlaeckDeviceRef pump;
 float boardTemperature;
 float pumpFlow;
 float pumpPressure;
+// Set by a host through the PumpSpeed input, and by every reading with the speed the pump
+// actually runs at.
 byte pumpSpeed;
+char link[12] = "";
 
 unsigned long lastPumpUptime = 0;
 byte missedReplies = 0;
@@ -81,18 +84,18 @@ bool requestReading(bool &restarted)
   return true;
 }
 
-// Sends what blaeck does not resend by itself: the speed the pump actually runs at, shown by
-// the SET_PUMP_SPEED control, and the link state. The signals need nothing, since they are
-// read from their variables for every data frame.
+// Sends the pump's input and link state even if they look unchanged: while the pump was
+// missing, the host heard nothing of them. The signals need nothing, since they are read from
+// their variables for every data frame.
 void reportPumpState()
 {
-  pump.writeCommandState("SET_PUMP_SPEED");
-  pump.writeState(F("Link"), "ok");
+  strcpy(link, "ok");
+  pump.writeProperty(F("PumpSpeed"));
+  pump.writeProperty(F("Link"));
 }
 
 void pollPump()
 {
-  const byte previousSpeed = pumpSpeed;
   bool restarted = false;
   if (requestReading(restarted))
   {
@@ -104,9 +107,9 @@ void pollPump()
       pump.writeRestarted();
       pump.writeEvent(F("Alarms"), F("restarted"));
     }
-    // After a gap or a restart the host's view may be out of date, so send both; otherwise
-    // only a new speed.
-    if (cameBack || restarted || pumpSpeed != previousSpeed)
+    // After a gap or a restart the host's view may be out of date, so send both. A new speed
+    // alone needs nothing: tick() sends it.
+    if (cameBack || restarted)
     {
       reportPumpState();
       pumpReported = true;
@@ -118,16 +121,18 @@ void pollPump()
     missedReplies++;
   if (missedReplies == MISSES_BEFORE_MISSING && !pump.isMissing())
   {
+    // Sent at once: a missing device's properties are left out of tick()'s checks.
+    strcpy(link, "no answer");
+    pump.writeProperty(F("Link"));
     pump.markMissing();
-    pump.writeState(F("Link"), "no answer");
   }
 }
 
-// blaeck has already checked the range; forwarding it is up to the sketch.
-void onSetPumpSpeed(const char *command, const char *const *params, byte paramCount)
+// blaeck has already checked the range and stored the speed; forwarding it is up to the sketch.
+void onPumpSpeed()
 {
   pumpLink.write('S');
-  pumpLink.write((byte)atoi(params[0]));
+  pumpLink.write(pumpSpeed);
 }
 
 void setup()
@@ -150,11 +155,10 @@ void setup()
   // "Pump controller", so their names need no "Pump" of their own.
   pump.addSignal(F("Flow"), &pumpFlow).withUnit(F("L/min"));
   pump.addSignal(F("Pressure"), &pumpPressure).withUnit(F("bar"));
-  pump.onNumberCommand("SET_PUMP_SPEED", onSetPumpSpeed)
+  pump.addNumberInput(F("PumpSpeed"), &pumpSpeed, onPumpSpeed)
       .withRange(0.0f, 100.0f, 1.0f)
-      .withUnit(F("%"))
-      .withOwnState(F("Speed"), &pumpSpeed);
-  pump.addStateChannel(F("Link"), BlaeckText);
+      .withUnit(F("%"));
+  pump.addSensor(F("Link"), link, sizeof(link));
   pump.addEventChannel(F("Alarms"), F("restarted"));
 }
 

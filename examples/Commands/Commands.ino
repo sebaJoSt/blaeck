@@ -1,22 +1,21 @@
 /*
   Commands.ino
 
-  How to add your own commands. There are two kinds:
+  How a host tells the board to do something. Three ways:
 
-    Plain   onCommand()          You parse the parameters yourself.
-                                 No automatic dashboard control.
+    Plain    onCommand()        You parse the parameters yourself. Not listed, so
+                                there is no dashboard control.
 
-    Typed   onSwitchCommand()    You declare what the command is. The library
-            onButtonCommand()    checks the value first, and describes the
-                                 command well enough that Loggbok can publish
-                                 it and Home Assistant can show a control.
+    Button   onButtonCommand()  A press with no value. Listed, so Loggbok can
+                                publish it and Home Assistant shows a button.
 
-  <SwitchLED> and <LED> switch the same LED, one plain and one typed, so the
+    Switch   addSwitch()        Not a command you handle, but a value a host sets:
+                                the library checks it, stores it in a bool and
+                                sends it back. Home Assistant shows a switch that
+                                follows what the board holds.
+
+  <SwitchLED> and <LED> switch the same LED, one plain and one a switch, so the
   difference is easy to see.
-
-  A typed switch also names a state signal ("LED_State"). That is what the
-  control follows, so it shows what the board really did instead of assuming
-  the command worked.
 
   Leave USE_TCP at 0 for Serial, or set it to 1 for TCP. Connect Loggbok to the
   serial port at 115200 baud, or to the printed network address on TCP port 23.
@@ -39,14 +38,13 @@
     - Boards without an on-board LED, such as the ESP32-PoE and WT32-ETH01, use
       LED_PIN below: wire an LED with a resistor to that pin, or change it.
 
-  Typed, and so also controls in Home Assistant:
+  Listed, and so also controls in Home Assistant:
 
         <LED,1>                       Turn on the LED
         <LED,0>                       Turn off the LED
         <LED,7>                       Rejected: a switch only accepts 0 or 1
-        <Ping>                        Takes no value. Answers on the "Status"
-                                      state channel with how long the board
-                                      has been running.
+        <Ping>                        A button. Answers on the "Status" sensor
+                                      with how long the board has been running.
 
   Plain commands, callable by a host or terminal but not auto-discovered as controls:
 
@@ -87,11 +85,13 @@ const int ledPin = LED_BUILTIN;
 const int ledPin = LED_PIN;
 #endif
 
-// Mirrors the LED. Registered as a signal so <LED> can point at it.
+// The LED's state: a host sets it through the "LED" switch, and <SwitchLED> sets it too.
 bool ledState = false;
+// Where <Ping> answers.
+char status[40] = "";
 
 void onSwitchLED(const char *command, const char *const *params, byte paramCount);
-void onLED(const char *command, const char *const *params, byte paramCount);
+void onLED();
 void onPing(const char *command, const char *const *params, byte paramCount);
 void onPrint(const char *command, const char *const *params, byte paramCount);
 void setLed(bool on);
@@ -114,25 +114,21 @@ void setup()
   device.DeviceName = HOST_NAME;
   device.DeviceFWVersion = "1.0";
 
-  // The state signal the typed switch below refers to
-  device.addSignal(F("LED_State"), &ledState);
-
-  // Plain: listed by name only, so it can be sent but not turned into a control.
+  // Plain: the board accepts them, but a host doesn't know them.
   device.onCommand("SwitchLED", onSwitchLED);
   device.onCommand("Print", onPrint);
 
-  // Typed: checked by the library and described well enough for a control.
-  // A switch is 0/1 and points at a state signal; a button carries no value.
-  device.onSwitchCommand("LED", onLED).withStateFromSignal(F("LED_State"));
+  // A switch a host sets; onLED() runs after it did. A button carries no value.
+  device.addSwitch(F("LED"), &ledState, onLED);
   device.onButtonCommand("Ping", onPing);
 
-  // Where <Ping> answers. Declared here so the sensor exists from the start.
-  device.addStateChannel(F("Status"), BlaeckText).withIcon(F("mdi:message-text"));
+  // Where <Ping> answers. tick() sends it whenever the text changes.
+  device.addSensor(F("Status"), status, sizeof(status)).withIcon(F("mdi:message-text"));
 }
 
 void loop()
 {
-  // Handles incoming commands, and writes the signals on the interval.
+  // Handles incoming commands, and sends the switch and the sensor when they change.
   device.tick();
 #if USE_TCP
   networkLoop();
@@ -173,24 +169,18 @@ void onSwitchLED(const char *command, const char *const *params, byte paramCount
   device.Terminal.println(F("Invalid SwitchLED value. Use 0, 1, ON or OFF; LED unchanged."));
 }
 
-// Typed switch: the library rejects <LED,7> before this runs, so the value
-// here is always 0 or 1.
-void onLED(const char *command, const char *const *params, byte paramCount)
+// The switch: the library rejected <LED,7> and stored 0 or 1 in ledState before this runs.
+void onLED()
 {
-  (void)command;
-  if (paramCount < 1 || params[0][0] == '\0')
-  {
-    return;
-  }
-  setLed(atoi(params[0]) == 1);
+  setLed(ledState);
   device.Terminal.println(ledState ? "LED is ON." : "LED is OFF.");
 }
 
-/* Typed button: no value to parse.
+/* Button: no value to parse.
 
-   A button has no state signal, so it answers on the "Status" state channel
-   instead. Loggbok forwards that frame to Home Assistant; device.Terminal.println()
-   is only text feedback for a serial monitor or TCP terminal.
+   It answers on the "Status" sensor: tick() sends the new text, and Loggbok forwards it
+   to Home Assistant. device.Terminal.println() is only text feedback for a serial
+   monitor or TCP terminal.
 */
 void onPing(const char *command, const char *const *params, byte paramCount)
 {
@@ -198,10 +188,8 @@ void onPing(const char *command, const char *const *params, byte paramCount)
   (void)params;
   (void)paramCount;
   // %lu is fine on AVR; only float formatting (%f) is left out of printf there.
-  char text[40];
   unsigned long seconds = millis() / 1000UL;
-  snprintf(text, sizeof(text), "alive, running for %lu s", seconds);
-  device.writeState(F("Status"), text);
+  snprintf(status, sizeof(status), "alive, running for %lu s", seconds);
 }
 
 /* Exemplary command using two parameters:
@@ -230,7 +218,8 @@ void onPrint(const char *command, const char *const *params, byte paramCount)
   }
 }
 
-// Keeps the pin and the signal in step, whichever command was used.
+// Keeps the pin and the switch in step, whichever command was used. tick() sends the switch
+// when <SwitchLED> changed it.
 void setLed(bool on)
 {
   ledState = on;

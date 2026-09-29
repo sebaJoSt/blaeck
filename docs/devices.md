@@ -18,9 +18,9 @@ BlaeckDeviceRef pump;
 float temperature;
 float pumpFlow;
 
-void onSetPumpSpeed(const char *command, const char *const *params, byte paramCount)
+void onPumpSpeed()
 {
-  sendSpeedToPump(atoi(params[0]));   // your code: forward it over the link
+  sendSpeedToPump(pumpSpeed);         // your code: forward it over the link
 }
 
 void setup()
@@ -35,7 +35,7 @@ void setup()
 
   device.addSignal(F("Temperature"), &temperature);
   pump.addSignal(F("Flow"), &pumpFlow);
-  pump.onNumberCommand("SET_PUMP_SPEED", onSetPumpSpeed)
+  pump.addNumberInput(F("PumpSpeed"), &pumpSpeed, onPumpSpeed)
       .withRange(0.0f, 100.0f, 1.0f);
 }
 
@@ -59,7 +59,7 @@ Greenhouse
 ├─ Temperature
 └─ Pump controller
    ├─ Flow
-   └─ SET_PUMP_SPEED
+   └─ PumpSpeed
 ```
 
 [SubDevices](../examples/more/SubDevices) is the complete version: a main board and a pump board
@@ -69,23 +69,22 @@ talking over a UART, with a checksum, a tolerance for missed replies, restart de
 ## Registering on a device
 
 `addDevice()` returns a handle, and the handle has the same registration calls as the board:
-`addSignal()`, `addStateChannel()`, `addEventChannel()`, `addEventType()`, `onCommand()` and the
-typed commands. What you register through the handle belongs to the device; what you register
-through the board stays on the board. A command's `withOwnState()` channel belongs to the
-command's device.
+`addSignal()`, the inputs and `addSensor()`, `addEventChannel()`, `addEventType()`,
+`onCommand()` and `onButtonCommand()`. What you register through the handle belongs to the
+device; what you register through the board stays on the board.
 
 The writes that take a name look it up in the same place: `pump.write("Flow", value)`,
-`pump.writeState(...)` and `pump.writeEvent(...)` find the pump's entries, `device.write(...)`
+`pump.writeProperty(...)` and `pump.writeEvent(...)` find the pump's entries, `device.write(...)`
 the board's.
 
-Names only have to be unique within the board or within one device. The board and two zones
-can each have a `Temperature` signal, a `Status` state channel or an `Alarm` event channel; a
-host shows them under their own device. Don't repeat the device's name in its entries: a host
-already shows "Pump controller" in front of `Flow`. Command names are the exception - they are
-unique across the whole board, because an incoming command is found by its name.
+Signal and event channel names only have to be unique within the board or within one device.
+The board and two zones can each have a `Temperature` signal or an `Alarm` event channel; a host
+shows them under their own device. Don't repeat the device's name in its entries: a host already
+shows "Pump controller" in front of `Flow`. Input, sensor, button and command names are the
+exception - they are unique across the whole board, because a host sets or sends them by name.
 
-A host sends a device's command like any other, `<SET_PUMP_SPEED,40>`: the name is enough.
-Your handler forwards the value over your link to the device.
+A host sets a device's input like any other, `<PumpSpeed,40>`: the name is enough. Your
+callback forwards the value over your link to the device.
 
 Add devices and register their entries in `setup()`: a host reads the device list and the catalogs when
 it connects, and does not ask again for a change made later.
@@ -112,12 +111,13 @@ While a device is missing:
   presented as new;
 - `write()` for one of its signals is dropped. With `withDebugStream()`, the first drop is
   noted there, once until `markPresent()`;
-- its commands are refused with the reason "device not responding", and their handlers don't
-  run.
+- its commands and inputs are refused with the reason "device not responding", and their
+  functions don't run;
+- its properties are not checked, so nothing of it is sent until it is back.
 
 When the device is back, each signal of it that reports on change is sent again at the next
-chance. Values your sketch pushes itself, such as state channels, are not: fetch them from the
-device and send them again, since they may have changed meanwhile.
+chance. Its properties are not: fetch them from the device and send them again with
+`writeProperty()`, since the host heard nothing of them meanwhile.
 
 Both calls may be made on every poll; a call that changes nothing does nothing. Decide in your
 sketch what counts as missing: one missed reply, or several in a row.

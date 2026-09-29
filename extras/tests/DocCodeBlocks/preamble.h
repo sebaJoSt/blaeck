@@ -64,20 +64,25 @@ inline void readAllSensors() {}
 // Stands in for a real clock, for the BLAECK_UNIX timestamp block.
 inline unsigned long long unixMicros() { return 0; }
 
-// Reports a value as text, for the withOwnState() getter form.
-inline const char *offsetText()
-{
-  static char buf[12];
-  device.toText(Offset, 1, buf, sizeof(buf));
-  return buf;
-}
+// --- Inputs and sensors ---
+float setpoint = 21.0f;
+float amplitude = 1.0f;
+float temperature = 20.0f;
+float energy = 0.0f;
+bool enabled = true;
+bool doorOpen = false;
+byte mode = 0;
+byte stateIndex = 0;
+char label[33] = "lab-heater";
+char token[33] = "";
+unsigned long uptime = 0;
+unsigned long buildNumber = 1;
+unsigned long beat = 0;
+float output = 0.0f;
 
-// Work a value out when it is wanted, for the withStateValue() forms.
-inline float efficiency() { return 0.5f; }
+// Work a value out when it is wanted, for the addSensor() function forms.
 inline bool isRunning() { return true; }
-
-// --- A signal a switch command can mirror ---
-bool ledState = false;
+inline const char *statusText() { return "ok"; }
 
 // --- A second board, for the addDevice() and device-handle blocks ---
 BlaeckDeviceRef pump;
@@ -92,11 +97,6 @@ struct
   unsigned long uptimeMs;
 } reading = {0};
 
-// Declared, not defined: a @code block on writeCommandState() shows this handler in
-// full, and the extractor emits it at file scope. Blocks are emitted in header order,
-// so one using the name earlier needs it declared here first.
-void onSetOffset(const char *command, const char *const *params, byte paramCount);
-
 // --- Handlers, so a command example has something to point at ---
 inline void onSetFreq(const char *command, const char *const *params, byte paramCount) {}
 inline void onSetAmp(const char *command, const char *const *params, byte paramCount) {}
@@ -105,6 +105,7 @@ inline void onSetEnable(const char *command, const char *const *params, byte par
 inline void onStatus(const char *command, const char *const *params, byte paramCount) {}
 inline void onLED(const char *command, const char *const *params, byte paramCount) {}
 inline void onReboot(const char *command, const char *const *params, byte paramCount) {}
+inline void onFactoryReset(const char *command, const char *const *params, byte paramCount) {}
 inline void onSetLabel(const char *command, const char *const *params, byte paramCount) {}
 inline void onSetApiKey(const char *command, const char *const *params, byte paramCount) {}
 inline void onSetTemp(const char *command, const char *const *params, byte paramCount) {}

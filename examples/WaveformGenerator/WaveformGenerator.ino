@@ -5,55 +5,50 @@
   MQTT broker -> Home Assistant (MQTT client and dashboard).
 
   One fully controllable waveform, driven entirely over MQTT. The device describes what it
-  exposes - its signals, controls, state channels and events - and Loggbok turns that into Home
+  exposes - its inputs, sensors, buttons and events - and Loggbok turns that into Home
   Assistant MQTT Discovery entities, so a dashboard comes from the sketch rather than being
   built by hand.
 
   Log fast enough to resolve the wave: at the default 1 Hz, a 20 ms interval gives 50 points
   per cycle. Sample slower than that and Output aliases into a waveform the device never made.
 
-  Signals, state channels and events are three different jobs:
-    signal   a value that is sampled and logged       -> Output, Frequency, Annotation
-    state    what a control is set to, not logged     -> Amplitude, Wave, "running Sine @ 1.00 Hz"
-    event    a discrete event from a fixed list       -> idle_warning, resumed
+  Four kinds of thing, each for its own job:
+    signal   a value sampled and logged                -> Output, Frequency, Annotation
+    input    a value a host sets and sees back          -> Frequency, Amplitude, Offset, ...
+    sensor   a value a host only sees                   -> Output, Uptime, Status
+    event    a moment from a fixed list                 -> idle_warning, resumed
 
-  Controls (shown under their display name, sent as their command name):
-    SET_FREQ    number  0..2 Hz, step 0.01              "Frequency"       state: Frequency signal
-    SET_AMP     number  0..100, step 0.1                "Amplitude"       state: own channel
-    SET_OFFSET  number  -100..100, step 0.1             "Offset"          state: own channel
-    SET_WAVE    select  Sine/Square/Triangle/Sawtooth   "Waveform"        state: own channel
-    SET_ENABLE  switch  off -> Output = Offset          "Output enabled"  state: own channel
-    SET_LABEL   text    max 32 bytes, config category   "Device label"    state: own channel,
-                and the name the status line reports under
-    SET_ANNOTATION text max 24 bytes                    "Annotation"      state: Annotation signal
-    STATUS      button  writes the StatusOnDemand channel   "Request status"
+  Inputs (shown under their display name, set by their name):
+    Frequency      number  0..2 Hz, step 0.01, a typed box
+    Amplitude      number  0..100, step 0.1, a slider
+    Offset         number  -100..100, step 0.1
+    Waveform       select  Sine/Square/Triangle/Sawtooth
+    OutputEnabled  switch  off -> Output = Offset          "Output enabled"
+    DeviceLabel    text    max 32 bytes, config category  "Device label", and the name the
+                           status line reports under
+    Annotation     text    max 24 bytes, logged with every row through its signal
+  A button:
+    STATUS         fills StatusOnDemand                   "Request status"
 
-  Signals that describe themselves (Frequency declares nothing, and costs nothing):
-    Output      measurement, 3 decimals, mdi:sine-wave, shown as "Output" while the column
-                it is logged to stays "Output [V]"
-    Annotation  free text, logged with every row - what SET_ANNOTATION wrote
+  Frequency and Annotation are signals as well, on the same variables: an input shows and sets
+  the value, the signal logs it.
 
-  Shown but never logged (state channels):
-    Uptime      seconds since boot, which Home Assistant may show in minutes or hours instead
-    Status      the same line every 10 s; StatusOnDemand, the same on the STATUS button
+  --- HOW AN INPUT GETS ITS VALUE BACK ---
 
-  --- HOW A CONTROL GETS ITS VALUE BACK ---
-
-  Sending a value is a request, not a fact: it can be clamped, rejected, lost on the way, or
-  replaced by the device on its next boot. So every control reports its state back, and what a
-  dashboard shows is the device's value rather than its own guess.
+  Sending a value is a request, not a fact: it can be refused, lost on the way, or replaced by
+  the device on its next boot. So the device sends every input back, and what a dashboard shows
+  is the device's value rather than its own guess.
 
    Home Assistant          MQTT broker           Loggbok         this sketch
           |                     |                   |                 |
-          | .../_cmd/SET_AMP    |      "40"         | <SET_AMP,40>    |
-  command |-------------------->|------------------>|---------------->|  onSetAmp()
-          |                     |                   |                 |    Amplitude = 40
-          | ../_state/Amplitude |      "40.00"      |  0x95 State     |
-    state |<--------------------|<------------------|<----------------|  writeCommandState(command)
+          | .../_cmd/Amplitude  |      "40"         | <Amplitude,40>  |  checked against
+  command |-------------------->|------------------>|---------------->|  0..100, stored in
+          |                     |                   |                 |  amplitude
+          | ../_state/Amplitude |      "40.00"      |  0x95 Property  |
+    state |<--------------------|<------------------|<----------------|  sent at once
 
-  That is the usual shape: the command owns a state channel and reports on it. SET_FREQ points
-  at the Frequency signal instead, so its value is logged - one control that way, so both are
-  shown in the example here.
+  The loop only reads the variables. The one callback, onDeviceLabel(), exists because the
+  label is used right away.
 
   Leave USE_TCP at 0 for Serial, or set it to 1 for TCP. Connect Loggbok to the
   serial port at 115200 baud, or to the printed network address on TCP port 23.
@@ -77,45 +72,33 @@ NetworkSetup::Server server(23);
 
 Blaeck device;
 
-//---PUBLISHED AS SIGNALS, AND SO LOGGED
-// Signals retain pointers to these variables, so keep them alive for the device's lifetime.
-float Output = 0.0;
-float Frequency = 1.0; // [Hz]
-char Annotation[25] = ""; // "swapped probe", "run 3 after warm-up"
-
-//---PUBLISHED AS A STATE CHANNEL, AND SO NOT LOGGED
-unsigned long Uptime = 0; // [s], about the board rather than the wave
-
-//---PUBLISHED AS THEIR COMMANDS' OWN STATE, AND SO NOT LOGGED
-float Amplitude = 1.0;
-float Offset = 0.0;
-// The wave, as its position in the SET_WAVE option list: the handler is handed that index,
-// the state reports the name it stands for, so these and withOptions() below must stay in step.
+// The library keeps pointers to these, so they live for the whole run.
+float output = 0.0f;
+float frequency = 1.0f;     // [Hz]
+float amplitude = 1.0f;
+float offset = 0.0f;
+// The wave, as its position in the Waveform options: enum and options must stay in step.
 enum Wave : byte { Sine, Square, Triangle, Sawtooth };
 byte waveIndex = Sine;
-bool Enabled = true;
-char DeviceLabel[33] = "wave-gen"; // free-text label set via SET_LABEL
+bool enabled = true;
+char deviceLabel[33] = "wave-gen";
+char annotation[25] = "";   // "swapped probe", "run 3 after warm-up"
 
-// The step each number control declares
-const float FreqStep = 0.01f;  // Hz
-const float AmpStep = 0.1f;
-const float OffsetStep = 0.1f;
+unsigned long uptime = 0;   // [s]
+char status[80] = "";
+char statusOnDemand[80] = "";
 
 //---GENERATOR STATE (never leaves the sketch)
 float phase = 0.0f; // normalized phase 0..1
 unsigned long lastMicros = 0;
 
-// The handle addSignal() returns, kept so the icon can be changed after setup() - see
-// ShowWaveInIcon()
-BlaeckNumericSignalRef OutputSignal;
+// The handle addSensor() returns, kept so the icon can follow the wave - see showWaveInIcon().
+BlaeckNumberPropertyRef outputSensor;
 
 void setup()
 {
   Serial.begin(115200);
 
-  // Sizing every table the sketch fills, so nothing is left to a default: three signals, eight
-  // commands, eight state channels - three declared here and five by the commands'
-  // withOwnState - and one event channel. Every one of these calls is optional.
 #if USE_TCP
   networkBegin(23);
   server.begin();
@@ -128,79 +111,62 @@ void setup()
   device.DeviceName = HOST_NAME;
   device.DeviceFWVersion = "1.0";
 
-  // Everything after addSignal() is optional, and each call changes how Home Assistant shows it.
-  OutputSignal = device.addSignal(F("Output [V]"), &Output)
-                     .withDisplayName(F("Output"))
+  // Logged: a column each.
+  device.addSignal(F("Output [V]"), &output);
+  device.addSignal(F("Frequency"), &frequency);
+  device.addSignal(F("Annotation"), annotation);
+
+  // Set by a host. A value is checked against the range and stored on the step before the
+  // variable changes; anything else is refused.
+  device.addNumberInput(F("Frequency"), &frequency)
+      .withRange(0.0f, 2.0f, 0.01f)
+      .withUnit(F("Hz"))
+      .withMode(BLAECK_NUMBER_MODE_BOX);
+  device.addNumberInput(F("Amplitude"), &amplitude)
+      .withRange(0.0f, 100.0f, 0.1f)
+      .withMode(BLAECK_NUMBER_MODE_SLIDER);
+  device.addNumberInput(F("Offset"), &offset)
+      .withRange(-100.0f, 100.0f, 0.1f);
+  device.addSelect(F("Waveform"), &waveIndex, F("Sine,Square,Triangle,Sawtooth"))
+      .withIcon(F("mdi:waveform"));
+  device.addSwitch(F("OutputEnabled"), &enabled)
+      .withDisplayName(F("Output enabled"));
+  device.addTextInput(F("DeviceLabel"), deviceLabel, sizeof(deviceLabel), onDeviceLabel)
+      .withDisplayName(F("Device label"))
+      .withIcon(F("mdi:tag"))
+      .config();
+  device.addTextInput(F("Annotation"), annotation, sizeof(annotation));
+  device.onButtonCommand("STATUS", onStatus)
+      .withDisplayName(F("Request status"))
+      .diagnostic();
+
+  // Shown by a host, never set. Output changes all the time, so at most twice a second.
+  outputSensor = device.addSensor(F("Output"), &output)
                      .withUnit(F("V"))
                      .withDeviceClass(F("voltage"))
                      .withStateClass(BLAECK_STATE_CLASS_MEASUREMENT)
                      .withDisplayPrecision(3)
-                     .withIcon(F("mdi:sine-wave"));
-
-  device.addSignal(F("Frequency"), &Frequency);
-
-  // A string signal: logged like any other, one text column in the table. Every data frame
-  // carries it, so keep the buffer as small as the note needs to be.
-  device.addSignal(F("Annotation"), Annotation)
-      .withIcon(F("mdi:note-text"));
-
-  device.onNumberCommand("SET_FREQ", onSetFreq)
-      .withRange(0.0f, 2.0f, FreqStep)
-      .withUnit(F("Hz"))
-      .withDisplayName(F("Frequency"))
-      .withStateFromSignal(F("Frequency"))
-      .withMode(BLAECK_NUMBER_MODE_BOX);
-  device.onNumberCommand("SET_AMP", onSetAmp)
-      .withRange(0.0f, 100.0f, AmpStep)
-      .withDisplayName(F("Amplitude"))
-      .withMode(BLAECK_NUMBER_MODE_SLIDER)
-      .withOwnState(F("Amplitude"), &Amplitude);
-  device.onNumberCommand("SET_OFFSET", onSetOffset)
-      .withRange(-100.0f, 100.0f, OffsetStep)
-      .withDisplayName(F("Offset"))
-      .withOwnState(F("Offset"), &Offset);
-  // A select takes no device class - Home Assistant has none for it - so an icon is the only
-  // thing this control can say about how it should look.
-  device.onSelectCommand("SET_WAVE", onSetWave)
-      .withOptions(F("Sine,Square,Triangle,Sawtooth"))
-      .withDisplayName(F("Waveform"))
-      .withIcon(F("mdi:waveform"))
-      .withOwnState(F("Wave"), &waveIndex);
-  device.onSwitchCommand("SET_ENABLE", onSetEnable)
-      .withDisplayName(F("Output enabled"))
-      .withOwnState(F("Enabled"), &Enabled);
-  // Loggbok percent-encodes the value; the device decodes it and enforces the 32-byte max.
-  device.onTextCommand("SET_LABEL", onSetLabel)
-      .withMaxLength(sizeof(DeviceLabel) - 1)
-      .withDisplayName(F("Device label"))
-      .withIcon(F("mdi:tag"))
-      .withOwnState(F("DeviceLabel"), DeviceLabel)
-      .config();
-  // The pair: SET_LABEL keeps its value on a state channel, SET_ANNOTATION on a signal, so only the
-  // note reaches the table. Nothing else about the two calls differs.
-  device.onTextCommand("SET_ANNOTATION", onSetAnnotation)
-      .withMaxLength(sizeof(Annotation) - 1)
-      .withDisplayName(F("Annotation"))
-      .withStateFromSignal(F("Annotation"));
-  device.onButtonCommand("STATUS", onStatus)
-      .withDisplayName(F("Request status"))
-      .diagnostic();
-  // The device class is what lets Home Assistant offer minutes or hours - without one the unit is only a label.
-  device.addStateChannel(F("Uptime"), &Uptime)
+                     .withIcon(F("mdi:sine-wave"))
+                     .writeOnChange(0.001, 500);
+  // The device class is what lets Home Assistant offer minutes or hours - without one the
+  // unit is only a label.
+  device.addSensor(F("Uptime"), &uptime)
       .withUnit(F("s"))
       .withDeviceClass(F("duration"))
-      .withStateClass(BLAECK_STATE_CLASS_MEASUREMENT)
+      .diagnostic()
+      .writeOnChange(0, 10000);
+  device.addSensor(F("Status"), status, sizeof(status))
+      .withIcon(F("mdi:pulse"))
       .diagnostic();
-
-  device.addStateChannel(F("Status"), BlaeckText).withIcon(F("mdi:pulse")).diagnostic();
-  device.addStateChannel(F("StatusOnDemand"), BlaeckText).withIcon(F("mdi:message-text")).diagnostic();
+  device.addSensor(F("StatusOnDemand"), statusOnDemand, sizeof(statusOnDemand))
+      .withIcon(F("mdi:message-text"))
+      .diagnostic();
 
   // addEventType() does the same one name at a time, for a list built conditionally.
   device.addEventChannel(F("Activity"), F("idle_warning,resumed"))
       .withIcon(F("mdi:bell-alert"));
 
-  // Silent unless a registration was rejected; prints counts and table capacities.
-  // The debug stream gives details, including invalid declarations or insufficient memory.
+  // Silent unless a registration was rejected. The debug stream gives details.
   device.printRejections(&Serial);
 
   lastMicros = micros();
@@ -208,23 +174,23 @@ void setup()
 
 void loop()
 {
-  Uptime = millis() / 1000;
-  UpdateWaveform();
-  ShowWaveInIcon();
+  uptime = millis() / 1000;
+  updateWaveform();
+  showWaveInIcon();
+  statusEvery10s();
+  checkActivity();
   device.tick();
 #if USE_TCP
   networkLoop();
 #endif
-  StatusEvery10s();
-  CheckActivity();
 }
 
-// Gives the Output signal the icon of the wave it is currently producing, so the corresponding
-// Home Assistant entity changes with the control rather than staying as setup() configured it.
+// Gives the Output sensor the icon of the wave it is currently producing, so the Home
+// Assistant entity changes with the input rather than staying as setup() configured it.
 //
-// Safe to call every pass: setting an icon that is already set does nothing, so the signal
-// config goes out once per waveform change and not in between.
-void ShowWaveInIcon()
+// Safe to call every pass: setting an icon that is already set does nothing, so the entity
+// list goes out once per waveform change and not in between.
+void showWaveInIcon()
 {
   const __FlashStringHelper *icon;
   switch (waveIndex)
@@ -235,23 +201,23 @@ void ShowWaveInIcon()
   default:       icon = F("mdi:sine-wave"); break;
   }
 
-  OutputSignal.withIcon(icon);
+  outputSensor.withIcon(icon);
 }
 
-void UpdateWaveform()
+void updateWaveform()
 {
   unsigned long now = micros();
   float dt = (now - lastMicros) * 1e-6f; // [s]
   lastMicros = now;
 
-  if (!Enabled)
+  if (!enabled)
   {
-    Output = Offset;
+    output = offset;
     return;
   }
 
   // Advance and wrap the normalized phase (0..1).
-  phase += Frequency * dt;
+  phase += frequency * dt;
   phase -= floorf(phase);
 
   float w = 0.0f;
@@ -271,10 +237,10 @@ void UpdateWaveform()
     break;
   }
 
-  Output = Offset + Amplitude * w;
+  output = offset + amplitude * w;
 }
 
-void StatusEvery10s()
+void statusEvery10s()
 {
   static unsigned long lastStatusMs = 0;
   static bool first = true;
@@ -284,36 +250,28 @@ void StatusEvery10s()
 
   first = false;
   lastStatusMs = millis();
-  WriteStatus(F("Status"));
-
-  device.writeState(F("Uptime"));
+  writeStatus(status, sizeof(status));
 }
 
-// The same status line on two channels, each driving its own Home Assistant sensor:
-// every 10 s on "Status", and on the STATUS button for "StatusOnDemand".
-void WriteStatus(const __FlashStringHelper *channel)
+// The status line, into one of the two text sensors. tick() sends it when it changes.
+void writeStatus(char *out, size_t size)
 {
   char freqText[10] = ""; // fits "2.00"
-  device.toText(Frequency, 2, freqText, sizeof(freqText));
+  device.toText(frequency, 2, freqText, sizeof(freqText));
   char waveName[12] = ""; // fits the longest option, "Triangle"
-  device.getSelectOptionNameAt("SET_WAVE", waveIndex, waveName, sizeof(waveName));
-  const char *runState = Enabled ? "running" : "stopped";
-
-  // DeviceLabel is what SET_LABEL wrote. Reading it here is the whole point of storing it:
-  // a control that only fills a variable no one looks at teaches the call and nothing else.
-  char text[80]; // 60 at most: a 32-byte DeviceLabel, "stopped Triangle @ 2.00 Hz"
-  snprintf(text, sizeof(text), "%s: %s %s @ %s Hz", DeviceLabel, runState, waveName, freqText);
-  device.writeState(channel, text);
+  device.getSelectOptionNameAt(F("Waveform"), waveIndex, waveName, sizeof(waveName));
+  const char *runState = enabled ? "running" : "stopped";
+  snprintf(out, size, "%s: %s %s @ %s Hz", deviceLabel, runState, waveName, freqText);
 }
 
 // Warns once per idle stretch (>=5s -> "idle_warning"), and only reports "resumed" if a warning
-// was raised. Idle means SET_ENABLE is off.
-void CheckActivity()
+// was raised. Idle means OutputEnabled is off.
+void checkActivity()
 {
   static unsigned long idleSinceMs = 0;
   static bool warned = false;
 
-  if (!Enabled)
+  if (!enabled)
   {
     if (idleSinceMs == 0)
       idleSinceMs = millis();
@@ -333,68 +291,13 @@ void CheckActivity()
   warned = false;
 }
 
-// AVR's atof() is not correctly rounded: "0.9" can arrive as 0.90000004 and reach a dashboard.
-// Snapping to the step fixes it; multiply then divide, as 0.1f is a shade over a tenth.
-static float SnapToStep(const char *text, float step)
+// A new label shows in the status line at once, rather than with the next 10 s update.
+void onDeviceLabel()
 {
-  const float stepsPerUnit = 1.0f / step;
-  return roundf((float)atof(text) * stepsPerUnit) / stepsPerUnit;
-}
-
-void onSetFreq(const char *command, const char *const *params, byte paramCount)
-{
-  Frequency = SnapToStep(params[0], FreqStep);
-  // Reports by writing the signal it is backed by, so this value is logged. The others carry
-  // their own state instead, which is not; see onSetAmp().
-  device.write("Frequency", Frequency);
-}
-
-void onSetAmp(const char *command, const char *const *params, byte paramCount)
-{
-  Amplitude = SnapToStep(params[0], AmpStep);
-  // Pushing is what makes the new value visible at once - the channel is otherwise only read
-  // when Loggbok polls the catalog.
-  device.writeCommandState(command);
-}
-
-void onSetOffset(const char *command, const char *const *params, byte paramCount)
-{
-  Offset = SnapToStep(params[0], OffsetStep);
-  device.writeCommandState(command);
-}
-
-void onSetWave(const char *command, const char *const *params, byte paramCount)
-{
-  // params[0] is the selected option index: Home Assistant sends the selection to Loggbok,
-  // which forwards it to the device.
-  waveIndex = (byte)atoi(params[0]);
-  device.writeCommandState(command);
-}
-
-void onSetEnable(const char *command, const char *const *params, byte paramCount)
-{
-  // The library has already rejected anything that is not 0 or 1.
-  Enabled = atoi(params[0]) == 1;
-  device.writeCommandState(command);
-}
-
-void onSetLabel(const char *command, const char *const *params, byte paramCount)
-{
-  // Never longer than withMaxLength(sizeof(DeviceLabel) - 1) above; empty clears the label.
-  strcpy(DeviceLabel, params[0]);
-  device.writeCommandState(command);
-}
-
-void onSetAnnotation(const char *command, const char *const *params, byte paramCount)
-{
-  // Arrives decoded: Loggbok percent-encodes the value, so a note may hold the characters the
-  // frame itself is built from - a comma, an angle bracket, a percent sign.
-  strcpy(Annotation, params[0]);
-  // Backed by a signal, like SET_FREQ, so writing it is what reports the value back.
-  device.write("Annotation", Annotation);
+  writeStatus(status, sizeof(status));
 }
 
 void onStatus(const char *command, const char *const *params, byte paramCount)
 {
-  WriteStatus(F("StatusOnDemand"));
+  writeStatus(statusOnDemand, sizeof(statusOnDemand));
 }

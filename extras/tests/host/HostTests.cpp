@@ -215,7 +215,7 @@ public:
 class ReportingProbe : public Blaeck
 {
 public:
-  const SignalReporting *reporting(int index) const { return Signals[index].Reporting; }
+  const ReportingState *reporting(int index) const { return Signals[index].Reporting; }
 };
 
 class ConfigurationProbe : public Blaeck
@@ -225,10 +225,9 @@ public:
   const SignalMeta &signalMeta(int index) const { return *Signals[index].Meta; }
 #endif
   const blaeck::blaeck_detail::CommandHandlerEntry &commandMeta(int index) const { return _commandHandlers[index]; }
-#if BLAECK_ENABLE_STATE_CHANNELS
-  const blaeck::blaeck_detail::StateChannelEntry &stateMeta(int index) const { return _stateChannels[index]; }
-  int stateIndex(blaeck::BlaeckString name) const { return _findStateChannel(0, name); }
-#endif
+  const blaeck::blaeck_detail::PropertyEntry &propertyMeta(int index) const { return _properties[index]; }
+  int propertyIndex(blaeck::BlaeckString name) const { return _findProperty(name); }
+  void sendEntities() { writeEntities(0); }
 #if BLAECK_ENABLE_EVENTS
   const blaeck::blaeck_detail::EventChannelEntry &eventMeta(int index) const { return _eventChannels[index]; }
   const blaeck::blaeck_detail::EventTypeEntry &eventType(int index) const { return _eventTypes[index]; }
@@ -240,9 +239,7 @@ public:
 #if BLAECK_ENABLE_SIGNAL_META
     _signalConfigDirty = false;
 #endif
-#if BLAECK_ENABLE_STATE_CHANNELS
-    _stateCatalogDirty = false;
-#endif
+    _entityCatalogDirty = false;
 #if BLAECK_ENABLE_EVENTS
     _eventCatalogDirty = false;
 #endif
@@ -253,9 +250,7 @@ public:
 #if BLAECK_ENABLE_SIGNAL_META
     dirty |= _signalConfigDirty;
 #endif
-#if BLAECK_ENABLE_STATE_CHANNELS
-    dirty |= _stateCatalogDirty;
-#endif
+    dirty |= _entityCatalogDirty;
 #if BLAECK_ENABLE_EVENTS
     dirty |= _eventCatalogDirty;
 #endif
@@ -642,7 +637,7 @@ static void diagnosticMessages()
     {
     case 0: device.addSignal(F("Value"), &value); break;
     case 1: device.onCommand("COMMAND", handler); break;
-    case 2: device.addStateChannel(F("Value"), &value); break;
+    case 2: device.addSensor(F("Value"), &value); break;
     case 3:
     case 4: device.addEventChannel(F("Activity"), F("started")); break;
     }
@@ -1164,7 +1159,7 @@ static void flashNamesAndFailures()
   device.write(F("Text"), F("Longer flash text"));
   failAfter = -1;
   expectData(stream, {4, -1}, {});
-  assert(debug.text.find("No RAM for signal text snapshot") != std::string::npos);
+  assert(debug.text.find("No RAM for a text snapshot") != std::string::npos);
   device.writeIfDue();
   auto frames = takeData(stream.data.output, {4, -1});
   assert(frames.size() == 1 && frames[0].values[0] == "Longer flash text");
@@ -1181,21 +1176,6 @@ static void flashNamesAndFailures()
   device.write(1, longText);
   frames = takeData(stream.data.output, {4, -1});
   assert(frames.size() == 1 && frames[0].values[0] == std::string(255, 'a'));
-#if BLAECK_ENABLE_STATE_CHANNELS
-  device.addStateChannel(F("Long"), BlaeckText);
-  debug.text.clear();
-  device.writeState(F("Long"), longText);
-  auto state = commandFramePayload(stream.data.output, 0x95, 0);
-  assert(state.size() == 260 && static_cast<byte>(state[4]) == 255);
-  assert(state.substr(5) == std::string(255, 'a'));
-  assert(debug.text.find("State text truncated") != std::string::npos);
-  stream.data.output.clear();
-  debug.text.clear();
-  device.writeState("Long", longText);
-  state = commandFramePayload(stream.data.output, 0x95, 0);
-  assert(state.substr(5) == std::string(255, 'a'));
-  assert(debug.text.empty()); // Truncation is still warned only once.
-#endif
 }
 
 template<class T>
@@ -1210,101 +1190,9 @@ static void flashNumericWrites()
   assert(value == 1);
   device.write(F("Value"), static_cast<T>(0), 123);
   assert(value == 0);
-  device.addStateChannel(F("State"), &value);
-  device.writeState(F("State"), static_cast<T>(1));
-#if BLAECK_ENABLE_STATE_CHANNELS
-  assert(value == 1);
-#else
-  assert(value == 0);
-#endif
 }
 
 static const char *flashTestGetter() { return "Getter"; }
-
-static void flashStateText(bool buffered)
-{
-  FakeStream stream;
-  Capture debug;
-  Blaeck device;
-  device.begin(stream).withDebugStream(&debug);
-  device.setBufferedWrites(buffered);
-  device.addStateChannel("Bound", F("Initial"));
-  device.addStateChannel(F("FlashBound"), F("Initial"));
-  device.addStateChannel(F("Pushed"), BlaeckText);
-  device.addStateChannel(F("Getter"), BlaeckText).withStateText(flashTestGetter);
-  device.addStateChannel(F("LongStateChannelNameThatExceedsTheNormalRamNameLimit"), F("Long"));
-  float number = 0;
-  device.addStateChannel(F("Numeric"), &number);
-  const auto expectText = [&](const std::string &value)
-  {
-#if BLAECK_ENABLE_STATE_CHANNELS
-    const auto payload = commandFramePayload(stream.data.output, 0x95, 0);
-    assert(payload.size() == 5 + value.size());
-    assert(static_cast<byte>(payload[4]) == value.size());
-    assert(payload.substr(5) == value);
-#else
-    assert(stream.data.output.empty());
-    (void)value;
-#endif
-    stream.data.output.clear();
-  };
-  device.writeState(F("Bound"));
-  expectText("Initial");
-  device.writeState("FlashBound");
-  expectText("Initial");
-  device.writeState(F("LongStateChannelNameThatExceedsTheNormalRamNameLimit"));
-  expectText("Long");
-  device.writeState(F("Getter"));
-  expectText("Getter");
-  device.writeState("Pushed", F("Flash"));
-  expectText("Flash");
-  device.writeState(F("Pushed"), F("Flash"));
-  expectText("Flash");
-  char ram[] = "RAM";
-  device.writeState(F("Pushed"), ram);
-  expectText("RAM");
-  device.writeState(F("Pushed")); // A push does not bind or retain a value.
-  assert(stream.data.output.empty());
-  device.writeState("Pushed", nullptr);
-  device.writeState(F("Pushed"), nullptr);
-  assert(stream.data.output.empty());
-  device.writeState(F("Pushed"), F(""));
-  expectText("");
-  device.writeState(F("Bound"), F("Cannot replace bound text"));
-  device.writeState(F("Getter"), F("Cannot replace a getter"));
-  assert(stream.data.output.empty());
-  device.addStateChannel(F("Bound"), ram);
-  device.writeState("Bound");
-  expectText("RAM");
-  device.addStateChannel("Bound", F("Again"));
-  device.writeState(F("Bound"));
-  expectText("Again");
-  device.writeState(F("Numeric"), 12.5);
-#if BLAECK_ENABLE_STATE_CHANNELS
-  assert(number == 12.5f);
-  stream.data.output.clear();
-  device.writeStateChannels();
-  const auto catalog = commandFramePayload(stream.data.output, 0x90, 0);
-  assert(catalog.find("Again") != std::string::npos && catalog.find("Initial") != std::string::npos);
-  stream.data.output.clear();
-#endif
-  device.onTextCommand("SET_TEXT", onPing).withOwnState(F("Bound"), ram);
-  device.writeCommandState(F("SET_TEXT"));
-#if BLAECK_ENABLE_STATE_CHANNELS && BLAECK_ENABLE_COMMAND_META
-  expectText("RAM"); // Taking over a flash-bound slot resets its storage flag.
-  device.writeCommandState("SET_TEXT");
-  expectText("RAM");
-#else
-  assert(stream.data.output.empty());
-#endif
-  device.writeCommandState(nullptr);
-  device.writeCommandState(F("Missing"));
-  device.clearAllCommandHandlers();
-  device.clearAllStateChannels();
-  device.addStateChannel(F("Reused"), F("New"));
-  device.writeState(F("Reused"));
-  expectText("New");
-}
 
 static void storedConfigurationStrings()
 {
@@ -1346,35 +1234,33 @@ static void ordinaryConfiguration(bool buffered)
   using blaeck::BlaeckString;
   FakeStream stream;
   ConfigurationProbe device;
-  device.begin(stream)
-      ;
+  device.begin(stream);
   device.setBufferedWrites(buffered);
   float value = 1;
   byte selected = 1;
   char unit[] = "V", icon[] = "mdi:pulse", label[] = "Voltage";
-  char options[] = "Low,High", ownName[] = "Selected", signalName[] = "Value";
+  char options[] = "Low,High";
   char payload[] = "1,2", eventTypes[] = "start,stop", extraType[] = "reset";
   char deviceClass[] = "voltage";
   auto signal = device.addSignal("Value", &value);
   signal.withUnit(unit).withDeviceClass(deviceClass).withIcon(icon).withDisplayName(label);
   device.addSignal("Level", "Low").withDeviceClass("enum").withOptions(options);
-  auto number = device.onNumberCommand("SET", onPing).withRange(0, 10, 1);
-  number.withUnit(unit).withDeviceClass(deviceClass).withIcon(icon).withDisplayName(label)
-      .withStateFromSignal(signalName);
-  auto select = device.onSelectCommand("SELECT", onPing).withOptions(options);
-  select.withOwnState(ownName, &selected);
+  auto number = device.addNumberInput("SET", &value).withRange(0, 10, 1);
+  number.withUnit(unit).withDeviceClass(deviceClass).withIcon(icon).withDisplayName(label);
+  device.addSelect("SELECT", &selected, options);
   device.onButtonCommand("PRESS", onPing).withPressPayload(payload).withIcon(icon);
-  device.onTextCommand("TEXT", onPing).withOwnState("Getter", flashTestGetter);
-  auto state = device.addStateChannel("Voltage", &value);
-  state.withUnit(unit).withDeviceClass(deviceClass).withIcon(icon);
-  device.addStateChannel("LevelState", "Low").withDeviceClass("enum").withOptions(options);
+  device.addSensor("Getter", flashTestGetter);
+  auto sensor = device.addSensor("Voltage", &value);
+  sensor.withUnit(unit).withDeviceClass(deviceClass).withIcon(icon);
+  device.addSensor("LevelState", &selected, options).withDeviceClass("enum");
   auto event = device.addEventChannel("Action", eventTypes);
   event.withIcon(icon).withDeviceClass("button");
   const bool added = device.addEventType("Action", extraType);
   assert(added == bool(BLAECK_ENABLE_EVENTS));
+  assert(!device.hasRejections());
 
-  unit[0] = icon[0] = label[0] = options[0] = ownName[0] = signalName[0] =
-      payload[0] = eventTypes[0] = extraType[0] = deviceClass[0] = 'X';
+  unit[0] = icon[0] = label[0] = options[0] = payload[0] = eventTypes[0] = extraType[0] =
+      deviceClass[0] = 'X';
   device.writeSignalConfig();
 #if BLAECK_ENABLE_SIGNAL_META
   for (const char *text : {"V", "voltage", "mdi:pulse", "Voltage", "Low,High"})
@@ -1383,21 +1269,21 @@ static void ordinaryConfiguration(bool buffered)
   stream.data.output.clear();
   device.writeCommands();
 #if BLAECK_ENABLE_COMMAND_META
-  for (const char *text : {"V", "voltage", "mdi:pulse", "Voltage", "Low,High", "Value", "Selected", "1,2", "Getter"})
-    assert(stream.data.output.find(std::string(text) + '\0') != std::string::npos ||
-           (!BLAECK_ENABLE_STATE_CHANNELS && (std::string(text) == "Selected" || std::string(text) == "Getter")));
+  for (const char *text : {"PRESS", "mdi:pulse", "1,2"})
+    assert(stream.data.output.find(std::string(text) + '\0') != std::string::npos);
+#endif
+  stream.data.output.clear();
+  device.sendEntities();
+  for (const char *text : {"SET", "V", "voltage", "mdi:pulse", "Voltage", "Low,High", "SELECT", "Getter"})
+    assert(stream.data.output.find(std::string(text) + '\0') != std::string::npos);
   char option[8];
   assert(device.getSelectOptionNameAt("SELECT", 1, option, sizeof(option)));
   assert(strcmp(option, "High") == 0);
+  assert(device.getSelectOptionNameAt(F("LevelState"), 0, option, sizeof(option)));
+  assert(strcmp(option, "Low") == 0);
   assert(device.getSelectOptionIndexOf("SELECT", "Low") == 0);
   assert(device.getSelectOptionIndexOf("SELECT", "Missing") == -1);
-#endif
-  stream.data.output.clear();
-  device.writeStateChannels();
-#if BLAECK_ENABLE_STATE_CHANNELS
-  for (const char *text : {"V", "voltage", "mdi:pulse", "Low,High"})
-    assert(stream.data.output.find(std::string(text) + '\0') != std::string::npos);
-#endif
+  assert(device.getSelectOptionIndexOf("SET", "Low") == -1);
   stream.data.output.clear();
   device.writeEventChannels();
 #if BLAECK_ENABLE_EVENTS
@@ -1416,39 +1302,28 @@ static void ordinaryConfiguration(bool buffered)
   assert(!device.addEventType(F("Action"), F("reset")));
 #endif
   stream.data.output.clear();
-#if BLAECK_ENABLE_COMMAND_META && BLAECK_ENABLE_STATE_CHANNELS
-  device.writeCommandState("SELECT");
-  assert(commandFramePayload(stream.data.output, 0x95, 0).substr(5) == "High");
-  stream.data.output.clear();
-  // Replacing the command's copy must not invalidate a channel sharing its old options.
-  device.onSelectCommand("SELECT", onPing).withOptions("New,Other");
-  assert(BlaeckString(device.stateMeta(device.stateIndex("Selected")).options) == "Low,High");
-#endif
   device.cleanCatalogs();
   const size_t beforeSame = allocations;
   signal.withUnit("V").withIcon(F("mdi:pulse"));
-  number.withUnit(F("V")).withStateFromSignal("Value");
-  state.withUnit(F("V")).withIcon("mdi:pulse");
+  number.withUnit(F("V")).withRange(0, 10, 1);
+  sensor.withUnit(F("V")).withIcon("mdi:pulse");
   event.withIcon(F("mdi:pulse"));
   assert(!device.dirtyCatalogs() && allocations == beforeSame);
   signal.withUnit("").withIcon(nullptr);
   number.withUnit(nullptr);
-  state.withUnit("").withIcon(nullptr);
+  sensor.withUnit("").withIcon(nullptr);
   event.withIcon("");
 #if BLAECK_ENABLE_SIGNAL_META
   assert(device.signalMeta(0).Unit == nullptr && device.signalMeta(0).Icon == nullptr);
 #endif
+  assert(device.propertyMeta(0).presentation->unit == nullptr);
+  assert(device.propertyMeta(3).presentation->unit == nullptr && device.propertyMeta(3).presentation->icon == nullptr);
   assert(!device.hasRejections());
   device.clearAllCommandHandlers();
-  device.clearAllStateChannels();
   device.clearAllEventChannels();
   device.clearAllSignals();
 #if BLAECK_ENABLE_COMMAND_META
-  assert(device.commandMeta(0).unit == nullptr && device.commandMeta(0).displayName == nullptr);
-  assert(device.commandMeta(2).pressPayload == nullptr);
-#endif
-#if BLAECK_ENABLE_STATE_CHANNELS
-  assert(device.stateMeta(0).options == nullptr && device.stateMeta(0).unit == nullptr);
+  assert(device.commandMeta(0).pressPayload == nullptr && device.commandMeta(0).icon == nullptr);
 #endif
 #if BLAECK_ENABLE_EVENTS
   assert(device.eventMeta(0).deviceClass == nullptr && device.eventType(0).text == nullptr);
@@ -1465,61 +1340,36 @@ static void configurationAllocationFailures()
   device.begin(stream).withDebugStream(&debug);
   float value = 0;
   auto signal = device.addSignal("Signal", &value).withUnit(F("V"));
-  auto number = device.onNumberCommand("SET", onPing).withRange(0, 10, 1)
-      .withUnit(F("V")).withStateFromSignal(F("Signal"));
-  auto state = device.addStateChannel(F("State"), &value).withUnit(F("V"));
+  auto number = device.addNumberInput("SET", &value).withRange(0, 10, 1).withUnit(F("V"));
+  auto sensor = device.addSensor(F("State"), &value).withUnit(F("V"));
   auto event = device.addEventChannel(F("Event"), F("start")).withIcon(F("mdi:pulse"));
   device.cleanCatalogs();
   const size_t before = allocations;
   failAfter = 0;
   signal.withUnit("Replacement");
-  number.withUnit("Replacement").withStateFromSignal("Other");
-  state.withUnit("Replacement");
+  number.withUnit("Replacement");
+  sensor.withUnit("Replacement");
   event.withIcon("Replacement");
   device.addEventChannel(F("Rejected"), "start,stop");
   assert(!device.addEventType("Event", "stop"));
-  number.withOwnState("RejectedState", &value);
+  device.addSensor(F("RejectedSensor"), &value);
   failAfter = -1;
   assert(!device.dirtyCatalogs());
 #if BLAECK_ENABLE_SIGNAL_META
   assert(BlaeckString(device.signalMeta(0).Unit) == "V");
 #endif
-#if BLAECK_ENABLE_COMMAND_META
-  assert(BlaeckString(device.commandMeta(0).unit) == "V");
-  assert(BlaeckString(device.commandMeta(0).stateSignal) == "Signal");
-#endif
-#if BLAECK_ENABLE_STATE_CHANNELS
-  assert(BlaeckString(device.stateMeta(0).unit) == "V");
-  assert(device.stateIndex("RejectedState") == -1);
-#endif
+  assert(BlaeckString(device.propertyMeta(0).presentation->unit) == "V");
+  assert(BlaeckString(device.propertyMeta(1).presentation->unit) == "V");
+  assert(device.propertyIndex("RejectedSensor") == -1);
 #if BLAECK_ENABLE_EVENTS
   assert(BlaeckString(device.eventMeta(0).icon) == "mdi:pulse");
   assert(device.eventIndex("Rejected") == -1);
 #endif
-  if (allocations != before)
-  {
-    assert(device.hasRejections());
-    assert(debug.text.find("No RAM for configuration text") != std::string::npos);
-    Capture rejections;
-    assert(device.printRejections(&rejections));
-    assert(rejections.text.find("configuration string updates rejected") != std::string::npos);
-  }
-#if BLAECK_ENABLE_COMMAND_META && BLAECK_ENABLE_STATE_CHANNELS
-  FakeStream freshStream;
-  ConfigurationProbe fresh;
-  fresh.begin(freshStream);
-  auto freshNumber = fresh.onNumberCommand("SET", onPing).withRange(0, 10, 1)
-      .withStateFromSignal(F("Signal"));
-  // The command name copy succeeds, but allocating the state table fails.
-  failAfter = 1;
-  freshNumber.withOwnState("RejectedState", &value);
-  failAfter = -1;
-  assert(BlaeckString(fresh.commandMeta(0).stateSignal) == "Signal");
-  assert(fresh.stateIndex("RejectedState") == -1);
-  number.withOwnState("AcceptedState", &value);
-  assert(device.stateIndex("AcceptedState") >= 0);
-  assert(BlaeckString(device.commandMeta(0).stateSignal) == "AcceptedState");
-#endif
+  assert(allocations != before || device.hasRejections());
+  assert(device.hasRejections());
+  Capture rejections;
+  assert(device.printRejections(&rejections));
+  assert(rejections.text.find("input and sensor registrations rejected") != std::string::npos);
 }
 
 static void beginOnlyOnce()
@@ -1755,21 +1605,21 @@ static void subDevices(bool buffered)
   third.addSignal(F("Lost"), &orphan).withUnit(F("V"));
   unset.addSignal("Lost", &orphan);
   unset.onCommand("LOST", handler);
-  unset.addStateChannel(F("Lost"), BlaeckText);
+  unset.addSensor(F("Lost"), &orphan);
   unset.addEventChannel(F("Lost"), F("x"));
   unset.write("Lost", 1.0f);
-  unset.writeState(F("Lost"), "x");
+  unset.writeProperty(F("Lost"));
   unset.writeEvent(F("Lost"), F("x"));
   assert(device.SignalCount == 3 && unset.findSignalIndex("Lost") == -1);
   assert(!device.hasRejectedSignals() && !device.hasRejectedCommands());
   device.addSignal(F("Orphan"), &orphan);
 
-  // A command registered through a device's handle takes its own state channel along.
-  pump.onNumberCommand("PUMP_SPEED", handler).withRange(0.0f, 100.0f, 1.0f)
-      .withOwnState(F("PumpSpeedState"), &speed);
-  pump.onSwitchCommand("PUMP_ON", handler).withOwnState(F("PumpOnState"), &pumpOn);
+  // Inputs and sensors registered through a device's handle belong to that device.
+  char pumpStatus[8] = "idle";
+  pump.addNumberInput("PUMP_SPEED", &speed).withRange(0.0f, 100.0f, 1.0f);
+  pump.addSwitch("PUMP_ON", &pumpOn);
   device.onButtonCommand("BOARD_RESET", handler);
-  pump.addStateChannel(F("PumpStatus"), BlaeckText);
+  pump.addSensor(F("PumpStatus"), pumpStatus, sizeof(pumpStatus));
   fan.addEventChannel(F("FanAlarm"), F("stall"));
 
   // The board's restart notice is a C1 for device 0.
@@ -1789,28 +1639,27 @@ static void subDevices(bool buffered)
 
   command(device, stream, "<BLAECK.WRITE_COMMANDS>");
   std::string payload = commandFramePayload(stream.data.output, 0xA0, 0);
-  assert(ownerOf(payload, "PUMP_SPEED", 2) == owner(1));
-  assert(ownerOf(payload, "PUMP_ON", 2) == owner(1));
   assert(ownerOf(payload, "BOARD_RESET", 2) == owner(0));
   stream.data.output.clear();
 
-  command(device, stream, "<BLAECK.WRITE_STATE_CHANNELS>");
+  // In the entity list, the entry kind sits between the DeviceID and the name.
+  command(device, stream, "<BLAECK.WRITE_ENTITIES>");
   payload = commandFramePayload(stream.data.output, 0x90, 0);
-  assert(ownerOf(payload, "PumpStatus") == owner(1));
-  assert(ownerOf(payload, "PumpSpeedState") == owner(1));
-  assert(ownerOf(payload, "PumpOnState") == owner(1));
+  assert(ownerOf(payload, "PUMP_SPEED", 1) == owner(1));
+  assert(ownerOf(payload, "PUMP_ON", 1) == owner(1));
+  assert(ownerOf(payload, "PumpStatus", 1) == owner(1));
   stream.data.output.clear();
 
   command(device, stream, "<BLAECK.WRITE_EVENT_CHANNELS>");
   assert(ownerOf(commandFramePayload(stream.data.output, 0x80, 0), "FanAlarm") == owner(2));
   stream.data.output.clear();
 
-  // Names are found within the handle's own device only.
-  device.writeState(F("PumpStatus"), "ok");
+  // Names are found within the handle's own device only. A 0x95 carries the property's index.
+  device.writeProperty(F("PumpStatus"));
   device.writeEvent(F("FanAlarm"), F("stall"));
   assert(stream.data.output.empty());
-  pump.writeState(F("PumpStatus"), "ok");
-  assert(commandFramePayload(stream.data.output, 0x95, 0).substr(0, 1) == owner(1));
+  pump.writeProperty(F("PumpStatus"));
+  assert(commandFramePayload(stream.data.output, 0x95, 0).substr(0, 2) == std::string("\x02\x00", 2));
   stream.data.output.clear();
   fan.writeEvent(F("FanAlarm"), F("stall"));
   assert(commandFramePayload(stream.data.output, 0x85, 0).substr(0, 1) == owner(2));
@@ -2056,22 +1905,25 @@ static void sameNamesAcrossDevices()
   assert(device.findSignalIndex("Temperature") == 0 && zoneA.findSignalIndex(F("Temperature")) == 1 &&
          zoneB.findSignalIndex("Temperature") == 2);
 
-  // The same state channel name on each; declaring it again within one device reuses its slot.
-  device.addStateChannel(F("Status"), BlaeckText);
-  zoneA.addStateChannel("Status", BlaeckText);
-  zoneA.addStateChannel(F("Status"), BlaeckText).withIcon(F("mdi:pump"));
+  // Input and sensor names are the board's, like command names: a host sets a value by name
+  // alone. A second Status is refused on any device.
+  char boardStatus[8] = "board", zoneStatus[8] = "zone";
+  device.addSensor(F("Status"), boardStatus, sizeof(boardStatus));
+  debug.text.clear();
+  zoneA.addSensor("Status", zoneStatus, sizeof(zoneStatus));
+  assert(debug.text.find("Dropped 'Status': an input or sensor has the name already.") != std::string::npos);
+  assert(device.hasRejections());
 
   // Event channels and their types are per device, too.
   device.addEventChannel(F("Alarm"), F("overheated"));
   zoneA.addEventChannel("Alarm", F("dry_run"));
   assert(zoneA.addEventType(F("Alarm"), F("blocked")));
 
-  // Command names stay unique per board, but their own state channels are per device.
   byte aSpeed = 10, bSpeed = 20;
-  zoneA.onNumberCommand("SET_A_SPEED", handler).withRange(0.0f, 100.0f, 1.0f).withOwnState(F("Speed"), &aSpeed);
-  zoneB.onNumberCommand("SET_B_SPEED", handler).withRange(0.0f, 100.0f, 1.0f).withOwnState(F("Speed"), &bSpeed);
-  assert(!device.hasRejections());
+  zoneA.addNumberInput("SpeedA", &aSpeed).withRange(0.0f, 100.0f, 1.0f);
+  zoneB.addNumberInput("SpeedB", &bSpeed).withRange(0.0f, 100.0f, 1.0f);
   assert(!zoneB.addEventType(F("Alarm"), F("blocked"))); // zone B has no Alarm
+  (void)handler;
 
   device.read();
   stream.data.output.clear();
@@ -2089,33 +1941,19 @@ static void sameNamesAcrossDevices()
   }
   stream.data.output.clear();
 
-#if BLAECK_ENABLE_STATE_CHANNELS
-  command(device, stream, "<BLAECK.WRITE_STATE_CHANNELS>");
+  command(device, stream, "<BLAECK.WRITE_ENTITIES>");
   payload = commandFramePayload(stream.data.output, 0x90, 0);
-  assert((ownersOf(payload, "Status") == std::vector<std::string>{owner(0), owner(1)}));
-  assert((ownersOf(payload, "Speed") == std::vector<std::string>{owner(1), owner(2)}));
+  assert(ownerOf(payload, "Status", 1) == owner(0));
+  assert(ownerOf(payload, "SpeedA", 1) == owner(1) && ownerOf(payload, "SpeedB", 1) == owner(2));
   stream.data.output.clear();
 
-  // Each handle reaches its own channel: the 95 frame carries owner and channel index.
-  device.writeState(F("Status"), "board");
-  std::string state = commandFramePayload(stream.data.output, 0x95, 0);
-  assert(state.substr(0, 1) == owner(0) && state.find("board") != std::string::npos);
-  stream.data.output.clear();
-  zoneA.writeState("Status", "zone a");
-  state = commandFramePayload(stream.data.output, 0x95, 0);
-  assert(state.substr(0, 1) == owner(1) && state.find("zone a") != std::string::npos);
-  stream.data.output.clear();
-  zoneB.writeState(F("Status"), "none"); // zone B has no Status
+  // Each handle reaches its own device's properties only: Status, SpeedA, SpeedB are 0, 1, 2.
+  zoneB.writeProperty("SpeedA");
   assert(stream.data.output.empty());
-
-  // A command's own state is the channel of its own device.
-  zoneB.writeCommandState("SET_B_SPEED");
+  zoneB.writeProperty("SpeedB");
   const std::string speed = commandFramePayload(stream.data.output, 0x95, 0);
-  // Channels in order: Status (board), Status (zone A), Speed (zone A), Speed (zone B).
-  assert(speed.substr(0, 1) == owner(2));
-  assert(speed[1] == 3 && speed[2] == 0 && static_cast<byte>(speed.back()) == 20);
+  assert(speed[0] == 2 && speed[1] == 0 && static_cast<byte>(speed.back()) == 20);
   stream.data.output.clear();
-#endif
 
 #if BLAECK_ENABLE_EVENTS
   zoneA.writeEvent(F("Alarm"), F("blocked"));
@@ -2189,6 +2027,203 @@ static void sameNamesAcrossDevices()
   assert(frames.size() == 1 && frames[0].schemaHash == crc16(std::string("Temperature") + f));
 }
 
+// The ack of the one command in output: its status and reason.
+static std::pair<byte, byte> ackOf(const std::string &output, uint32_t messageId = 0)
+{
+  const std::string ack = commandFramePayload(output, 0xA5, messageId);
+  return {static_cast<byte>(ack[8]), static_cast<byte>(ack[9])};
+}
+
+static int propertyCallbacks = 0;
+static void onPropertySet() { ++propertyCallbacks; }
+static float gaugeValue = 1.5f;
+static float readGauge() { return gaugeValue; }
+static bool readRunning() { return true; }
+static const char *readStatus() { return "ok"; }
+
+// Inputs and sensors: the entity list, a host's writes and their checks, change reports and names.
+static void properties()
+{
+  hostMillis() = 0;
+  propertyCallbacks = 0;
+  FakeStream stream;
+  Capture debug;
+  Blaeck device;
+  device.begin(stream).withDebugStream(&debug);
+
+  float setpoint = 21.0f;
+  byte percent = 10;
+  bool enabled = false;
+  byte mode = 0;
+  char label[8] = "lab";
+  float temperature = 20.0f;
+  byte state = 1;
+  device.addNumberInput(F("Setpoint"), &setpoint, onPropertySet)
+      .withRange(5.0f, 30.0f, 0.1f).withUnit(F("C"));           // 0
+  device.addNumberInput("Percent", &percent);                   // 1
+  device.addSwitch(F("Enabled"), &enabled, onPropertySet);      // 2
+  device.addSelect(F("Mode"), &mode, F("Off,Heat,Auto"));       // 3
+  device.addTextInput(F("Label"), label, sizeof(label));        // 4
+  device.addSensor(F("Temperature"), &temperature)
+      .writeOnChange(0.5, 0);                                   // 5
+  device.addSensor(F("State"), &state, F("Idle,Busy"));         // 6
+  device.addSensor(F("Gauge"), readGauge);                      // 7
+  device.addSensor(F("Running"), readRunning);                  // 8
+  device.addSensor(F("Status"), readStatus);                    // 9
+  assert(!device.hasRejections());
+
+  // After the restart notice comes the entity list, then no 95: it carried every value.
+  device.read();
+  std::string list = commandFramePayload(stream.data.output, 0x90, 0);
+  const auto u32 = [](uint32_t v) { return std::string(reinterpret_cast<const char *>(&v), 4); };
+  const auto f32 = [](float v) { return std::string(reinterpret_cast<const char *>(&v), 4); };
+  // Setpoint: board, property, name, number, READWRITE + range + step + unit, float, value,
+  // min, max, step, unit.
+  const std::string setpointEntry = std::string("\x00\x00", 2) + "Setpoint" + '\0' + '\x00' +
+      u32(0x3 | (1UL << 2) | (1UL << 3) | (1UL << 4)) + '\x08' + f32(21.0f) + f32(5.0f) +
+      f32(30.0f) + f32(0.1f) + "C" + '\0';
+  assert(list.compare(0, setpointEntry.size(), setpointEntry) == 0);
+  // Mode: an enum, its index as the value, then its options. Label: text, length-prefixed,
+  // then its maximum length. Temperature: READ.
+  assert(list.find(std::string("Mode") + '\0' + '\x02' + u32(0x3) + '\x01' + '\x00' + "Off,Heat,Auto" + '\0') !=
+         std::string::npos);
+  assert(list.find(std::string("Label") + '\0' + '\x03' + u32(0x3) + '\x0A' + '\x03' + "lab" + '\x07' + '\x00') !=
+         std::string::npos);
+  assert(list.find(std::string("Temperature") + '\0' + '\x00' + u32(0x1) + '\x08' + f32(20.0f)) !=
+         std::string::npos);
+  assert(list.find(std::string("Status") + '\0' + '\x03' + u32(0x1) + '\x0A' + '\x02' + "ok" + std::string("\xFF\x00", 2)) !=
+         std::string::npos);
+  stream.data.output.clear();
+  hostMillis() = 1000;
+  device.writeIfDue();
+  assert(stream.data.output.empty());
+
+  // A host's value: checked, stored, acknowledged, then the callback runs and 0x95 goes out.
+  command(device, stream, "<Setpoint,22.5>");
+  assert((ackOf(stream.data.output) == std::pair<byte, byte>(0, BLAECK_ACK_OK)));
+  assert(setpoint == 22.5f && propertyCallbacks == 1);
+  const size_t ackAt = stream.data.output.find(std::string("<blaeck:") + char(0xA5));
+  const size_t pushAt = stream.data.output.find(std::string("<blaeck:") + char(0x95));
+  assert(ackAt < pushAt);
+  assert(commandFramePayload(stream.data.output, 0x95, 0) == std::string("\x00\x00\x08", 3) + f32(22.5f));
+  stream.data.output.clear();
+
+  // On its step: 0.1 steps from 5, so 22.3000004 is stored as 5 + 173 * 0.1.
+  command(device, stream, "<Setpoint,22.3000004>");
+  assert(setpoint == 5.0f + 173 * 0.1f);
+  stream.data.output.clear();
+
+  const auto refused = [&](const char *text, byte reason)
+  {
+    const int before = propertyCallbacks;
+    command(device, stream, text);
+    assert((ackOf(stream.data.output) == std::pair<byte, byte>(1, reason)));
+    assert(stream.data.output.find(std::string("<blaeck:") + char(0x95)) == std::string::npos);
+    assert(propertyCallbacks == before);
+    stream.data.output.clear();
+  };
+  refused("<Setpoint,31>", BLAECK_ACK_OUT_OF_RANGE);
+  refused("<Setpoint,abc>", BLAECK_ACK_OUT_OF_RANGE);
+  refused("<Setpoint>", BLAECK_ACK_MISSING_VALUE);
+  refused("<Setpoint,>", BLAECK_ACK_MISSING_VALUE);
+  refused("<Percent,2.5>", BLAECK_ACK_NOT_AN_INTEGER);
+  refused("<Percent,256>", BLAECK_ACK_OUT_OF_RANGE);
+  refused("<Enabled,2>", BLAECK_ACK_BAD_SWITCH);
+  refused("<Mode,Cool>", BLAECK_ACK_BAD_SELECT);
+  refused("<Mode,3>", BLAECK_ACK_BAD_SELECT);
+  refused("<Label,far too long>", BLAECK_ACK_TOO_LONG);
+  refused("<Temperature,25>", BLAECK_ACK_READ_ONLY);
+  refused("<Missing,1>", BLAECK_ACK_UNKNOWN);
+  assert(setpoint == 5.0f + 173 * 0.1f && percent == 10 && !enabled && mode == 0 && strcmp(label, "lab") == 0);
+
+  command(device, stream, "<Percent,200>");
+  assert(percent == 200);
+  command(device, stream, "<Enabled,1>");
+  assert(enabled && propertyCallbacks == 3);
+  command(device, stream, "<Mode,Auto>");
+  assert(mode == 2);
+  command(device, stream, "<Mode,1>");
+  assert(mode == 1);
+  command(device, stream, "<Label,a%2Cb>");
+  assert(strcmp(label, "a,b") == 0);
+  command(device, stream, "<Label,>");
+  assert(label[0] == '\0');
+  stream.data.output.clear();
+
+  // Change reports: at most every 100 ms by default; Temperature only by 0.5 or more.
+  hostMillis() = 2000;
+  device.writeIfDue();
+  assert(stream.data.output.empty()); // the writes above were sent already
+  temperature = 20.3f;
+  state = 0;
+  gaugeValue = 2.5f;
+  device.writeIfDue();
+  std::string out = stream.data.output;
+  assert(out.find(std::string("<blaeck:") + char(0x95)) != std::string::npos);
+  assert(out.find(f32(20.3f)) == std::string::npos);            // below Temperature's delta
+  assert(out.find(std::string("\x06\x00\x01\x00", 4)) != std::string::npos); // State index 0
+  assert(out.find(std::string("\x07\x00\x08", 3) + f32(2.5f)) != std::string::npos); // Gauge
+  stream.data.output.clear();
+  temperature = 20.6f;
+  gaugeValue = 3.5f;
+  hostMillis() = 2050;
+  device.writeIfDue();
+  out = stream.data.output;
+  assert(out.find(f32(20.6f)) != std::string::npos);            // no interval limit
+  assert(out.find(f32(3.5f)) == std::string::npos);             // Gauge waits for 100 ms
+  stream.data.output.clear();
+  hostMillis() = 2100;
+  device.writeIfDue();
+  assert(stream.data.output.find(f32(3.5f)) != std::string::npos);
+  stream.data.output.clear();
+
+  // writeProperty() sends now, changed or not; an unknown name says so.
+  device.writeProperty(F("Running"));
+  assert(commandFramePayload(stream.data.output, 0x95, 0) == std::string("\x08\x00\x00\x01", 4));
+  stream.data.output.clear();
+  debug.text.clear();
+  device.writeProperty("Nothing");
+  assert(stream.data.output.empty() && debug.text.find("no property 'Nothing'") != std::string::npos);
+
+  // Names: one target per name on the board, and none of them reserved or too long.
+  const auto handler = [](const char *, const char *const *, byte) {};
+  debug.text.clear();
+  device.onCommand("Setpoint", handler);
+  assert(debug.text.find("Dropped 'Setpoint': an input or sensor has the name already.") != std::string::npos);
+  device.onCommand("RESET", handler);
+  float other = 0;
+  device.addSensor("RESET", &other);
+  assert(debug.text.find("Dropped 'RESET': a button or command has the name already.") != std::string::npos);
+  device.addSensor("BLAECK.X", &other);
+  assert(debug.text.find("BLAECK. is reserved") != std::string::npos);
+  device.addSensor("#1", &other);
+  assert(debug.text.find("can't start with #") != std::string::npos);
+  device.addSensor(std::string(80, 'n').c_str(), &other);
+  assert(debug.text.find("too long to be received") != std::string::npos);
+  device.addSelect("NoOptions", &mode, F(""));
+  device.addTextInput("NoBuffer", label, 0);
+  device.addSensor("Nothing", static_cast<float *>(nullptr));
+  failAfter = 0;
+  device.addSensor("NoRam", &other);
+  failAfter = -1;
+  assert(debug.text.find("Dropped 'NoRam': no room for another property.") != std::string::npos);
+  Capture rejections;
+  assert(device.printRejections(&rejections));
+  assert(rejections.text.find("8 input and sensor registrations rejected.") != std::string::npos);
+
+  // A missing device's inputs are refused like its commands.
+  BlaeckDeviceRef pump = device.addDevice(F("Pump"));
+  byte speed = 0;
+  pump.addNumberInput("PumpSpeed", &speed);
+  pump.markMissing();
+  stream.data.output.clear();
+  refused("<PumpSpeed,5>", BLAECK_ACK_DEVICE_NOT_RESPONDING);
+  pump.markPresent();
+  stream.data.output.clear();
+  command(device, stream, "<PumpSpeed,5>");
+  assert(speed == 5);
+}
+
 static void ackResult(const std::string &output, uint32_t messageId, const char *bare, byte status)
 {
   const std::string ack = commandFramePayload(output, 0xA5, messageId);
@@ -2208,7 +2243,7 @@ static void deviceCommands()
   device.begin(stream);
   BlaeckDeviceRef pump = device.addDevice(F("Pump"));
   device.addDevice(F("Fan"));
-  pump.onNumberCommand("SET_PUMP_SPEED", onPing).withRange(0.0f, 100.0f, 1.0f);
+  pump.onCommand("SET_PUMP_SPEED", onPing);
   device.onCommand("BOARD_PING", onPing);
   device.read();
   stream.data.output.clear();
@@ -2346,7 +2381,7 @@ static void reportingToggle(bool buffered)
     assert(device.reporting(2)->text != nullptr);
 
     before = allocations;
-    const SignalReporting *retained = device.reporting(0);
+    const ReportingState *retained = device.reporting(0);
     const char *retainedText = device.reporting(2)->text;
     failAfter = 0;
     number.writeOnChange(BLAECK_OFF);
@@ -2356,7 +2391,7 @@ static void reportingToggle(bool buffered)
     assert(allocations == before && !device.hasRejections());
     for (int i = 0; i < 3; ++i)
     {
-      const SignalReporting *r = device.reporting(i);
+      const ReportingState *r = device.reporting(i);
       if (mode == BLAECK_ON_CHANGE)
         assert(r != nullptr && !r->immediate && r->valid);
       else
@@ -3109,8 +3144,6 @@ int main()
   frameEscaping(false);
   frameEscaping(true);
   flashNamesAndFailures();
-  flashStateText(false);
-  flashStateText(true);
   flashNumericWrites<bool>();
   flashNumericWrites<byte>();
   flashNumericWrites<short>();
@@ -3153,6 +3186,7 @@ int main()
     subDevices(false);
     subDevices(true);
     deviceCommands();
+    properties();
     deviceNoticesBeforeHost();
     sameNamesAcrossDevices();
     defaultTimestamps();

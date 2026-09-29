@@ -2,7 +2,7 @@
 
 Upload SubDevicesTest first and close Loggbok/serial monitors. Only a Mega and USB are
 needed: the pump controller is simulated in the sketch. Checks the device list (B7), which
-device each signal, command and channel belongs to, the pump's commands sent by name, the
+device each signal, input, sensor and command belongs to, the pump's commands sent by name, the
 notices (C1), data frames and refused commands while the pump is missing and after it returns,
 and the restart notice and event for a pump restart.
 Failures exit nonzero.
@@ -32,9 +32,11 @@ def unescape(raw):
     return bytes(out)
 
 
-# The DeviceID each catalog entry and push carries: 0 for the board, 1 for the pump.
+# The DeviceID each catalog entry carries: 0 for the board, 1 for the pump.
 BOARD = bytes([0])
 PUMP = bytes([1])
+# The PropertyIndex a 0x95 of PumpLink carries: SET_PUMP_SPEED, SIM_SILENT, PumpLink.
+PUMP_LINK = bytes([2, 0])
 
 
 class Link:
@@ -192,12 +194,13 @@ def run(port):
                                                [("Flow", FLOAT), ("Pressure", FLOAT)])), devices)
 
     commands = frames(link.send("<BLAECK.WRITE_COMMANDS>", frame_with(0xA0)), 0xA0)[-1][2]
-    check("SET_PUMP_SPEED belongs to the pump", owner_before(commands, "SET_PUMP_SPEED", 2) == PUMP)
     check("POLL stays on the board", owner_before(commands, "POLL", 2) == BOARD)
 
-    states = frames(link.send("<BLAECK.WRITE_STATE_CHANNELS>", frame_with(0x90)), 0x90)[-1][2]
-    check("PumpLink and the command's own PumpSpeed belong to the pump",
-          owner_before(states, "PumpLink") == PUMP and owner_before(states, "PumpSpeed") == PUMP)
+    # In the entity list, the entry kind sits between the DeviceID and the name.
+    entities = frames(link.send("<BLAECK.WRITE_ENTITIES>", frame_with(0x90)), 0x90)[-1][2]
+    check("the SET_PUMP_SPEED input and the PumpLink sensor belong to the pump",
+          owner_before(entities, "SET_PUMP_SPEED", 1) == PUMP and owner_before(entities, "PumpLink", 1) == PUMP)
+    check("the SIM_SILENT switch stays on the board", owner_before(entities, "SIM_SILENT", 1) == BOARD)
 
     events = frames(link.send("<BLAECK.WRITE_EVENT_CHANNELS>", frame_with(0x80)), 0x80)[-1][2]
     check("PumpAlarms belongs to the pump", owner_before(events, "PumpAlarms") == PUMP)
@@ -208,11 +211,12 @@ def run(port):
     check("pump answering: all three signals", sorted(values) == [0, 1, 2], values)
     check("the forwarded speed reached the pump", abs(values.get(1, -1) - 4.0) < 1e-6, values)
 
-    # How Loggbok sends a command of the pump: by name, like the board's.
-    items = link.send("<#5:SET_PUMP_SPEED,30>", ack_for(5))
-    ack = items[-1][2]
-    check("a pump command runs and is acknowledged",
-          ("text", "DONE SET_PUMP_SPEED") in items and ack[8] == 0, ack[8:10])
+    # How Loggbok sets an input of the pump: by name, like the board's. The callback runs
+    # after the ack.
+    items = link.send("<#5:SET_PUMP_SPEED,30>", done("SET_PUMP_SPEED"))
+    acks = [f for f in frames(items, 0xA5) if struct.unpack_from("<I", f[3], 2)[0] == 5]
+    check("a pump input is set and acknowledged",
+          bool(acks) and acks[-1][2][8] == 0, acks[-1][2][8:10] if acks else items)
     items = link.send("<@1:POLL>", ack_for(0))
     check("'@' is no prefix: the command is unknown",
           ("text", "DONE POLL") not in items and items[-1][2][8:10] == bytes([1, 1]), items[-1][2][8:10])
@@ -227,7 +231,7 @@ def run(port):
     check("pump missing: only BoardValue is sent", sorted(values) == [0], values)
     link_states = frames(items, 0x95)
     check("pump missing: PumpLink says so, for the pump",
-          bool(link_states) and link_states[-1][2][:1] == PUMP and b"no answer" in link_states[-1][2])
+          bool(link_states) and link_states[-1][2][:2] == PUMP_LINK and b"no answer" in link_states[-1][2])
     items = link.send("<#7:SET_PUMP_SPEED,20>", ack_for(7))
     check("pump missing: its command is refused, reason 8",
           ("text", "DONE SET_PUMP_SPEED") not in items and items[-1][2][8:10] == bytes([1, 8]),
@@ -243,7 +247,8 @@ def run(port):
     check("pump back: a notice for device 1", notice(1, 3) in [f[2] for f in frames(items, 0xC1)])
     check("pump back: all three signals", sorted(values) == [0, 1, 2], values)
     link_states = frames(items, 0x95)
-    check("pump back: PumpLink says ok", bool(link_states) and b"ok" in link_states[-1][2])
+    check("pump back: PumpLink says ok",
+          bool(link_states) and link_states[-1][2][:2] == PUMP_LINK and b"ok" in link_states[-1][2])
 
     link.send("<SIM_RESTART>", done("SIM_RESTART"))
     items = link.send("<POLL>", done("POLL"))

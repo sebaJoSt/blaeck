@@ -108,12 +108,9 @@ void onWidths(const char *command, const char *const *params, byte paramCount)
   PrintWidths();
 }
 
-void onTimestampMode(const char *command, const char *const *params, byte paramCount)
+// Runs after a host has set the TimestampMode select; TimestampModeIdx already holds it.
+void onTimestampMode()
 {
-  (void)command;
-  (void)paramCount;
-  TimestampModeIdx = (byte)atoi(params[0]);
-
   switch (TimestampModeIdx)
   {
   case 0: // PC - no device timestamp at all, lgbk stamps on arrival
@@ -136,9 +133,7 @@ void onTimestampMode(const char *command, const char *const *params, byte paramC
     break;
   }
 
-  device.writeCommandState(command);
-  Serial.print(F("CMD "));
-  Serial.println(command);
+  Serial.println(F("CMD TimestampMode"));
 }
 
 void onFirePush(const char *command, const char *const *params, byte paramCount)
@@ -215,9 +210,8 @@ void setup()
   device.addSignal(F("FrozenPlain"), &FrozenPlain);
   device.addSignal(F("Changed"), &Changed).writeAtInterval(BLAECK_OFF).writeOnChange(0);
 
-  device.onSelectCommand("TimestampMode", onTimestampMode)
-      .withOptions(F("PC,MICROS,UNIX_calibrated,UNIX_no_callback"))
-      .withOwnState(F("TimestampMode_state"), &TimestampModeIdx);
+  device.addSelect(F("TimestampMode"), &TimestampModeIdx,
+                   F("PC,MICROS,UNIX_calibrated,UNIX_no_callback"), onTimestampMode);
 
   device.onButtonCommand("Fire_push", onFirePush);
   device.onButtonCommand("Fire_explicit_ts", onFireExplicitTs);

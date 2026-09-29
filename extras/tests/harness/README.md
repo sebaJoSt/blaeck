@@ -11,16 +11,14 @@ with the required MQTT/Home Assistant or TimescaleDB outputs configured.
 
 | Fixture | Driver / purpose |
 |---|---|
-| CommandTest | `drive_commands.py SERIAL_PORT`, `probe_ownstate.py SERIAL_PORT`: command validation and command-state frames |
+| CommandTest | `drive_commands.py SERIAL_PORT`: inputs, sensors, buttons and plain commands - which values are taken and which refused - and the entity list the board sends |
 | EventTest | `drive_events.py SERIAL_PORT`: event types, framing and timestamp widths |
 | DatatypeTest | Manual host inspection of all supported data types |
-| StateChannelTest | Manual host inspection of state channels |
 | SignalMetadataTest | `drive_signal_metadata.py [seconds\|capture.json]`: MQTT discovery and optional HA registry checks |
-| CommandMetadataTest | `drive_command_metadata.py [seconds\|capture.json]`: discovery/registry; `roundtrip_command_state.py [device_filter]`: HA command/state round trips |
 | EventMetadataTest | `drive_event_metadata.py [seconds\|capture.json]`: discovery/registry and live HA event checks |
 | SignalTimingTest | `drive_signal_timing.py [table]`: issue HA commands and check recorded TimescaleDB rows |
 | SignalReportingTest | `drive_signal_reporting.py SERIAL_PORT`: Mega/AVR reporting policies, shared baselines, rate limits, numeric/text values and CRC32, with direct and buffered Serial writes |
-| SubDevicesTest | `drive_sub_devices.py SERIAL_PORT`: devices from addDevice() - device list, ownership of signals, commands and channels, missing devices and device restarts, with a simulated second board |
+| SubDevicesTest | `drive_sub_devices.py SERIAL_PORT`: devices from addDevice() - device list, ownership of signals, inputs, sensors and events, missing devices and device restarts, with a simulated second board |
 
 Run each Python driver from its sketch directory, or pass its full path.
 The scripts' module docstrings describe their individual expectations.

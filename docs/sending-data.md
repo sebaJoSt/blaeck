@@ -55,8 +55,7 @@ if (device.isTimedDataActive())
   Serial.println(device.getIntervalMs());
 ```
 
-That is worth doing to show the interval on a state channel, or to remember it across a power
-cut.
+That is worth doing to show the interval on a sensor, or to remember it across a power cut.
 
 ## Sending when something happens
 
@@ -308,8 +307,8 @@ device.setBufferedWrites(true);
 ## The catalogs
 
 A value on the wire names its signal by position, not by name. So before any of it means
-anything, a host has to have the list of signals, and the lists of commands, state channels and
-event channels with it.
+anything, a host has to have the list of signals, and the entity list, commands and event
+channels with it.
 
 Your sketch does not have to send these. They go out when the device starts, again whenever a
 host asks, and again whenever you change what the device declares - always ahead of the next

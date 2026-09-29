@@ -58,6 +58,7 @@ float boardValue = 1.5f;
 float pumpFlow = 0;
 float pumpPressure = 0;
 byte pumpSpeed = 0;
+char pumpLink[12] = "";
 unsigned long lastPumpUptime = 0;
 
 void done(const char *command)
@@ -73,8 +74,10 @@ void pollPump()
   {
     if (!pump.isMissing())
     {
+      // Sent before the pump is marked missing: tick() leaves a missing device's properties out.
+      strcpy(pumpLink, "no answer");
+      pump.writeProperty(F("PumpLink"));
       pump.markMissing();
-      pump.writeState(F("PumpLink"), "no answer");
     }
     return;
   }
@@ -93,7 +96,8 @@ void pollPump()
   if (pump.isMissing())
   {
     pump.markPresent();
-    pump.writeState(F("PumpLink"), "ok");
+    strcpy(pumpLink, "ok");
+    pump.writeProperty(F("PumpLink"));
   }
 }
 
@@ -104,11 +108,10 @@ void onPoll(const char *command, const char *const *params, byte paramCount)
   done(command);
 }
 
-// A switch, so blaeck has checked the value is 0 or 1.
-void onSimSilent(const char *command, const char *const *params, byte paramCount)
+// A switch, so blaeck has checked the value is 0 or 1 and stored it.
+void onSimSilent()
 {
-  simSilent = atoi(params[0]) != 0;
-  done(command);
+  done("SIM_SILENT");
 }
 
 void onSimRestart(const char *command, const char *const *params, byte paramCount)
@@ -124,10 +127,10 @@ void onSimAuto(const char *command, const char *const *params, byte paramCount)
 }
 
 // Forwarded to the pump, which reports the new speed with its next reading.
-void onSetPumpSpeed(const char *command, const char *const *params, byte paramCount)
+void onSetPumpSpeed()
 {
-  simSpeed = (byte)atoi(params[0]);
-  done(command);
+  simSpeed = pumpSpeed;
+  done("SET_PUMP_SPEED");
 }
 
 void setup()
@@ -147,18 +150,16 @@ void setup()
   pump.addSignal(F("Flow"), &pumpFlow);
   pump.addSignal(F("Pressure"), &pumpPressure);
 
-  pump.onNumberCommand("SET_PUMP_SPEED", onSetPumpSpeed)
-      .withRange(0.0f, 100.0f, 1.0f)
-      .withOwnState(F("PumpSpeed"), &pumpSpeed);
+  pump.addNumberInput(F("SET_PUMP_SPEED"), &pumpSpeed, onSetPumpSpeed)
+      .withRange(0.0f, 100.0f, 1.0f);
   device.onCommand("POLL", onPoll);
   device.onCommand("SIM_AUTO", onSimAuto);
-  device.onSwitchCommand("SIM_SILENT", onSimSilent)
-      .withDisplayName(F("Pump silent"))
-      .withOwnState(F("PumpSilent"), &simSilent);
+  device.addSwitch(F("SIM_SILENT"), &simSilent, onSimSilent)
+      .withDisplayName(F("Pump silent"));
   device.onButtonCommand("SIM_RESTART", onSimRestart)
       .withDisplayName(F("Pump restart"));
 
-  pump.addStateChannel(F("PumpLink"), BlaeckText);
+  pump.addSensor(F("PumpLink"), pumpLink, sizeof(pumpLink));
   pump.addEventChannel(F("PumpAlarms"), F("restarted"));
 }
 
