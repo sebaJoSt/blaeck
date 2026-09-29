@@ -26,18 +26,9 @@ unsigned long Uptime = 0;
 // A run of signals sharing a prefix, for the withNameSuffix() block.
 float sine[8];
 
-// Something worth exposing but not showing by default.
-int rawAdc = 0;
-
-// A text signal reporting one of a closed set, for the withOptions() blocks.
-char modeText[12] = "idle";
-
-// --- Values a control might carry as its own state ---
+// --- Values an input might hold ---
 float Amplitude = 1.0f;
-float Offset = 0.0f;
-bool Enabled = true;
 byte waveIndex = 0;
-char DeviceLabel[33] = "wave-gen";
 // A secret-ish setting, so a block can show a field worth masking. Nothing else in the
 // cast is one: masking a device label would teach the modifier and misplace it at once.
 char ApiKey[33] = "";

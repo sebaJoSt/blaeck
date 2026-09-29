@@ -12,7 +12,16 @@
 #include <Blaeck.h>
 #include <math.h>
 
-Blaeck device;
+// A sketch calls tick(); this harness calls its two halves apart, which Blaeck keeps
+// protected for tests.
+class HarnessBlaeck : public Blaeck
+{
+public:
+  using Blaeck::read;
+  using Blaeck::writeIfDue;
+};
+
+HarnessBlaeck device;
 float periodic = 0, filtered = 0, immediate = 0, combined = 0, floating = 0;
 bool flag = false;
 char text[300] = "";

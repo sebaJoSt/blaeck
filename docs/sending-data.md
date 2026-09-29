@@ -45,8 +45,8 @@ With these default policies, no data is sent until a host activates interval rep
 Loggbok sends these for you. You can also type them into the serial monitor; the replies
 carry binary data rather than readable values.
 
-Two smaller calls do one half each. `device.read()` reads and dispatches;
-`device.writeIfDue()` services both automatic reporting paths. Together they are `tick()`.
+`tick()` is the only call `loop()` needs: it runs the commands that arrived, then sends what
+is due. To stamp the data frames with a time of your own, pass it: `device.tick(timestamp)`.
 
 Your sketch cannot set the interval, but it can read what the host asked for:
 
@@ -161,8 +161,7 @@ device.addSignal(F("Temperature"), &temperature)
     .writeOnChange(0.1f, 100);
 ```
 
-`writeOnChange(delta, minIntervalMs)` checks the current value on every `tick()` or
-`writeIfDue()`. The threshold is required; the minimum interval defaults to 100 ms.
+`writeOnChange(delta, minIntervalMs)` checks the current value on every `tick()`. The threshold is required; the minimum interval defaults to 100 ms.
 It is a rate limit since the last report, not a debounce timer. It works without ACTIVATE,
 and DEACTIVATE does not stop it. Pause/resume writes still governs all data reporting.
 
@@ -259,8 +258,8 @@ the link is quick and nothing buffers.
 
 For a time the device itself stands behind, pick a mode in `setup()`. `BLAECK_MICROS` needs
 nothing else - the library reads `micros()` and counts the overflows, so the number keeps
-climbing past the 71 minutes a 32-bit microsecond counter holds. Keep calling `tick()` or
-`writeIfDue()` regularly even when no data qualifies, so rollovers can be observed. A sketch
+climbing past the 71 minutes a 32-bit microsecond counter holds. Keep calling `tick()`
+regularly even when no data qualifies, so rollovers can be observed. A sketch
 that can sleep through a complete rollover needs a real clock instead:
 
 ```cpp
@@ -286,7 +285,7 @@ Set the mode once, in `setup()`. Timestamps from either side of a change are not
 
 An automatic frame timestamps the reporting pass, not each sensor's acquisition time.
 For a known acquisition time, pass it explicitly to `write()` or `writeAll()`.
-`writeIfDue(timestamp)` also accepts a supplied timestamp; scheduling and rate limits still
+`tick(timestamp)` also accepts a supplied timestamp; scheduling and rate limits still
 use `millis()`.
 
 ## Buffered writes

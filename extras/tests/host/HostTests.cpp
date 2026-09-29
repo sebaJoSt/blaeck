@@ -15,6 +15,15 @@
 #define BLAECK_TEST_COMMAND_BUFFER_ONLY 0
 #endif
 
+// tick() is a sketch's only loop call. The tests call its two halves apart, to see what each
+// one does.
+class TestBlaeck : public Blaeck
+{
+public:
+  using Blaeck::read;
+  using Blaeck::writeIfDue;
+};
+
 static_assert(!std::is_polymorphic<Blaeck>::value, "Blaeck needs no virtual transport hooks");
 static_assert(!std::is_copy_constructible<Blaeck>::value, "Blaeck owns its allocations");
 static_assert(!std::is_copy_assignable<Blaeck>::value, "Blaeck owns its allocations");
@@ -30,10 +39,10 @@ static_assert(BLAECK_ANY_CHANGE == 0, "Any-change is a zero numeric threshold");
 static_assert(std::is_same<decltype(BLAECK_ANY_CHANGE), const double>::value,
               "Any-change must not select the mode overload");
 static_assert(std::is_same<
-    decltype(std::declval<BlaeckNumericSignalRef &>()
+    decltype(std::declval<BlaeckSignalRef &>()
                  .writeOnChange(0).writeOnChange(0, 0)
                  .writeOnChange(BLAECK_ANY_CHANGE, 250).writeOnChange(BLAECK_OFF)),
-    BlaeckNumericSignalRef &>::value, "Reporting overloads preserve the handle type");
+    BlaeckSignalRef &>::value, "Reporting overloads chain on the handle");
 
 template <class Handle>
 static auto acceptsModeWithInterval(int) -> decltype(
@@ -41,12 +50,8 @@ static auto acceptsModeWithInterval(int) -> decltype(
 template <class>
 static std::false_type acceptsModeWithInterval(...);
 
-static_assert(!decltype(acceptsModeWithInterval<BlaeckNumericSignalRef>(0))::value,
+static_assert(!decltype(acceptsModeWithInterval<BlaeckSignalRef>(0))::value,
               "An enum mode plus rate limit must not become a numeric threshold");
-static_assert(!decltype(acceptsModeWithInterval<BlaeckBoolSignalRef>(0))::value,
-              "Boolean signals must also reject modes with rate limits");
-static_assert(!decltype(acceptsModeWithInterval<BlaeckTextSignalRef>(0))::value,
-              "Text signals must also reject modes with rate limits");
 
 void *operator new(size_t size, const std::nothrow_t &) noexcept
 {
@@ -198,7 +203,7 @@ public:
   void flush() override { ++flushes; }
 };
 
-class PacketProbe : public Blaeck
+class PacketProbe : public TestBlaeck
 {
 public:
   void sendPacket(size_t size)
@@ -212,18 +217,15 @@ public:
   }
 };
 
-class ReportingProbe : public Blaeck
+class ReportingProbe : public TestBlaeck
 {
 public:
   const ReportingState *reporting(int index) const { return Signals[index].Reporting; }
 };
 
-class ConfigurationProbe : public Blaeck
+class ConfigurationProbe : public TestBlaeck
 {
 public:
-#if BLAECK_ENABLE_SIGNAL_META
-  const SignalMeta &signalMeta(int index) const { return *Signals[index].Meta; }
-#endif
   const blaeck::blaeck_detail::CommandHandlerEntry &commandMeta(int index) const { return _commandHandlers[index]; }
   const blaeck::blaeck_detail::PropertyEntry &propertyMeta(int index) const { return _properties[index]; }
   int propertyIndex(blaeck::BlaeckString name) const { return _findProperty(name); }
@@ -233,21 +235,8 @@ public:
   const blaeck::blaeck_detail::EventTypeEntry &eventType(int index) const { return _eventTypes[index]; }
   int eventIndex(const char *name) const { return _findEventChannel(0, name); }
 #endif
-  void cleanCatalogs()
-  {
-#if BLAECK_ENABLE_SIGNAL_META
-    _signalConfigDirty = false;
-#endif
-    _entityCatalogDirty = false;
-  }
-  bool dirtyCatalogs() const
-  {
-    bool dirty = _entityCatalogDirty;
-#if BLAECK_ENABLE_SIGNAL_META
-    dirty |= _signalConfigDirty;
-#endif
-    return dirty;
-  }
+  void cleanCatalogs() { _entityCatalogDirty = false; }
+  bool dirtyCatalogs() const { return _entityCatalogDirty; }
 };
 
 static_assert(std::is_same<
@@ -287,7 +276,7 @@ static void sessionBehavior(bool buffered)
   SocketState host1, host2, terminal, excess, replacement;
   server.pending = {&host1, &host2, &terminal};
   Capture debug;
-  Blaeck device;
+  TestBlaeck device;
   device.setBufferedWrites(buffered);
   device.begin(server).withClients(3).withDebugStream(&debug);
   assert(device.isBufferedWrites() == buffered);
@@ -398,7 +387,7 @@ static void optionalPeerDiagnostics(const std::string &expected)
     FakeServer<Socket> server;
     SocketState client;
     Capture debug;
-    Blaeck device;
+    TestBlaeck device;
     device.begin(server).withClients(1).withDebugStream(&debug);
     device.setBufferedWrites(buffered);
     server.pending.push_back(&client);
@@ -424,7 +413,7 @@ static void lifecycleAndErrors()
   SocketState a, b;
   Capture debug;
   {
-    Blaeck one, two;
+    TestBlaeck one, two;
     first.pending.push_back(&a);
     second.pending.push_back(&b);
     auto handle = one.begin(first).withClients(1).withDebugStream(&debug);
@@ -444,7 +433,7 @@ static void lifecycleAndErrors()
   for (int stage = 0; stage < 3; ++stage)
   {
     FakeServer<> server;
-    Blaeck device;
+    TestBlaeck device;
     debug.text.clear();
     if (stage == 0)
       failAfter = 0;
@@ -473,10 +462,10 @@ static void lifecycleAndErrors()
     device.begin(stream);
     assert(device.transportError() == Blaeck::TransportError::BeginAlreadyCalled);
   }
-  Blaeck device;
+  TestBlaeck device;
   device.begin(first).withClients(0).withDebugStream(&debug);
   assert(device.transportError() == Blaeck::TransportError::InvalidClientCount);
-  Blaeck manyClients;
+  TestBlaeck manyClients;
   manyClients.begin(second).withClients(255);
   manyClients.read(); // Regression: byte-sized round-robin counter would loop forever at 255.
   assert(manyClients.transportError() == Blaeck::TransportError::None);
@@ -486,14 +475,14 @@ static void detachFromCallbacks()
 {
   FakeServer<> server;
   SocketState a, b;
-  Blaeck device;
+  TestBlaeck device;
   callbackDevice = &device;
   device.setClientConnectedCallback(detachInCallback);
   device.begin(server);
   server.pending.push_back(&a);
   device.read();
   assert(!a.open && device.transportError() == Blaeck::TransportError::NotStarted);
-  Blaeck disconnected;
+  TestBlaeck disconnected;
   callbackDevice = &disconnected;
   disconnected.setClientDisconnectedCallback(detachInCallback);
   disconnected.begin(server);
@@ -505,7 +494,7 @@ static void detachFromCallbacks()
 
   // Detaching from the disconnect callback of a host takeover.
   SocketState first, second;
-  Blaeck takeover;
+  TestBlaeck takeover;
   callbackDevice = &takeover;
   takeover.setClientDisconnectedCallback(detachInCallback);
   takeover.begin(server);
@@ -527,7 +516,7 @@ static void unifiedConnections()
   FakeStream stream;
   FakeServer<> server;
   SocketState host;
-  Blaeck device;
+  TestBlaeck device;
   size_t before = allocations;
   auto handle = device.begin(stream);
   assert(allocations == before); // Stream attachment creates no TCP adapter or client array.
@@ -542,7 +531,7 @@ static void unifiedConnections()
   assert(stream.data.output == "text");
 
   {
-    Blaeck tcp;
+    TestBlaeck tcp;
     tcp.begin(server).withClients(1);
     assert(tcp.isBufferedWrites() == BLAECK_TCP_BUFFERED_WRITES_DEFAULT);
     server.pending.push_back(&host);
@@ -552,7 +541,7 @@ static void unifiedConnections()
 
   for (bool buffered : {false, true})
   {
-    Blaeck serial, tcp;
+    TestBlaeck serial, tcp;
     serial.setBufferedWrites(buffered);
     tcp.setBufferedWrites(buffered);
     serial.begin(stream);
@@ -583,7 +572,7 @@ static void unifiedConnections()
 static void diagnosticMessages()
 {
   Capture debug;
-  Blaeck unattached;
+  TestBlaeck unattached;
   assert(unattached.printTransportError(&debug));
   assert(debug.text.find("begin(stream) or begin(server)") != std::string::npos);
 
@@ -592,7 +581,7 @@ static void diagnosticMessages()
   {
     FakeStream stream;
     FakeServer<> server;
-    Blaeck device;
+    TestBlaeck device;
     auto setup = tcp ? device.begin(server) : device.begin(stream);
     setup.withDebugStream(&debug);
     debug.text.clear();
@@ -621,7 +610,7 @@ static void diagnosticMessages()
   for (int table = 0; table < 5; ++table)
   {
     FakeStream stream;
-    Blaeck device;
+    TestBlaeck device;
     device.begin(stream).withDebugStream(&debug);
     float value = 0;
     debug.text.clear();
@@ -786,7 +775,7 @@ static void expectData(FakeStream &stream, const std::vector<int> &widths, const
     assert(frames.size() == 1 && frames[0].ids == ids);
 }
 
-static void command(Blaeck &device, FakeStream &stream, const char *text)
+static void command(TestBlaeck &device, FakeStream &stream, const char *text)
 {
   stream.data.input = text;
   device.read();
@@ -798,7 +787,7 @@ static void chunkedTables()
 {
   FakeStream stream;
   Capture debug;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream).withDebugStream(&debug);
 
   float values[20] = {};
@@ -872,7 +861,7 @@ static void commandBufferBoundaries(bool tcp, bool buffered)
   FakeStream stream;
   FakeServer<> server;
   SocketState host;
-  Blaeck device;
+  TestBlaeck device;
   if (tcp)
   {
     device.begin(server).withClients(1);
@@ -961,7 +950,7 @@ static void commandBufferBoundaries(bool tcp, bool buffered)
 static void frameEscaping(bool buffered)
 {
   FakeStream stream;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream);
   device.setBufferedWrites(buffered);
   static char text[] = "a<b\\c\rd\ne/f";
@@ -990,7 +979,7 @@ static void flashSignalText(bool buffered)
   {
     FakeStream stream;
     Capture debug;
-    Blaeck device;
+    TestBlaeck device;
     device.begin(stream).withDebugStream(&debug);
     device.setBufferedWrites(buffered);
     device.setTimestampMode(BLAECK_MICROS);
@@ -1120,7 +1109,7 @@ static void flashNamesAndFailures()
 {
   FakeStream stream;
   Capture debug;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream).withDebugStream(&debug);
   float value = 0;
   device.addSignal(F("VeryLongSignalNameBeyondAnyTemporaryNameBuffer_"), &value).withNameSuffix(255);
@@ -1164,7 +1153,7 @@ template<class T>
 static void flashNumericWrites()
 {
   FakeStream stream;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream);
   T value = 0;
   device.addSignal(F("Value"), &value);
@@ -1225,9 +1214,7 @@ static void ordinaryConfiguration(bool buffered)
   char options[] = "Low,High";
   char eventTypes[] = "start,stop", extraType[] = "reset";
   char deviceClass[] = "voltage";
-  auto signal = device.addSignal("Value", &value);
-  signal.withUnit(unit).withDeviceClass(deviceClass).withIcon(icon).withDisplayName(label);
-  device.addSignal("Level", "Low").withDeviceClass("enum").withOptions(options);
+  device.addSignal("Value", &value);
   auto number = device.addNumberInput("SET", &value).withRange(0, 10, 1);
   number.withUnit(unit).withDeviceClass(deviceClass).withIcon(icon).withDisplayName(label);
   device.addSelect("SELECT", &selected, options);
@@ -1244,11 +1231,6 @@ static void ordinaryConfiguration(bool buffered)
 
   unit[0] = icon[0] = label[0] = options[0] = eventTypes[0] = extraType[0] =
       deviceClass[0] = 'X';
-  device.writeSignalConfig();
-#if BLAECK_ENABLE_SIGNAL_META
-  for (const char *text : {"V", "voltage", "mdi:pulse", "Voltage", "Low,High"})
-    assert(stream.data.output.find(std::string(text) + '\0') != std::string::npos);
-#endif
   stream.data.output.clear();
   device.sendEntities();
   for (const char *text : {"SET", "V", "voltage", "mdi:pulse", "Voltage", "Low,High", "SELECT", "Getter",
@@ -1275,18 +1257,13 @@ static void ordinaryConfiguration(bool buffered)
   stream.data.output.clear();
   device.cleanCatalogs();
   const size_t beforeSame = allocations;
-  signal.withUnit("V").withIcon(F("mdi:pulse"));
   number.withUnit(F("V")).withRange(0, 10, 1);
   sensor.withUnit(F("V")).withIcon("mdi:pulse");
   event.withIcon(F("mdi:pulse"));
   assert(!device.dirtyCatalogs() && allocations == beforeSame);
-  signal.withUnit("").withIcon(nullptr);
   number.withUnit(nullptr);
   sensor.withUnit("").withIcon(nullptr);
   event.withIcon("");
-#if BLAECK_ENABLE_SIGNAL_META
-  assert(device.signalMeta(0).Unit == nullptr && device.signalMeta(0).Icon == nullptr);
-#endif
   assert(device.propertyMeta(0).presentation->unit == nullptr);
   assert(device.propertyMeta(3).presentation->unit == nullptr && device.propertyMeta(3).presentation->icon == nullptr);
   assert(!device.hasRejections());
@@ -1341,14 +1318,12 @@ static void configurationAllocationFailures()
   ConfigurationProbe device;
   device.begin(stream).withDebugStream(&debug);
   float value = 0;
-  auto signal = device.addSignal("Signal", &value).withUnit(F("V"));
   auto number = device.addNumberInput("SET", &value).withRange(0, 10, 1).withUnit(F("V"));
   auto sensor = device.addSensor(F("State"), &value).withUnit(F("V"));
   auto event = device.addEvent(F("Event"), F("start")).withIcon(F("mdi:pulse"));
   device.cleanCatalogs();
   const size_t before = allocations;
   failAfter = 0;
-  signal.withUnit("Replacement");
   number.withUnit("Replacement");
   sensor.withUnit("Replacement");
   event.withIcon("Replacement");
@@ -1357,9 +1332,6 @@ static void configurationAllocationFailures()
   device.addSensor(F("RejectedSensor"), &value);
   failAfter = -1;
   assert(!device.dirtyCatalogs());
-#if BLAECK_ENABLE_SIGNAL_META
-  assert(BlaeckString(device.signalMeta(0).Unit) == "V");
-#endif
   assert(BlaeckString(device.propertyMeta(0).presentation->unit) == "V");
   assert(BlaeckString(device.propertyMeta(1).presentation->unit) == "V");
   assert(device.propertyIndex("RejectedSensor") == -1);
@@ -1380,7 +1352,7 @@ static void beginOnlyOnce()
     FakeStream stream;
     FakeServer<> server;
     SocketState host;
-    Blaeck device;
+    TestBlaeck device;
     auto setup = tcp ? device.begin(server) : device.begin(stream);
     if (tcp)
       setup.withClients(1);
@@ -1413,7 +1385,7 @@ static void beginOnlyOnce()
     FakeServer<> server, otherServer;
     SocketState host;
     Capture debug, ignoredDebug;
-    Blaeck device;
+    TestBlaeck device;
     device.end(); // Teardown before initialization does not consume begin().
     auto setup = tcp ? device.begin(server) : device.begin(stream);
     setup.withDebugStream(&debug);
@@ -1551,7 +1523,7 @@ static std::string notice(byte id, byte event)
 static void noDeviceOwnership()
 {
   FakeStream stream;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream);
   device.DeviceName = "Solo";
   device.DeviceHWVersion = "Mega";
@@ -1571,7 +1543,7 @@ static void subDevices(bool buffered)
   auto handler = [](const char *, const char *const *, byte) {};
   FakeStream stream;
   Capture debug;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream).withDebugStream(&debug);
   device.setBufferedWrites(buffered);
   device.DeviceName = "Board";
@@ -1603,7 +1575,7 @@ static void subDevices(bool buffered)
   pump.addSignal(F("Flow"), &flow);
   pump.addSignal(F("Pressure"), &pressure);
   // A rejected or unset handle registers nothing, and counts nothing as rejected.
-  third.addSignal(F("Lost"), &orphan).withUnit(F("V"));
+  third.addSignal(F("Lost"), &orphan).writeOnChange(1.0);
   unset.addSignal("Lost", &orphan);
   unset.onCommand("LOST", handler);
   unset.addSensor(F("Lost"), &orphan);
@@ -1743,7 +1715,7 @@ static void subDevices(bool buffered)
   // After a gap, a changed-only signal is sent again even if its value did not change.
   command(device, stream, "<BLAECK.DEACTIVATE>");
   stream.data.output.clear();
-  Blaeck changes;
+  TestBlaeck changes;
   FakeStream changesStream;
   changes.begin(changesStream);
   float level = 7;
@@ -1762,7 +1734,7 @@ static void subDevices(bool buffered)
   assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0}));
 
   // A board holds at most 254 devices, so the list's count byte covers them and the board.
-  Blaeck big;
+  TestBlaeck big;
   FakeStream bigStream;
   debug.text.clear();
   big.begin(bigStream).withDebugStream(&debug);
@@ -1788,7 +1760,7 @@ static void deviceNoticesBeforeHost()
 {
   FakeServer<> server;
   SocketState host;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(server);
   device.DeviceName = "Board";
   device.DeviceHWVersion = "Mega";
@@ -1853,7 +1825,7 @@ static std::vector<std::string> ownersOf(const std::string &payload, const char 
 static void defaultTimestamps()
 {
   FakeStream stream;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream);
   device.setTimestampMode(BLAECK_MICROS);
   hostMillis() = 0;
@@ -1883,6 +1855,13 @@ static void defaultTimestamps()
   device.writeAll(42ULL);
   frames = takeData(stream.data.output, widths);
   assert(frames.size() == 1 && frames[0].timestamp == 42);
+
+  // tick() passes its timestamp to the due interval report.
+  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  stream.data.output.clear();
+  device.tick(99ULL);
+  frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && frames[0].timestamp == 99);
 }
 
 static void sameNamesAcrossDevices()
@@ -1891,7 +1870,7 @@ static void sameNamesAcrossDevices()
   auto handler = [](const char *, const char *const *, byte) {};
   FakeStream stream;
   Capture debug;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream).withDebugStream(&debug);
   BlaeckDeviceRef zoneA = device.addDevice(F("Zone A"));
   BlaeckDeviceRef zoneB = device.addDevice("Zone B");
@@ -1984,7 +1963,7 @@ static void sameNamesAcrossDevices()
   // Signals are numbered and hashed in device list order, so registering zone B's signal
   // before zone A's changes nothing a host sees.
   FakeStream reorderedStream;
-  Blaeck reordered;
+  TestBlaeck reordered;
   reordered.begin(reorderedStream);
   BlaeckDeviceRef reorderedA = reordered.addDevice(F("Zone A"));
   BlaeckDeviceRef reorderedB = reordered.addDevice("Zone B");
@@ -2000,7 +1979,7 @@ static void sameNamesAcrossDevices()
   // Firmware that adds zone B before zone A lists them the other way round. Without the device
   // names the hash would match, and a host would file zone A's values under zone B.
   FakeStream swappedStream;
-  Blaeck swapped;
+  TestBlaeck swapped;
   swapped.begin(swappedStream);
   BlaeckDeviceRef swappedB = swapped.addDevice("Zone B");
   BlaeckDeviceRef swappedA = swapped.addDevice(F("Zone A"));
@@ -2017,7 +1996,7 @@ static void sameNamesAcrossDevices()
 
   // A board without devices hashes exactly as before: names and type codes only.
   FakeStream plainStream;
-  Blaeck plain;
+  TestBlaeck plain;
   plain.begin(plainStream);
   plain.addSignal("Temperature", &boardTemp);
   plain.read();
@@ -2098,13 +2077,71 @@ static void eventsAndButtons()
   assert(commandFramePayload(stream.data.output, 0x85, 0) == std::string("\x00\x00\x01\x00", 4));
 }
 
+// long long signals and properties: DTYPE 0x0B, eight bytes, and inputs read exactly.
+static long long bigGetterValue = -5;
+static long long bigGetter() { return bigGetterValue; }
+
+static void longLongValues()
+{
+  FakeStream stream;
+  ConfigurationProbe device;
+  device.begin(stream);
+  device.DeviceName = "Big";
+  // 2^53 + 1: a double would round it.
+  long long counter = 9007199254740993LL;
+  device.addSignal(F("Counter"), &counter);
+  long long setpoint = 0;
+  device.addNumberInput(F("Setpoint"), &setpoint);
+  device.addSensor(F("Remote"), bigGetter);
+  device.read();
+  stream.data.output.clear();
+
+  command(device, stream, "<BLAECK.GET_DEVICES>");
+  const std::string list = commandFramePayload(stream.data.output, 0xB7, 0);
+  assert(list.find(signalList({{"Counter", 0x0B}})) != std::string::npos);
+  stream.data.output.clear();
+
+  command(device, stream, "<BLAECK.WRITE_DATA>");
+  auto frames = takeData(stream.data.output, {8});
+  assert(frames.size() == 1 && frames[0].values[0] == std::string(reinterpret_cast<const char *>(&counter), 8));
+  device.write(F("Counter"), -1LL);
+  assert(counter == -1);
+  stream.data.output.clear();
+
+  const auto reason = [&]() { return static_cast<byte>(commandFramePayload(stream.data.output, 0xA5, 0)[9]); };
+  command(device, stream, "<Setpoint,9223372036854775807>");
+  assert(reason() == BLAECK_ACK_OK && setpoint == 9223372036854775807LL);
+  stream.data.output.clear();
+  command(device, stream, "<Setpoint,-9223372036854775808>");
+  assert(reason() == BLAECK_ACK_OK && setpoint == (-9223372036854775807LL - 1));
+  stream.data.output.clear();
+  command(device, stream, "<Setpoint,9223372036854775808>");
+  assert(reason() == BLAECK_ACK_OUT_OF_RANGE && setpoint == (-9223372036854775807LL - 1));
+  stream.data.output.clear();
+  command(device, stream, "<Setpoint,1.5>");
+  assert(reason() == BLAECK_ACK_NOT_AN_INTEGER);
+  stream.data.output.clear();
+  command(device, stream, "<Setpoint,2e3>");
+  assert(reason() == BLAECK_ACK_OK && setpoint == 2000);
+  stream.data.output.clear();
+
+  // The entity list carries the DTYPE and eight bytes of each value.
+  device.sendEntities();
+  const std::string entities = commandFramePayload(stream.data.output, 0x90, 0);
+  const std::string remote = std::string("Remote") + '\0' + char(BLAECK_VALUE_NUMBER);
+  const size_t at = entities.find(remote);
+  assert(at != std::string::npos);
+  assert(static_cast<byte>(entities[at + remote.size() + 4]) == 0x0B);
+  assert(entities.substr(at + remote.size() + 5, 8) == std::string(reinterpret_cast<const char *>(&bigGetterValue), 8));
+}
+
 static void properties()
 {
   hostMillis() = 0;
   propertyCallbacks = 0;
   FakeStream stream;
   Capture debug;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream).withDebugStream(&debug);
 
   float setpoint = 21.0f;
@@ -2295,7 +2332,7 @@ static void deviceCommands()
 {
   pings.clear();
   FakeStream stream;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream);
   BlaeckDeviceRef pump = device.addDevice(F("Pump"));
   device.addDevice(F("Fan"));
@@ -2345,7 +2382,7 @@ static void reportingPolicies(bool buffered)
 {
   hostMillis() = 0;
   FakeStream stream;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream);
   device.setBufferedWrites(buffered);
   float periodic = 0, filtered = 20, change = 20, combined = 20;
@@ -2580,7 +2617,7 @@ static void reportingActivationSnapshot(bool buffered)
 {
   hostMillis() = 0;
   FakeStream stream;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream);
   device.setBufferedWrites(buffered);
   float periodic = 0, filtered = 0, change = 0, combined = 0, explicitValue = 0;
@@ -2676,7 +2713,7 @@ static void sharedBaselineAndClock()
 {
   hostMillis() = 0;
   FakeStream stream;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream);
   float value = 10;
   device.addSignal(F("V"), &value).writeAtInterval(BLAECK_ON_CHANGE, 0.5).writeOnChange(1);
@@ -2729,7 +2766,7 @@ static void reportingTypesAndFailures(bool buffered)
   hostMillis() = 0;
   FakeStream stream;
   Capture debug;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream).withDebugStream(&debug);
   device.setBufferedWrites(buffered);
   char text[300] = "";
@@ -2819,7 +2856,7 @@ static void reportingCallbacksAndTimestamps()
 {
   hostMillis() = 0;
   FakeStream stream;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream);
   callbackValue = 0;
   beforeWriteCalls = 0;
@@ -2877,7 +2914,7 @@ static void reportingAllocationAndReconnect()
   hostMillis() = 0;
   FakeStream stream;
   Capture debug;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream).withDebugStream(&debug);
   float value = 0;
   auto handle = device.addSignal(F("Value"), &value);
@@ -2909,7 +2946,7 @@ static void reportingAllocationAndReconnect()
   expectData(stream, {-1}, {0});
   FakeServer<> server;
   SocketState first, replacement;
-  Blaeck tcp;
+  TestBlaeck tcp;
   tcp.begin(server).withClients(1);
   tcp.addSignal(F("V"), &value).writeAtInterval(BLAECK_OFF).writeOnChange(0);
   tcp.tick(); // no host: do not consume initial value
@@ -2931,7 +2968,7 @@ static void reportingReconfiguration()
 {
   hostMillis() = 0;
   FakeStream stream;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream);
   float value = 0;
   auto signal = device.addSignal(F("V"), &value);
@@ -2982,7 +3019,7 @@ template<class T>
 static void reportingIntegerType(int width)
 {
   FakeStream stream;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream);
   // Arduino long is 32 bits, including when the host running this suite uses 64-bit long.
   const T minimum = width == 4 && std::numeric_limits<T>::is_signed
@@ -3016,7 +3053,7 @@ template<class T>
 static void reportingFloatingType()
 {
   FakeStream stream;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream);
   T value = 0;
   auto signal = device.addSignal(F("V"), &value);
@@ -3053,7 +3090,7 @@ static void reportingPartialFrames()
     FakeServer<> server;
     SocketState socket;
     Capture debug;
-    Blaeck device;
+    TestBlaeck device;
     device.begin(server).withDebugStream(&debug);
     device.setBufferedWrites(buffered);
     char value[256];
@@ -3078,7 +3115,7 @@ static void reportingPartialFrames()
 
   FakeStream stream;
   Capture debug;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream).withDebugStream(&debug);
   device.setBufferedWrites(true);
   char value[256];
@@ -3098,7 +3135,7 @@ static void reportingPartialFrames()
 static void reportingCallbackWriteClock()
 {
   FakeStream stream;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream);
   callbackValue = 0;
   callbackDevice = &device;
@@ -3124,7 +3161,7 @@ static void reportingFrameClassification(bool buffered)
 {
   hostMillis() = 0;
   FakeStream stream;
-  Blaeck device;
+  TestBlaeck device;
   device.begin(stream);
   device.setBufferedWrites(buffered);
   float value = 0;
@@ -3179,7 +3216,7 @@ static void reportingFrameClassification(bool buffered)
   expectFlags(0);
 
   FakeStream firstStream;
-  Blaeck first;
+  TestBlaeck first;
   first.begin(firstStream);
   first.setBufferedWrites(buffered);
   first.addSignal(F("V"), &value);
@@ -3248,6 +3285,7 @@ int main()
     deviceCommands();
     properties();
     eventsAndButtons();
+    longLongValues();
     deviceNoticesBeforeHost();
     sameNamesAcrossDevices();
     defaultTimestamps();

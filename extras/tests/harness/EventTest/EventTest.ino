@@ -85,7 +85,7 @@ void setup()
   device.DeviceHWVersion = HARNESS_BOARD;
   device.DeviceFWVersion = "1.0";
 
-  device.addSignal(F("Uptime"), &Uptime).withUnit(F("s"));
+  device.addSignal(F("Uptime"), &Uptime);
 
   // Plain, and the event the driver sends most of its events to.
   device.addEvent(F("Activity"), F("idle,resumed,stopped"));

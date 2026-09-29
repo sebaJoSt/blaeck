@@ -149,12 +149,12 @@ void setup()
              .withHWVersion(F("Arduino Uno"))
              .withFWVersion(F("1.0"));
 
-  device.addSignal(F("Temperature"), &boardTemperature).withUnit(F("\xC2\xB0" "C"));
+  device.addSignal(F("Temperature"), &boardTemperature);
 
   // The pump's entries, registered through its handle. A host shows them under
   // "Pump controller", so their names need no "Pump" of their own.
-  pump.addSignal(F("Flow"), &pumpFlow).withUnit(F("L/min"));
-  pump.addSignal(F("Pressure"), &pumpPressure).withUnit(F("bar"));
+  pump.addSignal(F("Flow"), &pumpFlow);
+  pump.addSignal(F("Pressure"), &pumpPressure);
   pump.addNumberInput(F("PumpSpeed"), &pumpSpeed, onPumpSpeed)
       .withRange(0.0f, 100.0f, 1.0f)
       .withUnit(F("%"));

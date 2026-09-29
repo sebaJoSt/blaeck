@@ -39,13 +39,6 @@ def main():
         defaults_command[-1] = str(distinct)
         subprocess.run(defaults_command, check=True)
         subprocess.run([str(distinct)], check=True, timeout=20)
-        metadata_off = Path(temp) / "reporting-no-metadata-test.exe"
-        metadata_command = command[:]
-        metadata_command[1:1] = ["-DBLAECK_ENABLE_SIGNAL_META=0",
-                                 "-DBLAECK_TEST_REPORTING_ONLY=1"]
-        metadata_command[-1] = str(metadata_off)
-        subprocess.run(metadata_command, check=True)
-        subprocess.run([str(metadata_off)], check=True, timeout=20)
         for capacity in (48, 255, 256, 300, 512):
             buffer_exe = Path(temp) / f"command-buffer-{capacity}.exe"
             buffer_command = command[:]

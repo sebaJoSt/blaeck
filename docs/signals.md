@@ -5,7 +5,7 @@ Blaeck reads it every time it sends data, so you only have to keep the variable 
 date.
 
 The [Signals example](../examples/Signals/Signals.ino) demonstrates numeric, boolean and text
-signals with metadata and numbered arrays, using simulated values so no sensor hardware is
+signals and numbered arrays, using simulated values so no sensor hardware is
 needed. [ConfigurableSignals](../examples/more/ConfigurableSignals) shows how a user can
 choose which signals to log through commands and keep that selection in EEPROM.
 
@@ -34,7 +34,7 @@ These types are accepted:
 
 | | Types |
 |---|---|
-| Numbers | `byte`, `short`, `unsigned short`, `int`, `unsigned int`, `long`, `unsigned long`, `float`, `double` |
+| Numbers | `byte`, `short`, `unsigned short`, `int`, `unsigned int`, `long`, `unsigned long`, `long long`, `float`, `double` |
 | Boolean | `bool` |
 | Text | `char` array, ordinary string literal, or `F()` literal |
 
@@ -72,59 +72,24 @@ for (int i = 0; i < 8; i++)
 }
 ```
 
-## Describing a signal
+## Showing a signal on a dashboard
 
-`addSignal()` is all Loggbok needs to write a signal to the database. Everything you add after
-it is for Home Assistant.
+A signal is a name and a type: it becomes a column in the log, and that is all. There is no
+unit, icon or label on a signal. If a unit belongs in the log, put it in the name:
+`Temperature [C]`.
 
-A name alone does not say what a number means. `2500` could be a pressure, a runtime or a speed.
-You can add that information to `addSignal()` by writing further calls after it:
+To show the same value on a dashboard, add a sensor on the same variable. The sensor carries
+the unit, device class and precision, and is sent when the value changes:
 
 ```cpp
-device.addSignal(F("Temperature"), &temperature)
+device.addSignal(F("Temperature [C]"), &temperature);
+device.addSensor(F("Temperature"), &temperature)
     .withUnit(F("\xC2\xB0" "C"))
     .withDeviceClass(F("temperature"))
-    .withStateClass(BLAECK_STATE_CLASS_MEASUREMENT)
     .withDisplayPrecision(1);
 ```
 
-Home Assistant shows this as a temperature sensor in degrees, with one decimal place, and keeps
-statistics for it.
-
-Add as many of these as you like, in any order, or none at all.
-
-| Call | What it does | Numbers | Text | Bool |
-|---|---|:-:|:-:|:-:|
-| `withUnit(F("Hz"))` | Unit shown after the value. Non-ASCII must be UTF-8 | ● | | |
-| `withDeviceClass(F("temperature"))` | What the value measures | ● | ● | ● |
-| `withStateClass(...)` | `BLAECK_STATE_CLASS_MEASUREMENT`, `_TOTAL` or `_TOTAL_INCREASING`. Leave it out and no statistics are kept | ● | | |
-| `withDisplayPrecision(1)` | Number of decimal places. `0` shows an integer | ● | | |
-| `withIcon(F("mdi:sine-wave"))` | A [Material Design Icons](https://pictogrammers.com/library/mdi/) name | ● | ● | ● |
-| `withDisplayName(F("Output"))` | Label shown instead of the name. The name still identifies the signal | ● | ● | ● |
-| `withOptions(F("a,b,c"))` | The complete set of values this signal reports | | ● | |
-| `diagnostic()` | Marks it as information about the device rather than a measurement | ● | ● | ● |
-| `disabledByDefault()` | Registered, but switched off until someone enables it | ● | ● | ● |
-| `forceUpdate()` | Report every reading, even one identical to the last | ● | ● | ● |
-
-Three of them only work together with another:
-
-- `withOptions()` needs `withDeviceClass(F("enum"))`. Every value the signal reports has to be
-  in the list, and a unit is ignored next to it.
-- `withDeviceClass()` needs a unit Home Assistant accepts for that class. `temperature` with
-  `F("bar")` is refused and the signal never appears at all.
-- `withStateClass()` needs a unit as well. Home Assistant keeps no statistics for a number
-  with nothing to count in.
-
-The last three calls in the table also take an argument, so `diagnostic(isDebugBuild)` works.
-
-A call that cannot mean anything for that type does not compile. A text signal has no decimal
-places, and a `bool` has no unit.
-
-Ordinary metadata strings are copied; their buffers can be reused after the call.
-This does not change the lifetime requirement for the signal's value.
-
-Metadata storage is allocated only for signals that use it. Its RAM cost also depends on the
-length of any copied strings.
+See [Properties](properties.md).
 
 ## When a signal does not fit
 

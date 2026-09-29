@@ -30,6 +30,7 @@ int intTest[2] = {INT_MIN, INT_MAX};
 unsigned int uintTest[2] = {0, UINT_MAX};
 long longTest[2] = {LONG_MIN, LONG_MAX};
 unsigned long ulongTest[2] = {0, ULONG_MAX};
+long long longLongTest[2] = {LLONG_MIN, LLONG_MAX};
 float floatTest[2] = {-FLT_MAX, FLT_MAX};
 double doubleTest[2] = {-DBL_MAX, DBL_MAX};
 float floatNaN = NAN;
@@ -111,6 +112,8 @@ void setup()
   device.addSignal(F("Long_max"), &longTest[1]);
   device.addSignal(F("ULong_min"), &ulongTest[0]);
   device.addSignal(F("ULong_max"), &ulongTest[1]);
+  device.addSignal(F("LongLong_min"), &longLongTest[0]);
+  device.addSignal(F("LongLong_max"), &longLongTest[1]);
   device.addSignal(F("Float_min"), &floatTest[0]);
   device.addSignal(F("Float_max"), &floatTest[1]);
   device.addSignal(F("Float_NaN"), &floatNaN);

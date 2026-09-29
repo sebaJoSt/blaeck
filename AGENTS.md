@@ -4,6 +4,12 @@ Unified library combining BlaeckSerial and BlaeckTCP.
 Version 7.0.0 is in development; setting its metadata does not publish a release.
 
 - Follow `extras/API-STYLE.md` for public documentation and implementation comments.
+- Four concepts: a signal (a value logged over time: name and type in the B7 device list, no
+  metadata), a property (a value shown, or shown and set: inputs `addNumberInput`/
+  `addTextInput`/`addSwitch`/`addSelect` and sensors `addSensor`), an event (a moment from device
+  to host, `addEvent`) and a command (a moment from host to device: `addButton`, listed, or
+  `onCommand`, not listed). Properties, events and buttons are the IoT part, listed in the 0x90
+  entity list and compiled out with `BLAECK_ENABLE_IOT=0`.
 - One concrete `Blaeck` class in `src/Blaeck.h`, with no virtual functions or transport hooks.
   Its only base, `BlaeckDeviceBase`, holds the registration and name-lookup API as thin
   non-virtual wrappers, shared with the sub-device handle `BlaeckDeviceRef`; the tables and
@@ -14,13 +20,14 @@ Version 7.0.0 is in development; setting its metadata does not publish a release
   are header-defined.
 - No mandatory third-party library dependencies. Keep the internal CRC32 helper's
   fixed protocol parameters and upstream MIT notice intact.
-- Write/look-up names and text signal/state values accept RAM strings and F() literals.
-  Signal values retain a pointer plus a storage flag; pushed state text is not retained.
+- Write/look-up names and text signal values accept RAM strings and F() literals.
+  Signal values retain a pointer plus a storage flag; a property reads its variable, buffer
+  or function.
   Keep flash reads explicit, preserve RAM lifetime rules, and compare text contents rather
   than pointers. Text getters still return RAM strings. Native tests simulate separate
   flash storage; this supplements but does not replace AVR hardware validation.
 - Stored configuration accepts ordinary strings and F() literals. Copy ordinary text, retain
-  flash text without copying, and share owned backing for command options and event CSV fields.
+  flash text without copying, and share owned backing for select options and event CSV fields.
   Preserve existing settings on allocation failure and report it through the rejection API.
   Release copied text on replacement, clearing and destruction; signal value ownership is unchanged.
 - One `BlaeckBeginRef` handle configures client count and debug output. Tables have no size:
@@ -34,8 +41,9 @@ Version 7.0.0 is in development; setting its metadata does not publish a release
 - begin() is allowed once per instance, including failed initialization. Later calls,
   even after end(), report an error and return an inert setup handle without changing
   the transport or catalogs. TCP reconnects and host takeovers do not call begin().
-- Both connections report lowercase `blaeck` version 7.0.0. Keep the class/header
-  `Blaeck`/`Blaeck.h` and uppercase BLAECK protocol framing and command names unchanged.
+- Both connections report lowercase `blaeck` version 7.0.0. Frames are framed in lowercase,
+  `<blaeck:` ... `/>` and LF. Keep the class/header `Blaeck`/`Blaeck.h` and the uppercase
+  `BLAECK.` built-in command names unchanged.
 - TCP has one host at a time. A connection's first `BLAECK.*` command makes it the host; the
   previous host is closed and reported as "Client #N disconnected: replaced as host". Frames go
   only to the host, terminals get Terminal text, and terminal commands are not acknowledged.
@@ -59,7 +67,8 @@ Version 7.0.0 is in development; setting its metadata does not publish a release
 - Reporting uses per-signal writeAtInterval(BLAECK_ALWAYS/ON_CHANGE/OFF) and independent
   writeOnChange(delta, minIntervalMs), disabled with writeOnChange(BLAECK_OFF).
   BLAECK_ANY_CHANGE is a named zero threshold; numeric zero remains valid. Both share
-  one last-sent baseline. tick() is read() plus writeIfDue(); do not restore update
+  one last-sent baseline. tick(timestamp) is the only loop call; read() and writeIfDue()
+  are its protected halves, reached by tests through a subclass. Do not restore update
   flags or timed-write API variants.
 - Native reporting/transport tests and representative Mega Serial/GIGA TCP builds have
   passed. SignalReportingTest also passed direct/buffered Serial checks on a physical

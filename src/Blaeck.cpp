@@ -112,6 +112,7 @@ byte Blaeck::_dtypeCode(dataType t)
   case (Blaeck_float):  return 0x8;
   case (Blaeck_double): return 0x9;
   case (Blaeck_string): return 0xA;
+  case (Blaeck_longlong): return 0xB;
   default:              return 0x8;
   }
 }
@@ -125,11 +126,6 @@ void Blaeck::_flushCatalogs()
   // Each writer clears its own dirty flag, so a catalog a host asked for isn't sent twice.
   if (_entityCatalogDirty)
     this->writeEntities(0);
-
-#if BLAECK_ENABLE_SIGNAL_META
-  if (_signalConfigDirty)
-    this->writeSignalConfig(0);
-#endif
 }
 
 void Blaeck::_resetSignalCatalog()
@@ -141,9 +137,6 @@ void Blaeck::_resetSignalCatalog()
   _schemaHash = 0;
   _rejectedSignalCount = 0;
   _rejectedSignalPolicyCount = 0;
-#if BLAECK_ENABLE_SIGNAL_META
-  _rejectedSignalMetaCount = 0;
-#endif
 }
 
 bool Blaeck::hasRejections() const
@@ -153,10 +146,6 @@ bool Blaeck::hasRejections() const
   if (_rejectedSignalCount > 0 || _rejectedCommandCount > 0 || _rejectedSignalPolicyCount > 0
       || _rejectedDeviceCount > 0)
     return true;
-#if BLAECK_ENABLE_SIGNAL_META
-  if (_rejectedSignalMetaCount > 0)
-    return true;
-#endif
   if (_rejectedPropertyCount > 0 || _rejectedEventChannelCount > 0 || _rejectedEventTypeCount > 0)
     return true;
   return false;
@@ -204,17 +193,6 @@ bool Blaeck::printRejections(Print *out)
   out->println(F("  Possible causes include invalid or conflicting names, "
                  "invalid event types, or insufficient memory."));
   out->println(F("  Enable withDebugStream() before registration for details."));
-#if BLAECK_ENABLE_SIGNAL_META
-  // Out of heap, not out of table, so there is no setting to suggest. The signals themselves
-  // are fine.
-  if (_rejectedSignalMetaCount > 0)
-  {
-    out->print(F("  "));
-    out->print(_rejectedSignalMetaCount);
-    out->println(F(" signal description(s) dropped, out of heap - the signals themselves "
-                   "are unaffected"));
-  }
-#endif
   return true;
 }
 
@@ -467,14 +445,6 @@ int Blaeck::_registerSignalCommon(byte deviceId, const char *ram, const __FlashS
   Signals[_signalIndex].HasSuffix = 0;
   Signals[_signalIndex].NameSuffix = 0;
   Signals[_signalIndex].DeviceId = deviceId;
-#if BLAECK_ENABLE_SIGNAL_META
-  // A reused slot may still hold a metadata record from before; free it.
-  if (Signals[_signalIndex].Meta != nullptr)
-  {
-    delete Signals[_signalIndex].Meta;
-    Signals[_signalIndex].Meta = nullptr;
-  }
-#endif
   int16_t added = (int16_t)_signalIndex;
   _signalIndex++;
   SignalCount = _signalIndex;
@@ -484,16 +454,13 @@ int Blaeck::_registerSignalCommon(byte deviceId, const char *ram, const __FlashS
 
 void Blaeck::clearAllSignals()
 {
-  // Free the name copies and metadata records too, not only rewind the index.
+  // Free the name copies too, not only rewind the index.
   _freeSignalOwned();
   _signalIndex = 0;
   SignalCount = _signalIndex;
   _schemaHash = 0;
   _rejectedSignalCount = 0;
   _rejectedSignalPolicyCount = 0;
-#if BLAECK_ENABLE_SIGNAL_META
-  _rejectedSignalMetaCount = 0;
-#endif
 }
 
 uint16_t Blaeck::_computeSchemaHash()
@@ -578,10 +545,6 @@ void Blaeck::_freeSignalOwned()
     Signals[i].NameInFlash = 0;
     delete Signals[i].Reporting;
     Signals[i].Reporting = nullptr;
-#if BLAECK_ENABLE_SIGNAL_META
-    delete Signals[i].Meta;
-    Signals[i].Meta = nullptr;
-#endif
   }
 }
 
@@ -687,7 +650,7 @@ static size_t _signalValueSize(dataType type)
   case Blaeck_bool: case Blaeck_byte: return 1;
   case Blaeck_short: case Blaeck_ushort: case Blaeck_int: case Blaeck_uint: return 2;
   case Blaeck_long: case Blaeck_ulong: case Blaeck_float: return 4;
-  case Blaeck_double: return 8;
+  case Blaeck_double: case Blaeck_longlong: return 8;
   default: return 0;
   }
 }
@@ -749,7 +712,8 @@ void Blaeck::_captureSignalSnapshot(Signal &s)
   _captureValue(*s.Reporting, s.DataType, s.Address, s.TextInFlash);
 }
 
-template<class T>
+// U is an unsigned type at least as wide as T.
+template<class T, class U = unsigned long>
 static bool _integerSignalChanged(const void *address, const byte *baseline, double delta)
 {
   T current, previous;
@@ -758,12 +722,12 @@ static bool _integerSignalChanged(const void *address, const byte *baseline, dou
   if (current == previous)
     return false;
   // Unsigned subtraction also handles signed endpoints without signed overflow.
-  const unsigned long difference = current > previous
-      ? static_cast<unsigned long>(current) - static_cast<unsigned long>(previous)
-      : static_cast<unsigned long>(previous) - static_cast<unsigned long>(current);
-  if (delta >= ldexp(1.0, sizeof(unsigned long) * CHAR_BIT))
+  const U difference = current > previous
+      ? static_cast<U>(current) - static_cast<U>(previous)
+      : static_cast<U>(previous) - static_cast<U>(current);
+  if (delta >= ldexp(1.0, sizeof(U) * CHAR_BIT))
     return false;
-  return difference >= static_cast<unsigned long>(ceil(delta));
+  return difference >= static_cast<U>(ceil(delta));
 }
 
 template<class T>
@@ -795,6 +759,7 @@ static bool _valueChanged(const ReportingState &r, dataType type, const void *va
   case Blaeck_ushort: case Blaeck_uint: return _integerSignalChanged<uint16_t>(value, r.value, delta);
   case Blaeck_long: return _integerSignalChanged<int32_t>(value, r.value, delta);
   case Blaeck_ulong: return _integerSignalChanged<uint32_t>(value, r.value, delta);
+  case Blaeck_longlong: return _integerSignalChanged<int64_t, uint64_t>(value, r.value, delta);
   case Blaeck_float: return _floatingSignalChanged<float>(value, r.value, delta, FLT_MIN);
   case Blaeck_double: return _floatingSignalChanged<double>(value, r.value, delta, DBL_MIN);
   case Blaeck_string:
@@ -810,24 +775,6 @@ bool Blaeck::_signalChanged(const Signal &s, double delta) const
 {
   return _valueChanged(*s.Reporting, s.DataType, s.Address, s.TextInFlash, delta);
 }
-
-#if BLAECK_ENABLE_SIGNAL_META
-SignalMeta *Blaeck::_ensureSignalMeta(int16_t index)
-{
-  // A rejected signal's handle has nowhere to store anything.
-  if (index < 0 || static_cast<unsigned int>(index) >= Signals.capacity())
-    return nullptr;
-  Signal &s = Signals[index];
-  if (s.Meta == nullptr)
-  {
-    // Works with either a throwing or a nothrow new: a failure gives null or doesn't return.
-    s.Meta = new (std::nothrow) SignalMeta();
-    if (s.Meta == nullptr)
-      _rejectedSignalMetaCount++;
-  }
-  return s.Meta;
-}
-#endif
 
 bool Blaeck::_signalNameEquals(const Signal &s, const char *name, bool nameInFlash) const
 {
@@ -967,6 +914,7 @@ bool blaeck_detail::optionsAccepted(BlaeckString optionsCsv, Print *debug,
   case (Blaeck_ulong):  *((unsigned long *)Signals[signalIndex].Address)  = (unsigned long)(v); break; \
   case (Blaeck_float):  *((float *)Signals[signalIndex].Address)          = (float)(v); break; \
   case (Blaeck_double): *((double *)Signals[signalIndex].Address)         = (double)(v); break;\
+  case (Blaeck_longlong): *((long long *)Signals[signalIndex].Address)    = (long long)(v); break; \
   default: return false;                                                                       \
   }                                                                                            \
   return true;
@@ -979,6 +927,13 @@ bool Blaeck::_storeSigned(int signalIndex, long value)
 }
 
 bool Blaeck::_storeUnsigned(int signalIndex, unsigned long value)
+{
+  if (signalIndex < 0 || signalIndex >= _signalIndex)
+    return false;
+  BLAECK_STORE_CASES(value)
+}
+
+bool Blaeck::_storeLongLong(int signalIndex, long long value)
 {
   if (signalIndex < 0 || signalIndex >= _signalIndex)
     return false;
@@ -1046,12 +1001,7 @@ void Blaeck::read()
       bool builtinMatched = true;
       const unsigned long msg_id = _parsedPrefixMsgId;
 
-      if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_SIGNAL_CONFIG)))
-      {
-        _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
-        this->writeSignalConfig(msg_id);
-      }
-      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_DATA)))
+      if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_DATA)))
       {
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
         // Marks the data frame as a reply to a request.
@@ -2271,30 +2221,6 @@ void Blaeck::_setTimedDataState(bool timedActivated, unsigned long timedInterval
   }
 }
 
-#if BLAECK_ENABLE_SIGNAL_META
-void Blaeck::writeSignalConfig()
-{
-  this->writeSignalConfig(0);
-}
-void Blaeck::writeSignalConfig(unsigned long msg_id)
-{
-  _signalConfigDirty = false;
-  this->writeSignalConfigFrame(msg_id);
-}
-#else
-// BLAECK_ENABLE_SIGNAL_META=0: the catalog answers empty.
-void Blaeck::writeSignalConfig() { this->writeSignalConfig(0); }
-void Blaeck::writeSignalConfig(unsigned long msg_id) { this->_writeEmptyFrame(0xF0, msg_id); }
-#endif
-
-// A catalog with no entries.
-void Blaeck::_writeEmptyFrame(byte msgKey, unsigned long msg_id)
-{
-  if (!_frameOpen(msgKey, msg_id))
-    return;
-  _frameClose();
-}
-
 void BlaeckDeviceBase::write(int signalIndex, bool value, unsigned long long timestamp)
 {
   if (_core != nullptr && _core->_storeSigned(signalIndex, value))
@@ -2333,6 +2259,11 @@ void BlaeckDeviceBase::write(int signalIndex, long value, unsigned long long tim
 void BlaeckDeviceBase::write(int signalIndex, unsigned long value, unsigned long long timestamp)
 {
   if (_core != nullptr && _core->_storeUnsigned(signalIndex, value))
+    _core->_writeSignalNow(signalIndex, timestamp);
+}
+void BlaeckDeviceBase::write(int signalIndex, long long value, unsigned long long timestamp)
+{
+  if (_core != nullptr && _core->_storeLongLong(signalIndex, value))
     _core->_writeSignalNow(signalIndex, timestamp);
 }
 void BlaeckDeviceBase::write(int signalIndex, float value, unsigned long long timestamp)
@@ -2391,10 +2322,10 @@ void Blaeck::writeData(unsigned long msg_id, int signalIndex_start, int signalIn
   this->writeDataFrame(msg_id, signalIndex_start, signalIndex_end, selectedOnly, timestamp);
 }
 
-void Blaeck::tick()
+void Blaeck::tick(unsigned long long timestamp)
 {
   read();
-  writeIfDue();
+  writeIfDue(timestamp);
 }
 
 void Blaeck::writeIfDue(unsigned long long timestamp)
@@ -2642,11 +2573,10 @@ void Blaeck::writeRestarted(unsigned long msg_id)
     _emitByte(DEVICE_EVENT_RESTARTED);
     _frameClose();
 
-    // Send every catalog after the notice, so a host that stayed connected sees what this run
-    // declares. The entity list matters most, since its values are back at their defaults.
-    // This runs from read(), so setup() has finished declaring by then.
+    // Send the entity list after the notice, so a host that stayed connected sees what this run
+    // declares and that its values are back at their defaults. This runs from read(), so
+    // setup() has finished declaring by then.
     this->writeEntities(msg_id);
-    this->writeSignalConfig(msg_id);
   }
 }
 
@@ -2787,6 +2717,13 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
     case (Blaeck_ulong):  ulngCvt.val  = *((unsigned long *)signal.Address);  _emitBytes(ulngCvt.bval, 4);  break;
     case (Blaeck_float):  fltCvt.val   = *((float *)signal.Address);          _emitBytes(fltCvt.bval, 4);   break;
     case (Blaeck_double): dblCvt.val   = *((double *)signal.Address);         _emitBytes(dblCvt.bval, 8);   break;
+    case (Blaeck_longlong):
+    {
+      byte bytes[8];
+      memcpy(bytes, signal.Address, 8);
+      _emitBytes(bytes, 8);
+      break;
+    }
     case (Blaeck_string):
     {
       byte len = static_cast<byte>(_textLength(signal.Address, signal.TextInFlash));
@@ -2819,45 +2756,6 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
   if (complete)
     _sendRestartFlag = false;
 }
-
-#if BLAECK_ENABLE_SIGNAL_META
-void Blaeck::writeSignalConfigFrame(unsigned long msg_id)
-{
-  // Layout: Signal Config (0xF0) in the protocol spec. Only signals that declare something are
-  // included.
-  if (!_frameOpen(0xF0, msg_id))
-    return;
-
-  for (int i = 0; i < _signalIndex; i++)
-  {
-    const SignalMeta *m = Signals[i].Meta;
-    // No record, or one that declares nothing.
-    if (m == nullptr || m->MetaFlags == 0)
-      continue;
-
-    uint16_t symbolId = (uint16_t)i;
-    _emitByte((byte)(symbolId & 0xFF));
-    _emitByte((byte)((symbolId >> 8) & 0xFF));
-    _emitByte((byte)(m->MetaFlags & 0xFF));
-    _emitByte((byte)((m->MetaFlags >> 8) & 0xFF));
-
-    if (m->MetaFlags & BLAECK_SIG_HAS_UNIT)
-      _emitFlashStr0(m->Unit);
-    if (m->MetaFlags & BLAECK_SIG_HAS_DEVICE_CLASS)
-      _emitFlashStr0(m->DeviceClass);
-    if (m->MetaFlags & BLAECK_SIG_HAS_ICON)
-      _emitFlashStr0(m->Icon);
-    if (m->MetaFlags & BLAECK_SIG_HAS_DISPLAY_PRECISION)
-      _emitByte(m->DisplayPrecision);
-    if (m->MetaFlags & BLAECK_SIG_HAS_OPTIONS)
-      _emitFlashStr0(m->Options);
-    if (m->MetaFlags & BLAECK_SIG_HAS_DISPLAY_NAME)
-      _emitFlashStr0(m->DisplayName);
-  }
-
-  _frameClose();
-}
-#endif
 
 void Blaeck::setTimestampMode(BlaeckTimestampMode mode)
 {
@@ -3004,19 +2902,20 @@ static const dataType BLAECK_UINT_TYPE = Blaeck_ulong;
 static const dataType BLAECK_DOUBLE_TYPE = Blaeck_double;
 #endif
 
-BlaeckBoolSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, bool *value) { return BlaeckBoolSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_bool, value)); }
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, byte *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_byte, value)); }
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, short *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_short, value)); }
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, unsigned short *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_ushort, value)); }
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, int *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, BLAECK_INT_TYPE, value)); }
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, unsigned int *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, BLAECK_UINT_TYPE, value)); }
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, long *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_long, value)); }
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, unsigned long *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_ulong, value)); }
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, float *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_float, value)); }
-BlaeckNumericSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, double *value) { return BlaeckNumericSignalRef(_core, (int16_t)_registerSignal(signalName, BLAECK_DOUBLE_TYPE, value)); }
+BlaeckSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, bool *value) { return BlaeckSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_bool, value)); }
+BlaeckSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, byte *value) { return BlaeckSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_byte, value)); }
+BlaeckSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, short *value) { return BlaeckSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_short, value)); }
+BlaeckSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, unsigned short *value) { return BlaeckSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_ushort, value)); }
+BlaeckSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, int *value) { return BlaeckSignalRef(_core, (int16_t)_registerSignal(signalName, BLAECK_INT_TYPE, value)); }
+BlaeckSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, unsigned int *value) { return BlaeckSignalRef(_core, (int16_t)_registerSignal(signalName, BLAECK_UINT_TYPE, value)); }
+BlaeckSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, long *value) { return BlaeckSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_long, value)); }
+BlaeckSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, unsigned long *value) { return BlaeckSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_ulong, value)); }
+BlaeckSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, long long *value) { return BlaeckSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_longlong, value)); }
+BlaeckSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, float *value) { return BlaeckSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_float, value)); }
+BlaeckSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, double *value) { return BlaeckSignalRef(_core, (int16_t)_registerSignal(signalName, BLAECK_DOUBLE_TYPE, value)); }
 // Address is void * for every type; a string is only read.
-BlaeckTextSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, const char *value) { return BlaeckTextSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_string, const_cast<char *>(value))); }
-BlaeckTextSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, const __FlashStringHelper *value) { return BlaeckTextSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_string, const_cast<__FlashStringHelper *>(value), true)); }
+BlaeckSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, const char *value) { return BlaeckSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_string, const_cast<char *>(value))); }
+BlaeckSignalRef BlaeckDeviceBase::addSignal(BlaeckString signalName, const __FlashStringHelper *value) { return BlaeckSignalRef(_core, (int16_t)_registerSignal(signalName, Blaeck_string, const_cast<__FlashStringHelper *>(value), true)); }
 
 BlaeckEventRef BlaeckDeviceBase::addEvent(BlaeckString channelName, BlaeckString eventTypes)
 {
@@ -3068,6 +2967,7 @@ void BlaeckDeviceBase::write(BlaeckString signalName, int value, unsigned long l
 void BlaeckDeviceBase::write(BlaeckString signalName, unsigned int value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
 void BlaeckDeviceBase::write(BlaeckString signalName, long value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
 void BlaeckDeviceBase::write(BlaeckString signalName, unsigned long value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
+void BlaeckDeviceBase::write(BlaeckString signalName, long long value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
 void BlaeckDeviceBase::write(BlaeckString signalName, float value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
 void BlaeckDeviceBase::write(BlaeckString signalName, double value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
 void BlaeckDeviceBase::write(BlaeckString signalName, const char *value, unsigned long long timestamp) { write(findSignalIndex(signalName), value, timestamp); }
@@ -3319,6 +3219,7 @@ void Blaeck::_propertyValue(const PropertyEntry &p, byte *out) const
   case blaeck_detail::GETTER_ULONG: { unsigned long v = reinterpret_cast<unsigned long (*)()>(p.getter)(); memcpy(out, &v, sizeof v); } break;
   case blaeck_detail::GETTER_FLOAT: { float v = reinterpret_cast<float (*)()>(p.getter)(); memcpy(out, &v, sizeof v); } break;
   case blaeck_detail::GETTER_DOUBLE: { double v = reinterpret_cast<double (*)()>(p.getter)(); memcpy(out, &v, sizeof v); } break;
+  case blaeck_detail::GETTER_LONGLONG: { long long v = reinterpret_cast<long long (*)()>(p.getter)(); memcpy(out, &v, sizeof v); } break;
   default: break;
   }
 }
@@ -3374,8 +3275,36 @@ static bool _storeNumber(void *address, dataType type, double v)
     if (v < 0 || v > 4294967295.0) return false; { uint32_t x = (uint32_t)v; memcpy(address, &x, 4); } return true;
   case Blaeck_float: { float x = (float)v; memcpy(address, &x, sizeof x); } return true;
   case Blaeck_double: { double x = v; memcpy(address, &x, sizeof x); } return true;
+  // The bounds are the nearest doubles inside the range: 2^63 itself does not fit.
+  case Blaeck_longlong:
+    if (v < -9223372036854775808.0 || v >= 9223372036854775808.0) return false;
+    { long long x = (long long)v; memcpy(address, &x, sizeof x); } return true;
   default: return false;
   }
+}
+
+// Reads a whole decimal integer, with an optional sign, into a long long. False if the text is
+// anything else or does not fit. avr-libc has no strtoll(), and a double on AVR holds only 24
+// bits exactly, so a 64-bit input is read here.
+static bool _parseLongLong(const char *text, long long &out)
+{
+  const bool negative = text[0] == '-';
+  const char *p = (text[0] == '-' || text[0] == '+') ? text + 1 : text;
+  if (*p == '\0')
+    return false;
+  const unsigned long long limit = negative ? 9223372036854775808ULL : 9223372036854775807ULL;
+  unsigned long long value = 0;
+  for (; *p != '\0'; ++p)
+  {
+    if (*p < '0' || *p > '9')
+      return false;
+    const unsigned digit = (unsigned)(*p - '0');
+    if (value > (limit - digit) / 10)
+      return false;
+    value = value * 10 + digit;
+  }
+  out = negative ? (long long)(0ULL - value) : (long long)value;
+  return true;
 }
 
 static bool _isIntegerType(dataType type)
@@ -3406,6 +3335,17 @@ byte Blaeck::_receiveProperty(uint16_t index)
   {
   case BLAECK_VALUE_NUMBER:
   {
+    // A 64-bit integer is taken exactly when the text is a whole number; the range compares
+    // as doubles, and a whole number needs no step.
+    long long whole;
+    if (p.type == Blaeck_longlong && _parseLongLong(v, whole))
+    {
+      if ((p.flags & blaeck_detail::PROPERTY_HAS_RANGE) &&
+          ((double)whole < p.rangeMin || (double)whole > p.rangeMax))
+        return BLAECK_ACK_OUT_OF_RANGE;
+      memcpy(p.address, &whole, sizeof whole);
+      return BLAECK_ACK_OK;
+    }
     // The whole string must be a number: atof() would read "abc" as 0.
     char *end = nullptr;
     double number = strtod(v, &end);
@@ -3799,6 +3739,7 @@ BLAECK_NUMBER_INPUT(int, BLAECK_INT_TYPE)
 BLAECK_NUMBER_INPUT(unsigned int, BLAECK_UINT_TYPE)
 BLAECK_NUMBER_INPUT(long, Blaeck_long)
 BLAECK_NUMBER_INPUT(unsigned long, Blaeck_ulong)
+BLAECK_NUMBER_INPUT(long long, Blaeck_longlong)
 BLAECK_NUMBER_INPUT(float, Blaeck_float)
 BLAECK_NUMBER_INPUT(double, BLAECK_DOUBLE_TYPE)
 #undef BLAECK_NUMBER_INPUT
@@ -3851,6 +3792,7 @@ BLAECK_NUMBER_SENSOR(int, BLAECK_INT_TYPE, blaeck_detail::GETTER_INT)
 BLAECK_NUMBER_SENSOR(unsigned int, BLAECK_UINT_TYPE, blaeck_detail::GETTER_UINT)
 BLAECK_NUMBER_SENSOR(long, Blaeck_long, blaeck_detail::GETTER_LONG)
 BLAECK_NUMBER_SENSOR(unsigned long, Blaeck_ulong, blaeck_detail::GETTER_ULONG)
+BLAECK_NUMBER_SENSOR(long long, Blaeck_longlong, blaeck_detail::GETTER_LONGLONG)
 BLAECK_NUMBER_SENSOR(float, Blaeck_float, blaeck_detail::GETTER_FLOAT)
 BLAECK_NUMBER_SENSOR(double, BLAECK_DOUBLE_TYPE, blaeck_detail::GETTER_DOUBLE)
 #undef BLAECK_NUMBER_SENSOR

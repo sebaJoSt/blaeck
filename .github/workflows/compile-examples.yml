@@ -89,7 +89,10 @@ jobs:
               arduino:avr:mega)
                 compile examples/more/ConfigurableSignals
                 compile examples/more/SubDevices/MainBoard
-                compile examples/more/SubDevices/PumpBoard ;;
+                compile examples/more/SubDevices/PumpBoard
+                # The IoT part compiled out: its calls still build and store nothing.
+                arduino-cli compile --fqbn "$FQBN" --library . \
+                  --build-property compiler.cpp.extra_flags=-DBLAECK_ENABLE_IOT=0 examples/WaveformGenerator ;;
               arduino:mbed_giga:giga)
                 compile examples/more/SubDevices/MainBoard
                 compile examples/more/SubDevices/PumpBoard ;;

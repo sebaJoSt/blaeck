@@ -139,7 +139,7 @@ and the optional TelnetStream setup.
 
 | Guide | What it covers |
 |---|---|
-| [Signals](docs/signals.md) | Registering values, naming them, and describing how they are shown |
+| [Signals](docs/signals.md) | Registering values to log, and naming them |
 | [Commands](docs/commands.md) | Reacting to commands, and declaring them as controls |
 | [Properties](docs/properties.md) | Inputs a host sets and sensors it shows, displayed but not logged |
 | [Events](docs/events.md) | Reporting that something happened |
@@ -164,7 +164,7 @@ Start with **Basic**, then **Signals** and **Commands**. Follow with **Propertie
 | Example | What it teaches |
 |---|---|
 | [Basic](examples/Basic) | The smallest sketch that logs two values |
-| [Signals](examples/Signals) | Numeric, boolean and text signals, metadata, and numbered arrays |
+| [Signals](examples/Signals) | Numeric, boolean and text signals, and numbered arrays |
 | [Commands](examples/Commands) | Plain commands and buttons |
 | [Properties](examples/Properties) | Inputs a host sets and sensors it shows, without logging them |
 | [Events](examples/Events) | Declaring and reporting occurrences |

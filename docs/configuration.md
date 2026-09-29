@@ -27,9 +27,9 @@ This also applies after `end()` or failed initialization; a latched `OutOfMemory
 error is retained. `end()` closes the transport; it does not reset the instance for
 another `begin()`.
 
-RAM is the only limit. On AVR, with the default settings, a signal costs 12 bytes, an event type
+RAM is the only limit. On AVR, with the default settings, a signal costs 10 bytes, an event type
 6, an event 13, a device 10, a property about 40 and a command or button 66 - the largest there is.
-A signal with a unit, icon or other description takes 18 bytes more. Every eight entries of a
+Every eight entries of a
 table share about 4 bytes of bookkeeping, and the last group of eight may hold up to seven
 unused slots. Each configuration string passed as ordinary RAM text is copied, at about its
 length plus 7 bytes (a reference count, the terminator and the heap's own header); an `F()`
@@ -107,16 +107,11 @@ and a name built at runtime has to live in a global buffer.
 
 ## Compile-time settings
 
-The rest are `#define`s. Two of them switch a feature off, which reclaims the flash and SRAM
-it would have cost:
-
-| Define | Set to 0 to drop |
-|---|---|
-| `BLAECK_ENABLE_SIGNAL_META` | Everything a signal declares about itself. Saves 2 bytes of SRAM per signal on AVR, and 18 per described signal |
-| `BLAECK_ENABLE_IOT` | The IoT part: inputs, sensors, buttons and events. The entity list goes out empty; signals and plain commands work as before |
-
-Your sketch needs no `#ifdef` around any of it. The calls still compile and simply store
-nothing, so the same sketch builds either way.
+The rest are `#define`s. `BLAECK_ENABLE_IOT` set to 0 drops the IoT part - inputs, sensors,
+buttons and events - and reclaims the flash and SRAM it would have cost. The entity list then
+goes out empty; signals and plain commands work as before. Your sketch needs no `#ifdef`
+around it: the calls still compile and simply store nothing, so the same sketch builds
+either way.
 
 These change a default:
 

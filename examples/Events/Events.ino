@@ -62,12 +62,8 @@ void setup()
   device.DeviceName = HOST_NAME;
   device.DeviceFWVersion = "1.0";
 
-  device.addSignal(F("Uptime"), &Uptime)
-      .withUnit(F("s"))
-      .withDeviceClass(F("duration"))
-      .withStateClass(BLAECK_STATE_CLASS_MEASUREMENT);
-  device.addSignal(F("EventCount"), &EventCount)
-      .withStateClass(BLAECK_STATE_CLASS_TOTAL_INCREASING);
+  device.addSignal(F("Uptime"), &Uptime);
+  device.addSignal(F("EventCount"), &EventCount);
 
   // A doorbell must be able to report "ring". Home Assistant warns about a doorbell without it
   // today and stops accepting one in 2027.4.

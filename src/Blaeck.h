@@ -72,26 +72,16 @@ static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
               "BLAECK_COMMAND_MAX_CHARS_DEFAULT must be between 1 and 65535 bytes.");
 
 
-// The switches below each remove one feature to save SRAM and flash on small boards. The API
-// stays, so a sketch compiles either way, and the matching catalog request is answered with an
-// empty frame so a host does not wait for it.
-
-// The IoT part: inputs, sensors, buttons and events, listed in the 0x90 Entity List. Off, their
-// add… calls store nothing and the entity list goes out empty. Signals and plain commands work
-// either way.
+// The IoT part: inputs, sensors, buttons and events, listed in the 0x90 Entity List. Set it to
+// 0 to save SRAM and flash on a small board. The API stays, so a sketch compiles either way:
+// their add… calls store nothing, and the entity list goes out empty so a host does not wait
+// for it. Signals and plain commands work either way.
 #ifndef BLAECK_ENABLE_IOT
   #define BLAECK_ENABLE_IOT 1
 #endif
 
-// Signal metadata: withUnit(), withIcon() and the rest of addSignal()'s handle, sent in the
-// 0xF0 Signal Config. Off, those calls store nothing.
-#ifndef BLAECK_ENABLE_SIGNAL_META
-  #define BLAECK_ENABLE_SIGNAL_META 1
-#endif
-
 // The built-in commands. read() matches against these names, and the build fails if one is
 // too long for the parse buffer. A new built-in has to be added to the list below as well.
-#define BLAECK_BUILTIN_WRITE_SIGNAL_CONFIG "BLAECK.WRITE_SIGNAL_CONFIG"
 #define BLAECK_BUILTIN_WRITE_DATA "BLAECK.WRITE_DATA"
 #define BLAECK_BUILTIN_GET_DEVICES "BLAECK.GET_DEVICES"
 #define BLAECK_BUILTIN_WRITE_ENTITIES "BLAECK.WRITE_ENTITIES"
@@ -107,7 +97,6 @@ static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
 #define BLAECK_DEVICE_NAME_UNNAMED "Unnamed"
 
 #define BLAECK_BUILTIN_COMMAND_LIST(X)  \
-  X(BLAECK_BUILTIN_WRITE_SIGNAL_CONFIG) \
   X(BLAECK_BUILTIN_WRITE_DATA)          \
   X(BLAECK_BUILTIN_GET_DEVICES)         \
   X(BLAECK_BUILTIN_WRITE_ENTITIES)      \
@@ -150,14 +139,15 @@ typedef enum DataType : uint8_t
   Blaeck_ulong,
   Blaeck_float,
   Blaeck_double,
-  Blaeck_string
+  Blaeck_string,
+  Blaeck_longlong
 } dataType;
 
 // The enumerators are not the wire codes and nothing treats them as such: _dtypeCode() is
-// the one mapping, and the schema hash, the device list and the state frames all go through
+// the one mapping, and the schema hash, the device list and the property frames all go through
 // it. Reorder this list or insert a type and nothing on the wire moves.
 
-// How a signal's value behaves over time, so a host knows whether to keep statistics on it.
+// How a sensor's value behaves over time, so a host knows whether to keep statistics on it.
 // NONE, the default, means no statistics.
 enum BlaeckStateClass
 {
@@ -171,37 +161,6 @@ enum BlaeckStateClass
   // An angle, averaged the short way round: 350 and 10 average to 0, not 180.
   BLAECK_STATE_CLASS_MEASUREMENT_ANGLE = 4
 };
-
-// The 0xF0 flag word, stored as it is sent. A word of zero means the signal declares nothing.
-enum BlaeckSignalMetaFlag
-{
-  BLAECK_SIG_HAS_UNIT = 0x0001,
-  BLAECK_SIG_HAS_DEVICE_CLASS = 0x0002,
-  BLAECK_SIG_HAS_ICON = 0x0004,
-  BLAECK_SIG_STATE_CLASS_MASK = 0x0038, // bits 3-5
-  BLAECK_SIG_DIAGNOSTIC = 0x0040,
-  BLAECK_SIG_DISABLED_BY_DEFAULT = 0x0080,
-  BLAECK_SIG_FORCE_UPDATE = 0x0100,
-  BLAECK_SIG_HAS_DISPLAY_PRECISION = 0x0200,
-  BLAECK_SIG_HAS_OPTIONS = 0x0400,
-  BLAECK_SIG_HAS_DISPLAY_NAME = 0x0800
-};
-static const byte BLAECK_SIG_STATE_CLASS_SHIFT = 3;
-
-#if BLAECK_ENABLE_SIGNAL_META
-// What a signal declares beyond its name and type. Allocated only for signals that declare
-// something, since most don't and this is larger than the signal entry itself.
-struct SignalMeta
-{
-  detail::StoredString Unit;
-  detail::StoredString DeviceClass;
-  detail::StoredString Icon;
-  detail::StoredString Options;
-  detail::StoredString DisplayName;
-  uint16_t MetaFlags = 0;
-  uint8_t DisplayPrecision = 0;
-};
-#endif
 
 enum BlaeckIntervalMode : uint8_t
 {
@@ -231,7 +190,7 @@ constexpr unsigned long long BLAECK_NOW = ~0ULL;
 
 struct ReportingState
 {
-  byte value[sizeof(double) > sizeof(unsigned long) ? sizeof(double) : sizeof(unsigned long)] = {};
+  byte value[sizeof(long long)] = {};
   double intervalDelta = 0;
   double changeDelta = 0;
   uint32_t minIntervalMs = 100;
@@ -268,10 +227,6 @@ struct Signal
   // device. Set by _computeSchemaHash() whenever the signals change.
   uint16_t WireIndex = 0;
   ReportingState *Reporting = nullptr;
-#if BLAECK_ENABLE_SIGNAL_META
-  // Null until the sketch describes the signal. Owned by the entry.
-  SignalMeta *Meta = nullptr;
-#endif
 };
 
 enum BlaeckTimestampMode
@@ -347,10 +302,7 @@ enum BlaeckValueKind : uint8_t
 };
 
 
-class BlaeckSignalRefBase;
-class BlaeckNumericSignalRef;
-class BlaeckTextSignalRef;
-class BlaeckBoolSignalRef;
+class BlaeckSignalRef;
 class BlaeckCommandRefBase;
 class BlaeckButtonRef;
 class BlaeckEventRef;
@@ -377,7 +329,7 @@ public:
 
     Hosts and terminals together. Each connection takes a receive buffer of
     BLAECK_COMMAND_MAX_CHARS_DEFAULT bytes, 128 on a Mega. A connection beyond the
-    limit is closed at once. Set it before the first read(); later it is refused.
+    limit is closed at once. Set it before the first tick(); later it is refused.
 
     @note    Keep at least 2, so a host reconnecting after a dropped link finds a
              free slot and takes over from its dead connection. With 1, it waits
@@ -432,9 +384,8 @@ inline bool flashStrEmpty(BlaeckString value)
   return value != nullptr && value.read() == 0;
 }
 
-// Checks an options list for withOptions(): it must have at least one entry and no blank
-// ones. Prints why on debug when it refuses. `name` is the signal, channel or command named
-// in that message.
+// Checks the options of a select or an enum sensor: at least one entry and no blank ones.
+// Prints why on debug when it refuses. `name` is the property named in that message.
 bool optionsAccepted(BlaeckString optionsCsv, Print *debug,
                      const char *name, bool nameInFlash);
 
@@ -489,7 +440,7 @@ enum : uint8_t
 {
   GETTER_NONE = 0,
   GETTER_BOOL, GETTER_BYTE, GETTER_SHORT, GETTER_USHORT, GETTER_INT, GETTER_UINT,
-  GETTER_LONG, GETTER_ULONG, GETTER_FLOAT, GETTER_DOUBLE, GETTER_TEXT
+  GETTER_LONG, GETTER_ULONG, GETTER_FLOAT, GETTER_DOUBLE, GETTER_TEXT, GETTER_LONGLONG
 };
 
 // One input or sensor.
@@ -806,37 +757,26 @@ public:
   }
 };
 
-class BlaeckSignalRefBase
-{
-protected:
-  BlaeckSignalRefBase(Blaeck *owner, int16_t index) : _owner(owner), _index(index) {}
-
-  // A handle that names no signal and ignores every call, like a rejected one.
-  BlaeckSignalRefBase() : _owner(nullptr), _index(-1) {}
-
-  void _setFlash(BlaeckString value, uint16_t bit);
-
-  void _setBit(uint16_t bit, bool on);
-
-  void _setStateClass(BlaeckStateClass stateClass);
-
-  void _setOptions(BlaeckString optionsCsv);
-
-  void _setDisplayPrecision(uint8_t decimals);
-
-  void _setNameSuffix(uint8_t suffix);
-  void _setInterval(BlaeckIntervalMode mode, double delta);
-  void _setOnChange(double delta, uint32_t minIntervalMs);
-  void _setOnChange(BlaeckIntervalMode mode);
-  Blaeck *_owner;
-  int16_t _index;
-};
-
-// Modifiers every signal handle has. TYPE is the deriving handle, as in BlaeckCommandRefShared.
-template <class TYPE>
-class BlaeckSignalRefShared : public BlaeckSignalRefBase
+// The handle addSignal() returns, for how the signal is reported. A rejected registration
+// returns a handle that ignores every call.
+class BlaeckSignalRef
 {
 public:
+  /*!
+    @brief   Creates an empty handle, to keep a signal's handle in a global.
+
+    Assign what addSignal() returns, and the sketch can change how the signal is
+    reported later. Until then, calls on it do nothing.
+
+    @code
+      BlaeckSignalRef outputSignal;  // file scope
+
+      void setup() { outputSignal = device.addSignal(F("Output"), &Output); }
+      void loop()  { outputSignal.writeOnChange(0.5); }
+    @endcode
+  */
+  BlaeckSignalRef() : _owner(nullptr), _index(-1) {}
+
   /*!
     @brief   Selects how this signal participates in host-interval reports.
 
@@ -858,16 +798,16 @@ public:
           .writeAtInterval(BLAECK_ON_CHANGE, 0.1);
     @endcode
   */
-  TYPE &writeAtInterval(BlaeckIntervalMode mode, double delta = BLAECK_ANY_CHANGE)
+  BlaeckSignalRef &writeAtInterval(BlaeckIntervalMode mode, double delta = BLAECK_ANY_CHANGE)
   {
     _setInterval(mode, delta);
-    return _self();
+    return *this;
   }
 
   /*!
     @brief   Enables prompt reporting of changes, independently of host activation.
 
-    Checked by tick() or writeIfDue(). Interval reporting remains separately
+    Checked by tick(). Interval reporting remains separately
     configured by writeAtInterval(), and defaults to BLAECK_ALWAYS. The first
     value bypasses the rate limit. Later changes compare against the last value
     sent by any data write. Intermediate values are not queued.
@@ -886,10 +826,10 @@ public:
           .writeAtInterval(BLAECK_OFF).writeOnChange(BLAECK_ANY_CHANGE);
     @endcode
   */
-  TYPE &writeOnChange(double delta, uint32_t minIntervalMs = 100)
+  BlaeckSignalRef &writeOnChange(double delta, uint32_t minIntervalMs = 100)
   {
     _setOnChange(delta, minIntervalMs);
-    return _self();
+    return *this;
   }
 
   /*!
@@ -910,14 +850,14 @@ public:
       signal.writeOnChange(BLAECK_OFF);
     @endcode
   */
-  TYPE &writeOnChange(BlaeckIntervalMode mode)
+  BlaeckSignalRef &writeOnChange(BlaeckIntervalMode mode)
   {
     _setOnChange(mode);
-    return _self();
+    return *this;
   }
 
   // A mode with a rate limit must not fall through to the numeric-threshold overload.
-  TYPE &writeOnChange(BlaeckIntervalMode mode, uint32_t minIntervalMs) = delete;
+  BlaeckSignalRef &writeOnChange(BlaeckIntervalMode mode, uint32_t minIntervalMs) = delete;
 
   /*!
     @brief   Adds a number to the end of the signal's name.
@@ -933,270 +873,24 @@ public:
         device.addSignal(F("Sine_"), &sine[i]).withNameSuffix(i + 1);
     @endcode
   */
-  TYPE &withNameSuffix(uint8_t suffix)
+  BlaeckSignalRef &withNameSuffix(uint8_t suffix)
   {
     _setNameSuffix(suffix);
-    return _self();
-  }
-
-  /*!
-    @brief   Sets what the value measures, such as "temperature" or "duration".
-
-    Sent as written; the library doesn't check it against a list.
-
-    @param   deviceClass  The device class.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addSignal(F("Uptime"), &Uptime).withDeviceClass(F("duration"));
-    @endcode
-  */
-  TYPE &withDeviceClass(BlaeckString deviceClass)
-  {
-    _setFlash(deviceClass, BLAECK_SIG_HAS_DEVICE_CLASS);
-    return _self();
-  }
-
-  /*!
-    @brief   Sets the icon a host shows next to the value.
-
-    @param   icon  A Material Design Icons name.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addSignal(F("Output"), &Output).withIcon(F("mdi:sine-wave"));
-    @endcode
-  */
-  TYPE &withIcon(BlaeckString icon)
-  {
-    _setFlash(icon, BLAECK_SIG_HAS_ICON);
-    return _self();
-  }
-
-  /*!
-    @brief   Sets the label a host shows instead of the signal name.
-
-    Useful when the name carries extra detail for logging, like "Output [V]". The
-    signal is still identified by its name, so adding a label later moves nothing.
-
-    @param   displayName  The label.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addSignal(F("Output [V]"), &Output).withUnit(F("V")).withDisplayName(F("Output"));
-    @endcode
-  */
-  TYPE &withDisplayName(BlaeckString displayName)
-  {
-    _setFlash(displayName, BLAECK_SIG_HAS_DISPLAY_NAME);
-    return _self();
-  }
-
-  /*!
-    @brief   Marks the signal as diagnostic, such as free memory or uptime.
-
-    A host usually keeps these off its default dashboard.
-
-    @param   on  false undoes it.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addSignal(F("Uptime"), &Uptime).withUnit(F("s")).diagnostic();
-    @endcode
-  */
-  TYPE &diagnostic(bool on = true)
-  {
-    _setBit(BLAECK_SIG_DIAGNOSTIC, on);
-    return _self();
-  }
-
-  /*!
-    @brief   Asks a host to create the signal disabled, until someone enables it.
-
-    The device sends the value either way.
-
-    @param   on  false undoes it.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addSignal(F("RawADC"), &rawAdc).disabledByDefault();
-    @endcode
-  */
-  TYPE &disabledByDefault(bool on = true)
-  {
-    _setBit(BLAECK_SIG_DISABLED_BY_DEFAULT, on);
-    return _self();
-  }
-
-  /*!
-    @brief   Asks a host to record every reading, even one equal to the last.
-
-    Otherwise a host may keep only changes, and a steady value looks the same as a
-    sensor that stopped.
-
-    @param   on  false undoes it.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addSignal(F("Temperature"), &Temperature).forceUpdate();
-    @endcode
-  */
-  TYPE &forceUpdate(bool on = true)
-  {
-    _setBit(BLAECK_SIG_FORCE_UPDATE, on);
-    return _self();
-  }
-
-protected:
-  BlaeckSignalRefShared(Blaeck *owner, int16_t index) : BlaeckSignalRefBase(owner, index) {}
-  BlaeckSignalRefShared() : BlaeckSignalRefBase() {}
-
-private:
-  TYPE &_self() { return *static_cast<TYPE *>(this); }
-};
-
-// The handle for a numeric signal, the only kind with a unit, state class or display precision.
-class BlaeckNumericSignalRef : public BlaeckSignalRefShared<BlaeckNumericSignalRef>
-{
-public:
-  /*!
-    @brief   Creates an empty handle, to keep a signal's handle in a global.
-
-    Assign what addSignal() returns, and the sketch can change how the signal is
-    shown later. Until then, calls on it do nothing.
-
-    @code
-      BlaeckNumericSignalRef OutputSignal;  // file scope
-
-      void setup() { OutputSignal = device.addSignal(F("Output"), &Output); }
-      void loop()  { OutputSignal.withIcon(F("mdi:sine-wave")); }
-    @endcode
-  */
-  BlaeckNumericSignalRef() : BlaeckSignalRefShared<BlaeckNumericSignalRef>() {}
-
-  /*!
-    @brief   Sets the unit a host shows after the value.
-
-    A host that logs may keep only the signal name, so put the unit in the name as
-    well if the log should show it.
-
-    @param   unit  The unit. Non-ASCII characters must be UTF-8.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addSignal(F("Frequency"), &Frequency).withUnit(F("Hz"));
-    @endcode
-  */
-  BlaeckNumericSignalRef &withUnit(BlaeckString unit)
-  {
-    _setFlash(unit, BLAECK_SIG_HAS_UNIT);
-    return *this;
-  }
-
-  /*!
-    @brief   Sets how the value behaves over time, so a host can keep statistics.
-
-    Without it, a host keeps no long-term statistics for the signal.
-
-    @param   stateClass  One of the BlaeckStateClass values.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addSignal(F("Output"), &Output)
-          .withStateClass(BLAECK_STATE_CLASS_MEASUREMENT);
-    @endcode
-  */
-  BlaeckNumericSignalRef &withStateClass(BlaeckStateClass stateClass)
-  {
-    _setStateClass(stateClass);
-    return *this;
-  }
-
-  /*!
-    @brief   Sets how many decimal places a host shows.
-
-    The value sent is not rounded.
-
-    @param   decimals  0 shows a whole number.
-    @return  The same handle, for chaining.
-
-    @code
-      device.addSignal(F("Output"), &Output).withDisplayPrecision(3);
-    @endcode
-  */
-  BlaeckNumericSignalRef &withDisplayPrecision(uint8_t decimals)
-  {
-    _setDisplayPrecision(decimals);
     return *this;
   }
 
 private:
   // Private, so only addSignal() can make a handle that names a signal.
-  BlaeckNumericSignalRef(Blaeck *owner, int16_t index) : BlaeckSignalRefShared<BlaeckNumericSignalRef>(owner, index) {}
+  BlaeckSignalRef(Blaeck *owner, int16_t index) : _owner(owner), _index(index) {}
   friend class Blaeck;
   friend class BlaeckDeviceBase;
-};
 
-// The handle for a text signal. It has no unit, state class or display precision, because a
-// host would then treat the value as a number and reject the text. Keep it in step with
-// a text sensor, which becomes the same kind of entity on a host.
-class BlaeckTextSignalRef : public BlaeckSignalRefShared<BlaeckTextSignalRef>
-{
-public:
-  /*!
-    @brief   Creates an empty handle, to keep a signal's handle in a global.
-
-    Assign what addSignal() returns. Until then, calls on it do nothing.
-  */
-  BlaeckTextSignalRef() : BlaeckSignalRefShared<BlaeckTextSignalRef>() {}
-
-  /*!
-    @brief   Sets the fixed list of values the signal can report.
-
-    @param   optionsCsv  Comma-separated values.
-    @return  The same handle, for chaining.
-
-    @note    A host may also need withDeviceClass(F("enum")), and may reject a value
-             that isn't in the list.
-
-    @warning A list that is empty or has a blank entry is refused, with a warning on
-             the debug stream.
-
-    @code
-      device.addSignal(F("Mode"), modeText)
-          .withDeviceClass(F("enum"))
-          .withOptions(F("idle,running,fault"));
-    @endcode
-  */
-  BlaeckTextSignalRef &withOptions(BlaeckString optionsCsv)
-  {
-    _setOptions(optionsCsv);
-    return *this;
-  }
-
-private:
-  BlaeckTextSignalRef(Blaeck *owner, int16_t index) : BlaeckSignalRefShared<BlaeckTextSignalRef>(owner, index) {}
-  friend class Blaeck;
-  friend class BlaeckDeviceBase;
-};
-
-// The handle for a bool signal, which a host shows as an on/off sensor. Its device classes come
-// from a different list: "door", "motion", "window" and so on, not "temperature". A class from
-// the wrong list can make a host drop the signal.
-class BlaeckBoolSignalRef : public BlaeckSignalRefShared<BlaeckBoolSignalRef>
-{
-public:
-  /*!
-    @brief   Creates an empty handle, to keep a signal's handle in a global.
-
-    Assign what addSignal() returns. Until then, calls on it do nothing.
-  */
-  BlaeckBoolSignalRef() : BlaeckSignalRefShared<BlaeckBoolSignalRef>() {}
-
-private:
-  BlaeckBoolSignalRef(Blaeck *owner, int16_t index) : BlaeckSignalRefShared<BlaeckBoolSignalRef>(owner, index) {}
-  friend class Blaeck;
-  friend class BlaeckDeviceBase;
+  void _setNameSuffix(uint8_t suffix);
+  void _setInterval(BlaeckIntervalMode mode, double delta);
+  void _setOnChange(double delta, uint32_t minIntervalMs);
+  void _setOnChange(BlaeckIntervalMode mode);
+  Blaeck *_owner;
+  int16_t _index;
 };
 
 class BlaeckEventRef
@@ -1615,42 +1309,40 @@ public:
   /*!
     @brief   Adds a variable to be sampled and logged over time.
 
-    A signal is a reading that is sent on every interval and kept as history. For
-    a setting or a status that shouldn't be logged, use an input or addSensor().
+    A signal is a reading that is sent on every interval and kept as history: a name
+    and a type, nothing else. To show the value on a dashboard, add a sensor on the
+    same variable with addSensor(); for a setting a host changes, use an input.
 
     The variable is read each time data is sent, so it must be a global.
 
-    @param   signalName  The name a host shows and logs the signal under. RAM text is copied; an F() literal stays in flash.
+    @param   signalName  The name a host logs the signal under, its column name. RAM text is
+                         copied; an F() literal stays in flash.
     @param   value       The variable. There is an overload for each type. Text is
                          pointed at, not copied; an F() text stays in flash, and later
                          write() calls may replace it with RAM or flash text.
-    @return  A handle for describing how a host shows the signal. It can be
-             ignored, or kept in a global to change the signal later.
+    @return  A handle for how the signal is reported. It can be ignored, or kept in a
+             global to change that later.
     @note    If there is no RAM for it, the signal is dropped and the handle ignores
-             every call; hasRejections() reports it. Describing a signal
-             allocates memory, and if that fails the signal is still sent, just
-             without the description.
+             every call; hasRejections() reports it.
 
     @code
-      device.addSignal("Temperature", &Temperature)
-          .withUnit(F("\xC2\xB0" "C"))
-          .withDeviceClass(F("temperature"))
-          .withStateClass(BLAECK_STATE_CLASS_MEASUREMENT)
-          .withDisplayPrecision(1);
+      device.addSignal(F("Temperature [C]"), &Temperature);
+      device.addSensor(F("Temperature"), &Temperature).withUnit(F("\xC2\xB0" "C"));
     @endcode
   */
-  BlaeckBoolSignalRef addSignal(BlaeckString signalName, bool *value);
-  BlaeckNumericSignalRef addSignal(BlaeckString signalName, byte *value);
-  BlaeckNumericSignalRef addSignal(BlaeckString signalName, short *value);
-  BlaeckNumericSignalRef addSignal(BlaeckString signalName, unsigned short *value);
-  BlaeckNumericSignalRef addSignal(BlaeckString signalName, int *value);
-  BlaeckNumericSignalRef addSignal(BlaeckString signalName, unsigned int *value);
-  BlaeckNumericSignalRef addSignal(BlaeckString signalName, long *value);
-  BlaeckNumericSignalRef addSignal(BlaeckString signalName, unsigned long *value);
-  BlaeckNumericSignalRef addSignal(BlaeckString signalName, float *value);
-  BlaeckNumericSignalRef addSignal(BlaeckString signalName, double *value);
-  BlaeckTextSignalRef addSignal(BlaeckString signalName, const char *value);
-  BlaeckTextSignalRef addSignal(BlaeckString signalName, const __FlashStringHelper *value);
+  BlaeckSignalRef addSignal(BlaeckString signalName, bool *value);
+  BlaeckSignalRef addSignal(BlaeckString signalName, byte *value);
+  BlaeckSignalRef addSignal(BlaeckString signalName, short *value);
+  BlaeckSignalRef addSignal(BlaeckString signalName, unsigned short *value);
+  BlaeckSignalRef addSignal(BlaeckString signalName, int *value);
+  BlaeckSignalRef addSignal(BlaeckString signalName, unsigned int *value);
+  BlaeckSignalRef addSignal(BlaeckString signalName, long *value);
+  BlaeckSignalRef addSignal(BlaeckString signalName, unsigned long *value);
+  BlaeckSignalRef addSignal(BlaeckString signalName, long long *value);
+  BlaeckSignalRef addSignal(BlaeckString signalName, float *value);
+  BlaeckSignalRef addSignal(BlaeckString signalName, double *value);
+  BlaeckSignalRef addSignal(BlaeckString signalName, const char *value);
+  BlaeckSignalRef addSignal(BlaeckString signalName, const __FlashStringHelper *value);
 
   // ----- Properties -----
   // A property is a current value a host shows (a sensor) or shows and sets (an input). It is
@@ -1685,6 +1377,7 @@ public:
   BlaeckNumberPropertyRef addNumberInput(BlaeckString name, unsigned int *value, BlaeckPropertyCallback onChange = nullptr);
   BlaeckNumberPropertyRef addNumberInput(BlaeckString name, long *value, BlaeckPropertyCallback onChange = nullptr);
   BlaeckNumberPropertyRef addNumberInput(BlaeckString name, unsigned long *value, BlaeckPropertyCallback onChange = nullptr);
+  BlaeckNumberPropertyRef addNumberInput(BlaeckString name, long long *value, BlaeckPropertyCallback onChange = nullptr);
   BlaeckNumberPropertyRef addNumberInput(BlaeckString name, float *value, BlaeckPropertyCallback onChange = nullptr);
   BlaeckNumberPropertyRef addNumberInput(BlaeckString name, double *value, BlaeckPropertyCallback onChange = nullptr);
 
@@ -1773,6 +1466,7 @@ public:
   BlaeckNumberPropertyRef addSensor(BlaeckString name, unsigned int *value);
   BlaeckNumberPropertyRef addSensor(BlaeckString name, long *value);
   BlaeckNumberPropertyRef addSensor(BlaeckString name, unsigned long *value);
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, long long *value);
   BlaeckNumberPropertyRef addSensor(BlaeckString name, float *value);
   BlaeckNumberPropertyRef addSensor(BlaeckString name, double *value);
   BlaeckNumberPropertyRef addSensor(BlaeckString name, byte (*value)());
@@ -1782,6 +1476,7 @@ public:
   BlaeckNumberPropertyRef addSensor(BlaeckString name, unsigned int (*value)());
   BlaeckNumberPropertyRef addSensor(BlaeckString name, long (*value)());
   BlaeckNumberPropertyRef addSensor(BlaeckString name, unsigned long (*value)());
+  BlaeckNumberPropertyRef addSensor(BlaeckString name, long long (*value)());
   BlaeckNumberPropertyRef addSensor(BlaeckString name, float (*value)());
   BlaeckNumberPropertyRef addSensor(BlaeckString name, double (*value)());
 
@@ -1967,6 +1662,7 @@ public:
   void write(BlaeckString signalName, unsigned int value, unsigned long long timestamp = BLAECK_NOW);
   void write(BlaeckString signalName, long value, unsigned long long timestamp = BLAECK_NOW);
   void write(BlaeckString signalName, unsigned long value, unsigned long long timestamp = BLAECK_NOW);
+  void write(BlaeckString signalName, long long value, unsigned long long timestamp = BLAECK_NOW);
   void write(BlaeckString signalName, float value, unsigned long long timestamp = BLAECK_NOW);
   void write(BlaeckString signalName, double value, unsigned long long timestamp = BLAECK_NOW);
 
@@ -2035,6 +1731,7 @@ public:
   void write(int signalIndex, unsigned int value, unsigned long long timestamp = BLAECK_NOW);
   void write(int signalIndex, long value, unsigned long long timestamp = BLAECK_NOW);
   void write(int signalIndex, unsigned long value, unsigned long long timestamp = BLAECK_NOW);
+  void write(int signalIndex, long long value, unsigned long long timestamp = BLAECK_NOW);
   void write(int signalIndex, float value, unsigned long long timestamp = BLAECK_NOW);
   void write(int signalIndex, double value, unsigned long long timestamp = BLAECK_NOW);
   void write(int signalIndex, const char *value, unsigned long long timestamp = BLAECK_NOW);
@@ -2218,7 +1915,7 @@ private:
 
   friend class Blaeck;
   friend class BlaeckDeviceBase;
-  friend class BlaeckSignalRefBase;
+  friend class BlaeckSignalRef;
   friend class BlaeckCommandRefBase;
   friend class BlaeckEventRef;
   friend class BlaeckPropertyRefBase;
@@ -2352,12 +2049,12 @@ public:
   /*!
     @brief   Tells a host that the device has just started.
 
-    Sent once per boot, so a host knows to drop what it held from before. read()
+    Sent once per boot, so a host knows to drop what it held from before. tick()
     sends it on its first call; call this only to send it earlier. If a host asks for
     the device list first, the list reports the restart instead, and this sends nothing.
 
-    The entity list and the signal descriptions follow it, so a host that stayed
-    connected gets them without asking.
+    The entity list follows it, so a host that stayed connected gets it without
+    asking.
 
     @code
       device.writeRestarted();
@@ -2403,25 +2100,10 @@ public:
 
     @code
       BlaeckDeviceRef pump = device.addDevice(F("Pump controller"));
-      pump.addSignal(F("Flow"), &pumpFlow).withUnit(F("L/min"));
+      pump.addSignal(F("Flow"), &pumpFlow);
     @endcode
   */
   BlaeckDeviceRef addDevice(BlaeckString name);
-
-  // ----- Signal Config -----
-
-  /*!
-    @brief   Sends the signals' units, icons and other descriptions.
-
-    Only signals that describe something are included. The device also sends it
-    when a host sends <BLAECK.WRITE_SIGNAL_CONFIG>, and on its own after a
-    description changes, so a sketch rarely needs to call it.
-
-    @code
-      device.writeSignalConfig();
-    @endcode
-  */
-  void writeSignalConfig();
 
   // ----- Entities -----
 
@@ -2472,35 +2154,22 @@ public:
   */
   void writeAll(unsigned long long timestamp = BLAECK_NOW);
 
-  /*!
-    @brief   Sends signals whose automatic reporting policies are due.
-
-    Interval signals require host activation. Immediate writeOnChange() signals
-    do not. A signal eligible through both paths is included only once. Nothing
-    is sent when no signal qualifies. Call frequently, separately from read() or
-    through tick(). The before-write callback runs only for a due interval.
-    The first interval after every ACTIVATE includes all interval-enabled signals
-    without change filtering. Pause/resume still applies.
-
-    @param   timestamp  The frame's time, in microseconds in the timestamp mode's epoch.
-                        Leave it out to have blaeck take it from the timestamp mode when
-                        the frame is sent. Scheduling and rate limits
-                        use millis() either way.
-
-    @code
-      device.read();
-      device.writeIfDue();
-    @endcode
-  */
-  void writeIfDue(unsigned long long timestamp = BLAECK_NOW);
-
   // ----- Tick -----
 
   /*!
-    @brief   Handles incoming commands, then services automatic signal reporting.
+    @brief   Handles incoming commands, then sends what is due. Call it on every
+             loop() pass; it is the only call loop() needs.
 
-    Most sketches need only this in loop(). It is read() followed by
-    writeIfDue().
+    First it runs any command that has arrived: the built-in BLAECK.* commands, an
+    input's new value, a button or the sketch's handlers. Then it sends the signals
+    whose reporting is due - on the host's interval once it has sent ACTIVATE, and
+    signals with writeOnChange() as they change - and the inputs and sensors that
+    changed. Nothing is sent when nothing is due.
+
+    @param   timestamp  The data frame's time, in microseconds in the timestamp mode's
+                        epoch. Leave it out to have blaeck take it from the timestamp
+                        mode when the frame is sent. Scheduling and rate limits use
+                        millis() either way.
 
     @code
       void loop()
@@ -2510,7 +2179,7 @@ public:
       }
     @endcode
   */
-  void tick();
+  void tick(unsigned long long timestamp = BLAECK_NOW);
 
   // ----- Timed Data -----
 
@@ -2539,23 +2208,7 @@ public:
   */
   bool isTimedDataActive() const { return _timedActivated; }
 
-  // ----- Read  -----
 
-  /*!
-    @brief   Handles an incoming command, if one has arrived.
-
-    Runs the built-in BLAECK.* commands and the sketch's handlers. It sends no data,
-    so use it instead of tick() in a sketch that only takes commands. Call it on
-    every loop() pass.
-
-    @code
-      void loop()
-      {
-        device.read();
-      }
-    @endcode
-  */
-  void read();
 
   // ----- Command callback  -----
 
@@ -2906,7 +2559,7 @@ public:
     @brief   Returns the transport's current error status.
 
     Separate from table-registration rejections reported by hasRejections().
-    TCP client storage is allocated on the first read() or tick(), so check afterward.
+    TCP client storage is allocated on the first tick(), so check afterward.
 
     @code
       if (device.transportError() != Blaeck::TransportError::None)
@@ -2967,6 +2620,13 @@ public:
   void setClientDisconnectedCallback(void (*callback)(byte clientNo));
 
 protected:
+  // The two halves of tick(). Protected, so a test can call them apart through a subclass.
+  // Handles an incoming command, if one has arrived; sends no data.
+  void read();
+  // Sends the signals and properties whose reporting is due. The first interval after every
+  // ACTIVATE includes every interval signal without change filtering.
+  void writeIfDue(unsigned long long timestamp = BLAECK_NOW);
+
   void _setBufferedWritesDefault(bool enabled);
 
   // Empties the signal table and resets its counts before attaching a connection.
@@ -2998,13 +2658,8 @@ protected:
   // Sets a signal's name: a heap copy of ram, or the flash pointer. Exactly one is non-null.
   // Frees the copy the slot held before.
   void _setSignalName(int signalIndex, const char *ram, const __FlashStringHelper *flash);
-  // Frees the name copies and metadata records the signal table owns.
+  // Frees the name copies the signal table owns.
   void _freeSignalOwned();
-#if BLAECK_ENABLE_SIGNAL_META
-  // The signal's metadata record, allocated on first use. nullptr if the handle is dead or
-  // there is no memory.
-  SignalMeta *_ensureSignalMeta(int16_t index);
-#endif
   // Signal names are read only through these helpers, which handle flash and RAM names.
   bool _signalNameEquals(const Signal &s, const char *name, bool nameInFlash = false) const;
   // Where _emitSignalName() sends the bytes: into the frame, the schema hash or the debug stream.
@@ -3058,6 +2713,7 @@ protected:
   // holds text.
   bool _storeSigned(int signalIndex, long value);
   bool _storeUnsigned(int signalIndex, unsigned long value);
+  bool _storeLongLong(int signalIndex, long long value);
   bool _storeFloating(int signalIndex, double value);
 
   void writeData(unsigned long messageID, int signalIndex_start, int signalIndex_end, bool selectedOnly, unsigned long long timestamp);
@@ -3066,11 +2722,7 @@ protected:
   // Forms that echo the message id of the request they answer. Only read() has one.
   void writeRestarted(unsigned long messageID);
   void writeDevices(unsigned long messageID);
-  void writeSignalConfig(unsigned long messageID);
 
-#if BLAECK_ENABLE_SIGNAL_META
-  void writeSignalConfigFrame(unsigned long MessageID);
-#endif
   // Add a signal and return its index, or -1 if it was rejected. All addSignal() overloads
   // end up here.
   int _registerSignal(byte deviceId, const char *signalName, dataType type, void *address, bool textInFlash = false);
@@ -3117,8 +2769,6 @@ protected:
 
   void writeDevicesFrame(unsigned long MessageID);
 
-  // Sends a catalog with no entries, the answer when that feature is compiled out.
-  void _writeEmptyFrame(byte msgKey, unsigned long msg_id);
 
   static void validatePlatformSizes();
 
@@ -3129,11 +2779,6 @@ protected:
   int _signalIndex = 0;
   uint16_t _rejectedSignalCount = 0;
   uint16_t _rejectedSignalPolicyCount = 0;
-#if BLAECK_ENABLE_SIGNAL_META
-  // Signal descriptions that couldn't be stored for lack of heap. Counted apart, because no
-  // table size fixes it.
-  uint16_t _rejectedSignalMetaCount = 0;
-#endif
   uint16_t _rejectedCommandCount = 0;
   uint16_t _rejectedEventChannelCount = 0;
   uint16_t _rejectedEventTypeCount = 0;
@@ -3474,11 +3119,6 @@ protected:
   void _setDeviceMissing(byte id, bool missing);
   void _writeDeviceRestarted(byte id);
 
-  // Set when a catalog has changed since it was last sent; _flushCatalogs() sends it.
-#if BLAECK_ENABLE_SIGNAL_META
-  bool _signalConfigDirty = false;
-#endif
-
   // Sends each catalog that changed since it was last sent. Called after anything that can
   // change one, and before a state or event push. Never sends the device list: a host lays out
   // its storage by its signals, so a changed list mid-session must be sent by the sketch on
@@ -3620,7 +3260,7 @@ protected:
     byte bval[8];
   } dblCvt;
 
-  friend class BlaeckSignalRefBase;
+  friend class BlaeckSignalRef;
   friend bool blaeck_detail::optionsAccepted(BlaeckString, Print *,
                                              const char *, bool);
   friend class BlaeckCommandRefBase;
@@ -3710,7 +3350,7 @@ inline void BlaeckCommandRefBase::_markDirty() const
     _owner->_entityCatalogDirty = true;
 }
 
-inline void BlaeckSignalRefBase::_setInterval(BlaeckIntervalMode mode, double delta)
+inline void BlaeckSignalRef::_setInterval(BlaeckIntervalMode mode, double delta)
 {
   if (_owner != nullptr)
     _owner->_setSignalInterval(_index, mode, delta);
@@ -3721,137 +3361,19 @@ inline bool BlaeckCommandRefBase::_storeString(detail::StoredString &slot, Blaec
   return _owner != nullptr && _owner->_storeString(slot, value);
 }
 
-inline void BlaeckSignalRefBase::_setOnChange(double delta, uint32_t minIntervalMs)
+inline void BlaeckSignalRef::_setOnChange(double delta, uint32_t minIntervalMs)
 {
   if (_owner != nullptr)
     _owner->_setSignalOnChange(_index, delta, minIntervalMs);
 }
 
-inline void BlaeckSignalRefBase::_setOnChange(BlaeckIntervalMode mode)
+inline void BlaeckSignalRef::_setOnChange(BlaeckIntervalMode mode)
 {
   if (_owner != nullptr)
     _owner->_setSignalOnChange(_index, mode);
 }
 
-inline void BlaeckSignalRefBase::_setFlash(BlaeckString value, uint16_t bit)
-{
-#if BLAECK_ENABLE_SIGNAL_META
-  // An empty string counts as not set.
-  if (blaeck_detail::flashStrEmpty(value))
-    value = nullptr;
-  if (SignalMeta *m = _owner != nullptr ? _owner->_ensureSignalMeta(_index) : nullptr)
-  {
-    detail::StoredString *slot;
-    switch (bit)
-    {
-    case BLAECK_SIG_HAS_UNIT:         slot = &m->Unit; break;
-    case BLAECK_SIG_HAS_DEVICE_CLASS: slot = &m->DeviceClass; break;
-    case BLAECK_SIG_HAS_DISPLAY_NAME: slot = &m->DisplayName; break;
-    default:                          slot = &m->Icon; break;
-    }
-    const uint16_t flags = (value != nullptr) ? (uint16_t)(m->MetaFlags | bit)
-                                              : (uint16_t)(m->MetaFlags & ~bit);
-
-    // Only a real change marks the catalog, since this may run on every loop() pass.
-    if (*slot != value || m->MetaFlags != flags)
-    {
-      if (!_owner->_storeString(*slot, value))
-        return;
-      m->MetaFlags = flags;
-      _owner->_signalConfigDirty = true;
-    }
-  }
-#else
-  (void)value;
-  (void)bit;
-#endif
-}
-
-inline void BlaeckSignalRefBase::_setBit(uint16_t bit, bool on)
-{
-#if BLAECK_ENABLE_SIGNAL_META
-  if (SignalMeta *m = _owner != nullptr ? _owner->_ensureSignalMeta(_index) : nullptr)
-  {
-    const uint16_t flags = on ? (uint16_t)(m->MetaFlags | bit)
-                              : (uint16_t)(m->MetaFlags & ~bit);
-    if (m->MetaFlags != flags)
-    {
-      m->MetaFlags = flags;
-      _owner->_signalConfigDirty = true;
-    }
-  }
-#else
-  (void)bit;
-  (void)on;
-#endif
-}
-
-inline void BlaeckSignalRefBase::_setStateClass(BlaeckStateClass stateClass)
-{
-#if BLAECK_ENABLE_SIGNAL_META
-  if (SignalMeta *m = _owner != nullptr ? _owner->_ensureSignalMeta(_index) : nullptr)
-  {
-    const uint16_t flags =
-        (uint16_t)((m->MetaFlags & ~BLAECK_SIG_STATE_CLASS_MASK) |
-                   (((uint16_t)stateClass << BLAECK_SIG_STATE_CLASS_SHIFT) &
-                    BLAECK_SIG_STATE_CLASS_MASK));
-    if (m->MetaFlags != flags)
-    {
-      m->MetaFlags = flags;
-      _owner->_signalConfigDirty = true;
-    }
-  }
-#else
-  (void)stateClass;
-#endif
-}
-
-inline void BlaeckSignalRefBase::_setOptions(BlaeckString optionsCsv)
-{
-#if BLAECK_ENABLE_SIGNAL_META
-  // A refused list leaves the signal as it was.
-  if (_owner == nullptr || _index < 0 || _index >= _owner->_signalIndex ||
-      !blaeck_detail::optionsAccepted(optionsCsv, _owner->_debugStream,
-                                      _owner->Signals[_index].SignalName,
-                                      _owner->Signals[_index].NameInFlash))
-    return;
-  if (SignalMeta *m = _owner->_ensureSignalMeta(_index))
-  {
-    const uint16_t flags = (optionsCsv != nullptr)
-                               ? (uint16_t)(m->MetaFlags | BLAECK_SIG_HAS_OPTIONS)
-                               : (uint16_t)(m->MetaFlags & ~BLAECK_SIG_HAS_OPTIONS);
-    if (m->Options != optionsCsv || m->MetaFlags != flags)
-    {
-      if (!_owner->_storeString(m->Options, optionsCsv))
-        return;
-      m->MetaFlags = flags;
-      _owner->_signalConfigDirty = true;
-    }
-  }
-#else
-  (void)optionsCsv;
-#endif
-}
-
-inline void BlaeckSignalRefBase::_setDisplayPrecision(uint8_t decimals)
-{
-#if BLAECK_ENABLE_SIGNAL_META
-  if (SignalMeta *m = _owner != nullptr ? _owner->_ensureSignalMeta(_index) : nullptr)
-  {
-    const uint16_t flags = (uint16_t)(m->MetaFlags | BLAECK_SIG_HAS_DISPLAY_PRECISION);
-    if (m->DisplayPrecision != decimals || m->MetaFlags != flags)
-    {
-      m->DisplayPrecision = decimals;
-      m->MetaFlags = flags;
-      _owner->_signalConfigDirty = true;
-    }
-  }
-#else
-  (void)decimals;
-#endif
-}
-
-inline void BlaeckSignalRefBase::_setNameSuffix(uint8_t suffix)
+inline void BlaeckSignalRef::_setNameSuffix(uint8_t suffix)
 {
   if (_owner == nullptr || _index < 0 ||
       static_cast<unsigned int>(_index) >= _owner->Signals.capacity())

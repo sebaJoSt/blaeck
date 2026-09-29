@@ -5,14 +5,14 @@
   A signal keeps a pointer to a variable: update that variable and tick() reads its current
   value when a frame is due. No write() call is needed.
 
-  Metadata describes how a host should show the value; it does not change what is logged.
-  Compare these once Loggbok is logging and forwarding to Home Assistant:
-    Temperature [C]  a measurement with a unit, one decimal, and the display name Temperature
-    TemperaturePlain the same temperature without metadata: a plain number on the dashboard
-    DoorOpen         a bool shown as a door rather than a number
-    Mode             text with a declared set of possible values
-    Uptime           information about the device, filed under Diagnostic
-    Sine_1..Sine_5    an array registered in a loop, with numbered names kept in flash
+  A signal is a name and a type, nothing more: it becomes a column in the log. How a
+  dashboard shows a value - unit, icon, precision - belongs to a sensor on the same variable;
+  see the Properties example.
+    Temperature [C]  a float, with its unit in the column name
+    DoorOpen         a bool, logged as 0 or 1
+    Mode             text
+    Uptime           an unsigned long
+    Sine_1..Sine_5   an array registered in a loop, with numbered names kept in flash
 
   No sensor hardware is needed. The values below simulate a room that cools while a door
   is open and warms when it closes, alongside five phase-shifted sine waves.
@@ -66,33 +66,12 @@ void setup()
   device.DeviceName = HOST_NAME;
   device.DeviceFWVersion = "1.0";
 
-  // The display name changes the dashboard label, not the logged column name.
-  // The unit is UTF-8 degrees Celsius; the escape keeps this source file ASCII.
-  device.addSignal(F("Temperature [C]"), &Temperature)
-      .withDisplayName(F("Temperature"))
-      .withUnit(F("\xC2\xB0" "C"))
-      .withDeviceClass(F("temperature"))
-      .withStateClass(BLAECK_STATE_CLASS_MEASUREMENT)
-      .withDisplayPrecision(1);
-
-  // Both signals read the same variable and log identical values. Only their metadata differs.
-  device.addSignal(F("TemperaturePlain"), &Temperature);
-
-  // A bool becomes a binary sensor. The device class gives true/false a meaning.
-  device.addSignal(F("DoorOpen"), &DoorOpen)
-      .withDeviceClass(F("door"));
-
-  // Text takes the buffer itself, not &Mode. Every reported value must be in the options.
-  device.addSignal(F("Mode"), Mode)
-      .withDeviceClass(F("enum"))
-      .withOptions(F("warming,cooling"))
-      .withIcon(F("mdi:state-machine"));
-
-  // Diagnostic describes its dashboard category; this is still a logged signal.
-  device.addSignal(F("Uptime"), &Uptime)
-      .withUnit(F("s"))
-      .withDeviceClass(F("duration"))
-      .diagnostic();
+  // The name is the column name, so a unit that belongs in the log goes into it.
+  device.addSignal(F("Temperature [C]"), &Temperature);
+  device.addSignal(F("DoorOpen"), &DoorOpen);
+  // Text takes the buffer itself, not &Mode.
+  device.addSignal(F("Mode"), Mode);
+  device.addSignal(F("Uptime"), &Uptime);
 
   // The suffix gives each array element a name without building or copying a string.
   for (byte i = 0; i < SINE_COUNT; i++)

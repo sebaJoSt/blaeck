@@ -30,10 +30,6 @@ Eight things get checked, each against real rows rather than an assumption about
                 logging must keep running afterwards rather than silently stalling
                 (see Blaeck.cpp's writeDataFrame commit message for the wire-format
                 bug this used to trigger)
-    force_update  FrozenForced (forceUpdate() on) and FrozenPlain (forceUpdate() off) log
-                identically every periodic row - confirms the source has no dedup logic
-                backing forceUpdate() at all, so a forced and an unforced signal holding
-                the same frozen value cannot be told apart in the database
 
     HA_URL       Base URL, e.g. https://your-instance
     HA_TOKEN     A long-lived access token, OR
@@ -126,7 +122,7 @@ class HomeAssistant:
 
 # ---- TimescaleDB read layer ----------------------------------------------------------------
 COLUMNS = ["ID", "TimeStampUTC", "Uptime", "Periodic", "Pushed", "ExplicitTS", "Burst",
-           "FrozenForced", "FrozenPlain", "Changed"]
+           "Changed"]
 
 
 class Db:
@@ -338,16 +334,6 @@ check("unix_no_callback: logging keeps running afterwards (no silent stall)", ke
       f"{count_before} -> {count_after}")
 
 ha.select(mode_select, "PC")  # leave the device in a known-good mode
-
-# ---- force_update: FrozenForced and FrozenPlain log identically every row -----------------
-last_id = db.max_id()
-time.sleep(4)
-rows = db.rows_after(last_id, limit=20)
-periodic_rows = [r for r in rows if r["FrozenForced"] is not None and r["FrozenPlain"] is not None]
-ok = (len(periodic_rows) >= 3
-      and all(r["FrozenForced"] == r["FrozenPlain"] == 42.0 for r in periodic_rows))
-check("force_update: FrozenForced and FrozenPlain log identically (forceUpdate has no "
-      "dedup effect)", ok, f"{len(periodic_rows)} periodic rows checked")
 
 # ---- summary --------------------------------------------------------------------------
 failed = [name for name, ok, _ in results if not ok]

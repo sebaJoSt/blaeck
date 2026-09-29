@@ -97,7 +97,7 @@ def entity_list(raw):
 
 
 # Wire width of each DTYPE, None for length-prefixed text.
-WIDTHS = {0: 1, 1: 1, 2: 2, 3: 2, 4: 2, 5: 2, 6: 4, 7: 4, 8: 4, 9: 8, 10: None}
+WIDTHS = {0: 1, 1: 1, 2: 2, 3: 2, 4: 2, 5: 2, 6: 4, 7: 4, 8: 4, 9: 8, 10: None, 11: 8}
 
 
 def parse_entities(p):

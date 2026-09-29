@@ -1,11 +1,10 @@
 /*
   SignalTimingTest.ino
 
-  SignalMetadataTest asked whether what a signal declares survives to Home Assistant.
-  This asks a different question: what timestamp does a value land in TimescaleDB with,
-  and does it land at all the moment it is written rather than on the next periodic tick?
+  What timestamp does a value land in TimescaleDB with, and does it land at all the moment
+  it is written rather than on the next periodic tick?
 
-  Four things get exercised here, each against the actual database rows a host writes,
+  Three things get exercised here, each against the actual database rows a host writes,
   not against what Home Assistant shows:
 
     - the three timestamp modes (PC / MICROS / UNIX) a device can choose, switched live
@@ -14,12 +13,9 @@
       row at the Unix epoch instead of failing - reproduced on demand rather than only
       once at boot, since setTimestampCallback(nullptr) re-arms it at any time;
     - write()'s per-call timestamp override, which should land in the row exactly as
-      given, independent of whatever mode is otherwise active;
-    - forceUpdate(), which is host metadata, not a device reporting policy - every write()
-      and every default periodic tick reaches the wire whether the value moved or not, so a
-      forced and an unforced signal holding the same frozen value should log identically.
+      given, independent of whatever mode is otherwise active.
 
-    A rapid burst of write() calls (faster than the periodic interval) checks the fourth
+    A rapid burst of write() calls (faster than the periodic interval) checks a fourth
     thing incidentally: whether out-of-cadence rows survive back-to-back, in order, with
     none dropped.
 
@@ -60,8 +56,6 @@ long Pushed = 0;                // changed only by Fire_push - proves write() la
 long ExplicitTS = 0;            // changed only by Fire_explicit_ts, always with the same
                                 // hardcoded timestamp, independent of TimestampMode.
 long Burst = 0;                 // changed only by Fire_burst, five times back-to-back.
-float FrozenForced = 42.0f;     // forceUpdate() on, value never changes.
-float FrozenPlain = 42.0f;      // forceUpdate() off, same frozen value, for comparison.
 long Changed = 0;              // immediate change reporting only, no interval participation.
 
 // ---- TimestampMode select state -----------------------------------------------------------
@@ -196,13 +190,11 @@ void setup()
 
   device.onCommand("WIDTHS", onWidths);
 
-  device.addSignal(F("Uptime"), &Uptime).withUnit(F("s"));
+  device.addSignal(F("Uptime"), &Uptime);
   device.addSignal(F("Periodic"), &Periodic);
   device.addSignal(F("Pushed"), &Pushed);
   device.addSignal(F("ExplicitTS"), &ExplicitTS);
   device.addSignal(F("Burst"), &Burst);
-  device.addSignal(F("FrozenForced"), &FrozenForced).forceUpdate();
-  device.addSignal(F("FrozenPlain"), &FrozenPlain);
   device.addSignal(F("Changed"), &Changed).writeAtInterval(BLAECK_OFF).writeOnChange(0);
 
   device.addSelect(F("TimestampMode"), &TimestampModeIdx,

@@ -40,7 +40,7 @@ KINDS = {
 }
 
 # A data member counts only on a type the library presents as its API - Blaeck
-# and the handles it returns. The record structs behind them (Signal, SignalMeta,
+# and the handles it returns. The record structs behind them (Signal, PropertyEntry,
 # CommandHandlerEntry) are public only because struct makes them so, and a sketch
 # never names one.
 FIELD_OWNER = "Blaeck"

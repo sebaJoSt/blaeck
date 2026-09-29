@@ -1,10 +1,8 @@
 """Check that what EventMetadataTest declares survives all the way to Home Assistant, then
 prove a fired occurrence is more than a declaration sitting still.
 
-The counterpart to drive_signal_metadata.py and drive_command_metadata.py, for event
-channels. Same three layers, plus one an event channel earns that a signal or a command
-does not - it carries no value at rest, so "shown" only means anything once something has
-actually been fired:
+Three layers, plus one an event earns that a sensor or a button does not - it carries no
+value at rest, so "shown" only means anything once something has actually been fired:
 
     declared    the sketch
     published   the discovery payload on the broker      <- checked here, always
@@ -55,9 +53,8 @@ DEVICE = "event_metadata_test"
 PRESENT = object()  # sentinel: key must be there, whatever it holds
 ABSENT = None       # key must be absent
 
-# channel name -> the discovery keys it must produce. Every channel lands on "event" - the
-# platform column CommandMetadataTest and SignalMetadataTest need (several platforms each)
-# does not apply here.
+# event name -> the discovery keys it must produce. Every event lands on the "event"
+# platform, so there is no platform column.
 EXPECT = {
     "Bare":           {"event_types": ["first", "second"], "icon": ABSENT,
                         "device_class": ABSENT, "entity_category": ABSENT,
@@ -106,8 +103,7 @@ FIRE = [
 
 # A disabled-by-default channel's button still exists (the button carries no such flag of
 # its own), but its event entity does not - Home Assistant never creates it until someone
-# enables it, exactly like Hidden_rawadc in SignalMetadataTest and Hidden in
-# CommandMetadataTest. That is a pass, not a failure: firing it is exactly what
+# enables it. That is a pass, not a failure: firing it is exactly what
 # EventTest's onFireDisabled already asks whether the wire still carries. Here the
 # question is only "did Home Assistant create the entity", and the answer is correctly no.
 DISABLED_CHANNELS = {"Hidden"}

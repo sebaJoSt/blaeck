@@ -14,7 +14,6 @@ with the required MQTT/Home Assistant or TimescaleDB outputs configured.
 | CommandTest | `drive_commands.py SERIAL_PORT`: inputs, sensors, buttons and plain commands - which values are taken and which refused - and the entity list the board sends |
 | EventTest | `drive_events.py SERIAL_PORT`: event types, framing and timestamp widths |
 | DatatypeTest | Manual host inspection of all supported data types |
-| SignalMetadataTest | `drive_signal_metadata.py [seconds\|capture.json]`: MQTT discovery and optional HA registry checks |
 | EventMetadataTest | `drive_event_metadata.py [seconds\|capture.json]`: discovery/registry and live HA event checks |
 | SignalTimingTest | `drive_signal_timing.py [table]`: issue HA commands and check recorded TimescaleDB rows |
 | SignalReportingTest | `drive_signal_reporting.py SERIAL_PORT`: Mega/AVR reporting policies, shared baselines, rate limits, numeric/text values and CRC32, with direct and buffered Serial writes |

@@ -114,7 +114,7 @@ void setup()
 
   device.onCommand("WIDTHS", onWidths);
 
-  device.addSignal(F("Uptime"), &Uptime).withUnit(F("s"));
+  device.addSignal(F("Uptime"), &Uptime);
 
   // ---- Bare, no modifiers --------------------------------------------------------------------
   device.addEvent(F("Bare"), F("first,second"));

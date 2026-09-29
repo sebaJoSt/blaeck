@@ -17,8 +17,7 @@ opening a browser.
 
 The registry is not live state: an entry set from a discovery payload stays put whether
 or not a host is currently running, which is why this can be checked hours after a
-harness run - unlike the "shown" layer in drive_signal_metadata.py, which needs a live
-bridge to answer at all.
+harness run - unlike live entity state, which needs a running bridge to answer at all.
 
 Credentials are never read from a file this script owns; it only reads what the
 environment hands it:
@@ -29,8 +28,8 @@ environment hands it:
     HA_USERNAME  Username, e
     HA_PASSWORD  Password  - a token is exchanged and never written to disk
 
-    python ha_registry.py signal_metadata_test          # print every matching entry
-    python ha_registry.py signal_metadata_test --json    # machine-readable, for a driver
+    python ha_registry.py event_metadata_test          # print every matching entry
+    python ha_registry.py event_metadata_test --json    # machine-readable, for a driver
 """
 import json
 import os
