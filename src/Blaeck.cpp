@@ -96,7 +96,7 @@ Blaeck::~Blaeck()
   _bufFree();
 }
 
-// Outside every BLAECK_ENABLE_* block: the symbol list and the schema hash need it too.
+// Outside every BLAECK_ENABLE_* block: the device list and the schema hash need it too.
 byte Blaeck::_dtypeCode(dataType t)
 {
   switch (t)
@@ -531,12 +531,21 @@ void Blaeck::clearAllSignals()
 uint16_t Blaeck::_computeSchemaHash()
 {
   // CRC16-CCITT (init 0x0000, poly 0x1021) over the signal names and type codes, matching
-  // Python's binascii.crc_hqx(data, 0). Names go through _emitSignalName(), as in the symbol list.
-  // A device's signal is hashed as "<device name>/<signal name>", so swapping the names of two
-  // devices with the same signals changes the hash. The board's own signals hash as before.
+  // Python's binascii.crc_hqx(data, 0). Names go through _emitSignalName(), as in the device
+  // list. A device's signal is hashed as "<device name>/<signal name>", so swapping the names of
+  // two devices with the same signals changes the hash. The board's own signals hash as before.
+  //
+  // Signals are hashed in device list order: the board's first, then each device's. That is the
+  // order the list gives them in and data frames number them by, so each signal's WireIndex is
+  // set here too. This runs whenever the signals change.
   _schemaHashAccum = 0x0000;
+  uint16_t wireIndex = 0;
+  for (int dev = 0; dev <= _deviceCount; ++dev)
   for (int j = 0; j < _signalIndex; j++)
   {
+    if (Signals[j].DeviceId != dev)
+      continue;
+    Signals[j].WireIndex = wireIndex++;
     if (const DeviceEntry *d = _deviceEntry(Signals[j].DeviceId))
     {
       BlaeckString deviceName = d->name;
@@ -1080,12 +1089,7 @@ void Blaeck::read()
       bool builtinMatched = true;
       const unsigned long msg_id = _parsedPrefixMsgId;
 
-      if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_SYMBOLS)))
-      {
-        _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
-        this->writeSymbols(msg_id);
-      }
-      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_SIGNAL_CONFIG)))
+      if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_SIGNAL_CONFIG)))
       {
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
         this->writeSignalConfig(msg_id);
@@ -3470,15 +3474,6 @@ void Blaeck::_setTimedDataState(bool timedActivated, unsigned long timedInterval
   }
 }
 
-void Blaeck::writeSymbols()
-{
-  this->writeSymbols(0);
-}
-void Blaeck::writeSymbols(unsigned long msg_id)
-{
-  this->writeSymbolsFrame(msg_id);
-}
-
 #if BLAECK_ENABLE_SIGNAL_META
 void Blaeck::writeSignalConfig()
 {
@@ -3672,7 +3667,7 @@ void Blaeck::_bufAllocate()
   // Sized for the signals added so far; _bufEnsure() grows it if a frame needs more.
   int signalsHeld = _signalIndex > 0 ? _signalIndex : 1;
   _frameBufSize = 60 + signalsHeld * 10;
-  // The symbol list can be larger with long names.
+  // The device list can be larger with long signal names.
   int b0b3_est = 60 + signalsHeld * 30;
   if (b0b3_est > _frameBufSize)
     _frameBufSize = b0b3_est;
@@ -3811,6 +3806,24 @@ bool Blaeck::_frameClose()
   return complete;
 }
 
+void Blaeck::_emitDeviceSignals(byte deviceId)
+{
+  uint16_t count = 0;
+  for (int i = 0; i < _signalIndex; ++i)
+    if (Signals[i].DeviceId == deviceId)
+      ++count;
+  _emitByte((byte)(count & 0xFF));
+  _emitByte((byte)((count >> 8) & 0xFF));
+  for (int i = 0; i < _signalIndex; ++i)
+  {
+    const Signal &signal = Signals[i];
+    if (signal.DeviceId != deviceId)
+      continue;
+    _emitSignalName0(signal);
+    _emitByte(_dtypeCode(signal.DataType));
+  }
+}
+
 void Blaeck::_emitDeviceRecord(byte deviceId, byte state, BlaeckString name, BlaeckString hw, BlaeckString fw)
 {
   _emitByte(deviceId);
@@ -3882,15 +3895,22 @@ void Blaeck::writeDevicesFrame(unsigned long msg_id)
     return;
   _emitStr0(_libraryName());
   _emitStr0(_libraryVersion());
+  // The longest command the device can receive, so a host knows how much room is left for
+  // parameters.
+  const uint16_t payloadMax = (uint16_t)(MAXIMUM_CHAR_COUNT - 1);
+  _emitByte((byte)(payloadMax & 0xFF));
+  _emitByte((byte)((payloadMax >> 8) & 0xFF));
   _emitByte((byte)(_deviceCount + 1));
   _emitDeviceRecord(0, _writeRestartedAlreadyDone ? 0 : DEVICE_STATE_RESTARTED, _deviceName(),
                     DeviceHWVersion, DeviceFWVersion);
+  _emitDeviceSignals(0);
   for (byte i = 0; i < _deviceCount; ++i)
   {
     const DeviceEntry &d = _devices[i];
     const byte state = (byte)((d.missing ? DEVICE_STATE_NOT_RESPONDING : 0) |
                               (d.restartPending ? DEVICE_STATE_RESTARTED : 0));
     _emitDeviceRecord(i + 1, state, d.name, _orNotAvailable(d.hwVersion), _orNotAvailable(d.fwVersion));
+    _emitDeviceSignals(i + 1);
   }
   if (!_frameClose())
     return;
@@ -3957,13 +3977,16 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
     _emitBytes(ullCvt.bval, 8);
   }
 
+  // In device list order, the order a host numbers the signals by.
+  for (int dev = 0; dev <= _deviceCount; ++dev)
   for (int i = signalIndex_start; i <= signalIndex_end; i++)
   {
-    if (!Signals[i].Selected)
+    if (!Signals[i].Selected || Signals[i].DeviceId != dev)
       continue;
 
-    intCvt.val = i;
-    _emitBytes(intCvt.bval, 2);
+    const uint16_t wireIndex = Signals[i].WireIndex;
+    _emitByte((byte)(wireIndex & 0xFF));
+    _emitByte((byte)((wireIndex >> 8) & 0xFF));
 
     Signal signal = Signals[i];
     if (signal.Reporting != nullptr)
@@ -4023,24 +4046,6 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
   }
   if (complete)
     _sendRestartFlag = false;
-}
-
-void Blaeck::writeSymbolsFrame(unsigned long msg_id)
-{
-  if (!_frameOpen(0xE0, msg_id))
-    return;
-
-  for (int i = 0; i < _signalIndex; i++)
-  {
-    _emitDeviceId(Signals[i].DeviceId);
-
-    // A reference, to avoid copying the entry.
-    const Signal &signal = Signals[i];
-
-    _emitSignalName0(signal);
-    _emitByte(_dtypeCode(signal.DataType));
-  }
-  _frameClose();
 }
 
 #if BLAECK_ENABLE_SIGNAL_META

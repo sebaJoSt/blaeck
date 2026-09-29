@@ -104,13 +104,24 @@ def frames(items, key):
     return [item for item in items if item[0] == "frame" and item[1] == key]
 
 
-def device_record(device_id, state, name, hw, fw):
-    """One B7 record: ID, parent 0, flags 0, state, then the three names."""
-    return bytes([device_id, 0, 0, 0, state]) + b"\0".join(s.encode() for s in (name, hw, fw)) + b"\0"
+FLOAT = 8
+# The longest command a Mega receives: its 128-byte buffer less the terminator.
+PAYLOAD_MAX = 127
+
+
+def device_record(device_id, state, name, hw, fw, signals=()):
+    """One B7 record: ID, parent 0, flags 0, state, the three names, then the signal count and
+    each signal's name and type code."""
+    record = bytes([device_id, 0, 0, 0, state]) + b"\0".join(s.encode() for s in (name, hw, fw)) + b"\0"
+    record += len(signals).to_bytes(2, "little")
+    for signal, dtype in signals:
+        record += signal.encode() + b"\0" + bytes([dtype])
+    return record
 
 
 def device_list(*records):
-    return b"blaeck\0" + VERSION.encode() + b"\0" + bytes([len(records)]) + b"".join(records)
+    return (b"blaeck\0" + VERSION.encode() + b"\0" + PAYLOAD_MAX.to_bytes(2, "little") +
+            bytes([len(records)]) + b"".join(records))
 
 
 def notice(device_id, event):
@@ -174,14 +185,11 @@ def run(port):
 
     items = link.send("<BLAECK.GET_DEVICES>", frame_with(0xB7))
     devices = frames(items, 0xB7)[-1][2]
-    check("device list: the board, then the pump as device 1, both fine",
-          devices == device_list(device_record(0, 0, "SubDevicesTest", "Arduino Mega 2560", "1.0"),
-                                 device_record(1, 0, "Pump controller", "Simulated", "1.0")), devices)
-
-    symbols = frames(link.send("<BLAECK.WRITE_SYMBOLS>", frame_with(0xE0)), 0xE0)[-1][2]
-    check("BoardValue belongs to the board", owner_before(symbols, "BoardValue") == BOARD)
-    check("Flow and Pressure belong to the pump",
-          owner_before(symbols, "Flow") == PUMP and owner_before(symbols, "Pressure") == PUMP)
+    check("device list: the board with BoardValue, then the pump as device 1 with Flow and Pressure",
+          devices == device_list(device_record(0, 0, "SubDevicesTest", "Arduino Mega 2560", "1.0",
+                                               [("BoardValue", FLOAT)]),
+                                 device_record(1, 0, "Pump controller", "Simulated", "1.0",
+                                               [("Flow", FLOAT), ("Pressure", FLOAT)])), devices)
 
     commands = frames(link.send("<BLAECK.WRITE_COMMANDS>", frame_with(0xA0)), 0xA0)[-1][2]
     check("SET_PUMP_SPEED belongs to the pump", owner_before(commands, "SET_PUMP_SPEED", 2) == PUMP)
@@ -226,7 +234,8 @@ def run(port):
           items[-1][2][8:10])
     devices = frames(link.send("<BLAECK.GET_DEVICES>", frame_with(0xB7)), 0xB7)[-1][2]
     check("pump missing: the device list says so",
-          device_record(1, 1, "Pump controller", "Simulated", "1.0") in devices, devices)
+          device_record(1, 1, "Pump controller", "Simulated", "1.0",
+                        [("Flow", FLOAT), ("Pressure", FLOAT)]) in devices, devices)
 
     link.send("<SIM_SILENT,0>", done("SIM_SILENT"))
     items = link.send("<POLL>", done("POLL"))

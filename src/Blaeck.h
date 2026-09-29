@@ -102,7 +102,6 @@ static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
 
 // The built-in commands. read() matches against these names, and the build fails if one is
 // too long for the parse buffer. A new built-in has to be added to the list below as well.
-#define BLAECK_BUILTIN_WRITE_SYMBOLS "BLAECK.WRITE_SYMBOLS"
 #define BLAECK_BUILTIN_WRITE_SIGNAL_CONFIG "BLAECK.WRITE_SIGNAL_CONFIG"
 #define BLAECK_BUILTIN_WRITE_DATA "BLAECK.WRITE_DATA"
 #define BLAECK_BUILTIN_GET_DEVICES "BLAECK.GET_DEVICES"
@@ -121,7 +120,6 @@ static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
 #define BLAECK_DEVICE_NAME_UNNAMED "Unnamed"
 
 #define BLAECK_BUILTIN_COMMAND_LIST(X)  \
-  X(BLAECK_BUILTIN_WRITE_SYMBOLS)       \
   X(BLAECK_BUILTIN_WRITE_SIGNAL_CONFIG) \
   X(BLAECK_BUILTIN_WRITE_DATA)          \
   X(BLAECK_BUILTIN_GET_DEVICES)         \
@@ -176,7 +174,7 @@ typedef enum DataType : uint8_t
 } dataType;
 
 // The enumerators are not the wire codes and nothing treats them as such: _dtypeCode() is
-// the one mapping, and the schema hash, the symbol list and the state frames all go through
+// the one mapping, and the schema hash, the device list and the state frames all go through
 // it. Reorder this list or insert a type and nothing on the wire moves.
 
 // Type tags for addStateChannel(), for a channel with no variable behind it. They are separate
@@ -336,6 +334,9 @@ struct Signal
   uint8_t NameSuffix;
   // The device from addDevice() the signal belongs to, 0 for the board itself.
   uint8_t DeviceId = 0;
+  // The signal's number on the wire: its position in the device list, which groups signals by
+  // device. Set by _computeSchemaHash() whenever the signals change.
+  uint16_t WireIndex = 0;
   SignalReporting *Reporting = nullptr;
 #if BLAECK_ENABLE_SIGNAL_META
   // Null until the sketch describes the signal. Owned by the entry.
@@ -3334,15 +3335,16 @@ public:
   /*!
     @brief   Removes every signal, so a new set can be added.
 
-    The table keeps its size. The rejection counts are reset too.
+    The table keeps its memory for the new ones. The rejection counts are reset too.
 
-    @warning Call writeSymbols() once the new signals are added. Until then a host
-             files values under the old names.
+    @warning Call writeDevices() once the new signals are added. Until then a host
+             files values under the old names. A host that is logging stops when the
+             signals change: its columns no longer describe the data.
 
     @code
       device.clearAllSignals();
       device.addSignal(F("Temperature"), &Temperature);
-      device.writeSymbols();
+      device.writeDevices();
     @endcode
   */
   void clearAllSignals();
@@ -3404,10 +3406,14 @@ public:
   // ----- Devices -----
 
   /*!
-    @brief   Sends the device's name and versions, followed by each device from addDevice().
+    @brief   Sends the device's name, versions and signals, then each device from addDevice().
 
     Each entry also says whether the device is marked missing and whether a restart has
-    not been reported yet. The device sends this when a host sends <BLAECK.GET_DEVICES>.
+    not been reported yet. A host needs the signals to read the data. The device sends
+    this when a host sends <BLAECK.GET_DEVICES>.
+
+    @warning Call it after adding, removing or renaming a signal while running, or a host
+             files values under the wrong names.
 
     @code
       device.writeDevices();
@@ -3439,25 +3445,6 @@ public:
     @endcode
   */
   BlaeckDeviceRef addDevice(BlaeckString name);
-
-  // ----- Symbols -----
-
-  /*!
-    @brief   Sends every signal's name and type.
-
-    A host needs this to read the data. The device also sends it when a host sends
-    <BLAECK.WRITE_SYMBOLS>.
-
-    @warning Call it after adding, removing or renaming a signal, or a host files
-             values under the wrong names.
-
-    @code
-      device.clearAllSignals();
-      device.addSignal(F("Temperature"), &Temperature);
-      device.writeSymbols();
-    @endcode
-  */
-  void writeSymbols();
 
   // ----- Signal Config -----
 
@@ -4234,13 +4221,11 @@ protected:
   // Forms that echo the message id of the request they answer. Only read() has one.
   void writeRestarted(unsigned long messageID);
   void writeDevices(unsigned long messageID);
-  void writeSymbols(unsigned long messageID);
   void writeSignalConfig(unsigned long messageID);
   void writeCommands(unsigned long messageID);
   void writeStateChannels(unsigned long messageID);
   void writeEventChannels(unsigned long messageID);
 
-  void writeSymbolsFrame(unsigned long MessageID);
 #if BLAECK_ENABLE_SIGNAL_META
   void writeSignalConfigFrame(unsigned long MessageID);
 #endif
@@ -4647,6 +4632,8 @@ protected:
   }
   // One device record of the B7 device list.
   void _emitDeviceRecord(byte deviceId, byte state, BlaeckString name, BlaeckString hw, BlaeckString fw);
+  // The signal count and each signal's name and type code, for one device of the list.
+  void _emitDeviceSignals(byte deviceId);
   // Sends each device's pending C1 notices; stops at the first that can't be sent.
   void _writeDeviceNotices();
   // One C1 frame; false if it could not be sent.
@@ -4696,11 +4683,12 @@ protected:
 #endif
 
   // Sends each catalog that changed since it was last sent. Called after anything that can
-  // change one, and before a state or event push. Never sends the symbol list: a host lays out
-  // its storage by it, so a changed list mid-session must be sent by the sketch on purpose.
+  // change one, and before a state or event push. Never sends the device list: a host lays out
+  // its storage by its signals, so a changed list mid-session must be sent by the sketch on
+  // purpose.
   void _flushCatalogs();
 
-  // The datatype's code in the symbol list. Used by the schema hash too, so it exists
+  // The datatype's code in the device list. Used by the schema hash too, so it exists
   // without state channels.
   static byte _dtypeCode(dataType t);
 #if BLAECK_ENABLE_STATE_CHANNELS

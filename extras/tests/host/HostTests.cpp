@@ -526,7 +526,7 @@ static void detachFromCallbacks()
   first.input = "<BLAECK.GET_DEVICES>";
   takeover.read();
   first.output.clear();
-  second.input = "<BLAECK.WRITE_SYMBOLS>";
+  second.input = "<BLAECK.WRITE_DATA>";
   takeover.read();
   assert(!first.open && !second.open && second.output.empty());
   assert(takeover.transportError() == Blaeck::TransportError::NotStarted);
@@ -1670,10 +1670,25 @@ static std::string deviceRecord(byte id, byte state, const char *name, const cha
          name + '\0' + hw + '\0' + fw + '\0';
 }
 
-// A B7 payload: library name and version, the record count, then the records.
+// The signals after a B7 record: a 2-byte count, then each name and type code.
+static std::string signalList(const std::vector<std::pair<std::string, byte>> &signals = {})
+{
+  std::string out;
+  out += static_cast<char>(signals.size() & 0xFF);
+  out += static_cast<char>((signals.size() >> 8) & 0xFF);
+  for (const auto &signal : signals)
+    out += signal.first + '\0' + static_cast<char>(signal.second);
+  return out;
+}
+
+// A B7 payload: library name and version, the longest command, the record count, then the
+// records, each followed by its signals.
 static std::string deviceList(byte count, const std::string &records)
 {
-  return std::string("blaeck") + '\0' + BLAECK_VERSION + '\0' + static_cast<char>(count) + records;
+  const uint16_t payloadMax = BLAECK_COMMAND_MAX_CHARS_DEFAULT - 1;
+  return std::string("blaeck") + '\0' + BLAECK_VERSION + '\0' +
+         static_cast<char>(payloadMax & 0xFF) + static_cast<char>((payloadMax >> 8) & 0xFF) +
+         static_cast<char>(count) + records;
 }
 
 // A C1 payload.
@@ -1696,10 +1711,7 @@ static void noDeviceOwnership()
   command(device, stream, "<BLAECK.GET_DEVICES>");
   // Without devices the list holds the board alone; its restart went out as C1 in read().
   assert(commandFramePayload(stream.data.output, 0xB7, 0) ==
-         deviceList(1, deviceRecord(0, 0, "Solo", "Mega", "n/a")));
-  stream.data.output.clear();
-  command(device, stream, "<BLAECK.WRITE_SYMBOLS>");
-  assert(ownerOf(commandFramePayload(stream.data.output, 0xE0, 0), "Value") == owner(0));
+         deviceList(1, deviceRecord(0, 0, "Solo", "Mega", "n/a") + signalList({{"Value", 8}})));
 }
 
 static void subDevices(bool buffered)
@@ -1765,23 +1777,18 @@ static void subDevices(bool buffered)
   assert(commandFramePayload(stream.data.output, 0xC1, 0) == notice(0, 0x01));
   stream.data.output.clear();
 
+  // Each device lists its own signals: Orphan, added after the pump's, still goes with the board.
   command(device, stream, "<BLAECK.GET_DEVICES>");
   assert(commandFramePayload(stream.data.output, 0xB7, 0) ==
          deviceList(3, deviceRecord(0, 0, "Board", "Mega", "n/a") +
+                           signalList({{"BoardValue", 8}, {"Orphan", 8}}) +
                        deviceRecord(1, 0, "Pump", "Nano", "1.2") +
-                       deviceRecord(2, 0, "Fan", "n/a", "n/a")));
-  stream.data.output.clear();
-
-  command(device, stream, "<BLAECK.WRITE_SYMBOLS>");
-  std::string payload = commandFramePayload(stream.data.output, 0xE0, 0);
-  assert(ownerOf(payload, "BoardValue") == owner(0));
-  assert(ownerOf(payload, "Flow") == owner(1));
-  assert(ownerOf(payload, "Pressure") == owner(1));
-  assert(ownerOf(payload, "Orphan") == owner(0));
+                           signalList({{"Flow", 8}, {"Pressure", 8}}) +
+                       deviceRecord(2, 0, "Fan", "n/a", "n/a") + signalList()));
   stream.data.output.clear();
 
   command(device, stream, "<BLAECK.WRITE_COMMANDS>");
-  payload = commandFramePayload(stream.data.output, 0xA0, 0);
+  std::string payload = commandFramePayload(stream.data.output, 0xA0, 0);
   assert(ownerOf(payload, "PUMP_SPEED", 2) == owner(1));
   assert(ownerOf(payload, "PUMP_ON", 2) == owner(1));
   assert(ownerOf(payload, "BOARD_RESET", 2) == owner(0));
@@ -1818,6 +1825,8 @@ static void subDevices(bool buffered)
   command(device, stream, "<BLAECK.ACTIVATE,0>");
   stream.data.output.clear();
   device.writeIfDue();
+  // Numbered in device list order: the board's BoardValue 0 and Orphan 1, the pump's Flow 2 and
+  // Pressure 3.
   auto frames = takeData(stream.data.output, widths);
   assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 1, 2, 3}));
 
@@ -1831,10 +1840,10 @@ static void subDevices(bool buffered)
   assert(pump.isMissing());
   device.writeIfDue();
   frames = takeData(stream.data.output, widths);
-  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 3}));
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 1}));
   device.writeAll();
   frames = takeData(stream.data.output, widths);
-  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 3}));
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0, 1}));
   pump.writeAll();
   assert(takeData(stream.data.output, widths).empty());
 
@@ -1869,7 +1878,7 @@ static void subDevices(bool buffered)
   // pump.writeAll() sends the pump's signals only.
   pump.writeAll();
   frames = takeData(stream.data.output, widths);
-  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{1, 2}));
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{2, 3}));
 
   // A device without signals changes nothing in the data when it goes missing.
   fan.markMissing();
@@ -1919,7 +1928,7 @@ static void subDevices(bool buffered)
   bigStream.data.output.clear();
   command(big, bigStream, "<BLAECK.GET_DEVICES>");
   const std::string list = commandFramePayload(bigStream.data.output, 0xB7, 0);
-  assert(static_cast<byte>(list[std::string("blaeck").size() + 1 + std::string(BLAECK_VERSION).size() + 1]) == 255);
+  assert(static_cast<byte>(list[std::string("blaeck").size() + 1 + std::string(BLAECK_VERSION).size() + 1 + 2]) == 255);
   assert(list.find(deviceRecord(254, 0, "D253", "n/a", "n/a")) != std::string::npos);
 }
 
@@ -1948,9 +1957,9 @@ static void deviceNoticesBeforeHost()
   device.read();
   assert(host.output.find(std::string("<blaeck:") + char(0xC1)) == std::string::npos);
   assert(commandFramePayload(host.output, 0xB7, 0) ==
-         deviceList(3, deviceRecord(0, 0x02, "Board", "Mega", "n/a") +
-                       deviceRecord(1, 0x03, "Pump", "n/a", "n/a") +
-                       deviceRecord(2, 0, "Fan", "n/a", "n/a")));
+         deviceList(3, deviceRecord(0, 0x02, "Board", "Mega", "n/a") + signalList() +
+                       deviceRecord(1, 0x03, "Pump", "n/a", "n/a") + signalList() +
+                       deviceRecord(2, 0, "Fan", "n/a", "n/a") + signalList()));
   host.output.clear();
 
   // Everything was reported: no C1 follows, and the next list shows no restart.
@@ -1959,9 +1968,9 @@ static void deviceNoticesBeforeHost()
   host.input = "<BLAECK.GET_DEVICES>";
   device.read();
   assert(commandFramePayload(host.output, 0xB7, 0) ==
-         deviceList(3, deviceRecord(0, 0, "Board", "Mega", "n/a") +
-                       deviceRecord(1, 0x01, "Pump", "n/a", "n/a") +
-                       deviceRecord(2, 0, "Fan", "n/a", "n/a")));
+         deviceList(3, deviceRecord(0, 0, "Board", "Mega", "n/a") + signalList() +
+                       deviceRecord(1, 0x01, "Pump", "n/a", "n/a") + signalList() +
+                       deviceRecord(2, 0, "Fan", "n/a", "n/a") + signalList()));
 }
 
 // CRC16-CCITT (init 0, poly 0x1021), as a host computes the schema hash.
@@ -1977,6 +1986,7 @@ static uint16_t crc16(const std::string &data)
   return crc;
 }
 
+#if BLAECK_ENABLE_STATE_CHANNELS
 // Owner bytes of every catalog entry with this name, in catalog order.
 static std::vector<std::string> ownersOf(const std::string &payload, const char *name, size_t gap = 0)
 {
@@ -1989,6 +1999,7 @@ static std::vector<std::string> ownersOf(const std::string &payload, const char 
   }
   return owners;
 }
+#endif
 
 // A left-out timestamp is taken from the timestamp mode when the value is sent; 0 is a timestamp too.
 static void defaultTimestamps()
@@ -2065,9 +2076,17 @@ static void sameNamesAcrossDevices()
   device.read();
   stream.data.output.clear();
 
-  command(device, stream, "<BLAECK.WRITE_SYMBOLS>");
-  std::string payload = commandFramePayload(stream.data.output, 0xE0, 0);
-  assert((ownersOf(payload, "Temperature") == std::vector<std::string>{owner(0), owner(1), owner(2)}));
+  // Each device lists its own Temperature.
+  command(device, stream, "<BLAECK.GET_DEVICES>");
+  std::string payload = commandFramePayload(stream.data.output, 0xB7, 0);
+  const std::string temperature = signalList({{"Temperature", 8}});
+  size_t at = 0;
+  for (int i = 0; i < 3; ++i)
+  {
+    at = payload.find(temperature, at);
+    assert(at != std::string::npos);
+    at += temperature.size();
+  }
   stream.data.output.clear();
 
 #if BLAECK_ENABLE_STATE_CHANNELS
@@ -2124,17 +2143,32 @@ static void sameNamesAcrossDevices()
 
   const uint16_t hash = frames[0].schemaHash;
 
-  // Firmware that registers zone B's signal before zone A's sends the same names in another
-  // order. Without the device names the hash would match, and a host would file zone A's
-  // values under zone B.
+  // Signals are numbered and hashed in device list order, so registering zone B's signal
+  // before zone A's changes nothing a host sees.
+  FakeStream reorderedStream;
+  Blaeck reordered;
+  reordered.begin(reorderedStream);
+  BlaeckDeviceRef reorderedA = reordered.addDevice(F("Zone A"));
+  BlaeckDeviceRef reorderedB = reordered.addDevice("Zone B");
+  reordered.addSignal("Temperature", &boardTemp);
+  reorderedB.addSignal("Temperature", &bTemp);
+  reorderedA.addSignal("Temperature", &aTemp);
+  reordered.read();
+  reorderedStream.data.output.clear();
+  reorderedB.write("Temperature", 30.0f);
+  frames = takeData(reorderedStream.data.output, widths);
+  assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{2}) && frames[0].schemaHash == hash);
+
+  // Firmware that adds zone B before zone A lists them the other way round. Without the device
+  // names the hash would match, and a host would file zone A's values under zone B.
   FakeStream swappedStream;
   Blaeck swapped;
   swapped.begin(swappedStream);
-  BlaeckDeviceRef swappedA = swapped.addDevice(F("Zone A"));
   BlaeckDeviceRef swappedB = swapped.addDevice("Zone B");
+  BlaeckDeviceRef swappedA = swapped.addDevice(F("Zone A"));
   swapped.addSignal("Temperature", &boardTemp);
-  swappedB.addSignal("Temperature", &bTemp);
   swappedA.addSignal("Temperature", &aTemp);
+  swappedB.addSignal("Temperature", &bTemp);
   swapped.read();
   swappedStream.data.output.clear();
   swapped.writeAll();
