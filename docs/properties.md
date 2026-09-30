@@ -84,6 +84,16 @@ in both cases.
 a thousandth of a step of one is stored as exactly that. So 0.9, which AVR's `atof()` reads as
 0.90000004, is stored as 0.9. A value further off is kept as sent.
 
+A bound the variable cannot hold - `withRange(0, 100000, 1)` on an `int` - sets no range at all
+and says so on debug, since a range reaching past the variable would admit a write that cannot
+be stored. The range goes out in the variable's own type and at its width, so a step of 0.01 on
+a `float` reaches a host as 0.01 rather than as the 0.009999999776482582 a widened float names.
+
+That width is also why a whole-number variable takes whole bounds and a whole step: a fraction
+would arrive truncated, 0.5 as 0. `withRange(0, 10, 0.5)` on a `byte` keeps the range and drops
+the step; `withRange(0.5, 10.5, 1)` drops the range and keeps the step. Both say so on debug.
+Declare the variable as a `float` for a fractional step.
+
 ## Sensors
 
 `addSensor()` takes a variable or a function, and what it is decides the kind:

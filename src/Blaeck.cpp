@@ -693,6 +693,41 @@ static size_t _signalValueSize(dataType type)
   }
 }
 
+// Whether v is inside what a variable of this type holds. A float or a double takes any finite
+// value; a whole number is bounded by its width. Used both by a write, which must not store what
+// the variable cannot hold, and by withRange(), where a bound the variable cannot reach would
+// accept such a write in the first place.
+static bool _fitsType(dataType type, double v)
+{
+  switch (type)
+  {
+  case Blaeck_byte: return v >= 0 && v <= 255.0;
+  case Blaeck_short: case Blaeck_int: return v >= -32768.0 && v <= 32767.0;
+  case Blaeck_ushort: case Blaeck_uint: return v >= 0 && v <= 65535.0;
+  case Blaeck_long: return v >= -2147483648.0 && v <= 2147483647.0;
+  case Blaeck_ulong: return v >= 0 && v <= 4294967295.0;
+  case Blaeck_float: case Blaeck_double: return true;
+  // The bounds are the nearest doubles inside the range: 2^63 itself does not fit.
+  case Blaeck_longlong: return v >= -9223372036854775808.0 && v < 9223372036854775808.0;
+  default: return false;
+  }
+}
+
+// Whether v survives the type a range is sent in. A whole-number type carries no fraction, so a
+// bound or a step with one would arrive truncated - 0.5 as 0 - stating something the sketch did
+// not. Stricter than _fitsType(), which a write uses: a write's fraction is refused earlier, by
+// the command parser, and never reaches a variable this way.
+static bool _representable(dataType type, double v)
+{
+  if (!_fitsType(type, v))
+    return false;
+  switch (type)
+  {
+  case Blaeck_float: case Blaeck_double: return true;
+  default: return v == floor(v);
+  }
+}
+
 // Makes room in r for a text snapshot of this length. False, reported once, if RAM ran out.
 bool Blaeck::_prepareTextSnapshot(ReportingState &r, size_t length)
 {
@@ -3206,8 +3241,17 @@ void BlaeckPropertyRefBase::_setRange(double mn, double mx, double st) const
     debug->println(F("withRange(): max is not above min, so no range is set."));
   if (st != 0.0 && !(st > 0.0) && debug != nullptr)
     debug->println(F("withRange(): a step must be above 0, so no step is set."));
-  const bool hasRange = mx > mn;
-  const bool hasStep = st > 0.0;
+  // A bound the variable cannot state would accept a write it cannot store, and the catalog
+  // sends a range at the variable's own width, where such a bound does not survive either: a
+  // fractional bound on a whole-number variable would arrive truncated.
+  const bool fits = _representable(e->type, mn) && _representable(e->type, mx);
+  if (mx > mn && !fits && debug != nullptr)
+    debug->println(F("withRange(): a bound is not a value the variable holds, so no range is set."));
+  const bool stepFits = _representable(e->type, st);
+  if (st > 0.0 && !stepFits && debug != nullptr)
+    debug->println(F("withRange(): the step is not a value the variable holds, so no step is set."));
+  const bool hasRange = mx > mn && fits;
+  const bool hasStep = st > 0.0 && stepFits;
   if (e->rangeMin != mn || e->rangeMax != mx || e->rangeStep != st)
   {
     e->rangeMin = mn;
@@ -3433,46 +3477,6 @@ static byte _propertyTextLength(const char *text, uint16_t textSize)
   return static_cast<byte>(_textLength(text, false, limit > 255 ? 255 : limit));
 }
 
-// The bits of an IEEE 754 double holding the same value as a float's bits. For boards whose
-// double is a float (AVR), so a range still goes out as the 8-byte double the protocol has.
-uint64_t blaeck_detail::widenFloatBits(uint32_t bits)
-{
-  const uint64_t sign = (uint64_t)(bits >> 31) << 63;
-  const uint32_t exponent = (bits >> 23) & 0xFF;
-  uint64_t mantissa = bits & 0x7FFFFFUL;
-  if (exponent == 0xFF)
-    return sign | (0x7FFULL << 52) | (mantissa << 29);
-  if (exponent == 0)
-  {
-    if (mantissa == 0)
-      return sign;
-    // A subnormal float is a normal double: shift its leading 1 into the implicit place.
-    int shift = 0;
-    while ((mantissa & 0x800000UL) == 0)
-    {
-      mantissa <<= 1;
-      ++shift;
-    }
-    mantissa &= 0x7FFFFFUL;
-    return sign | ((uint64_t)(1023 - 126 - shift) << 52) | (mantissa << 29);
-  }
-  return sign | ((uint64_t)(exponent - 127 + 1023) << 52) | (mantissa << 29);
-}
-
-void Blaeck::_emitDouble(double v)
-{
-  if (sizeof(double) == 8)
-  {
-    _emitBytes(reinterpret_cast<const byte *>(&v), 8);
-    return;
-  }
-  const float f = static_cast<float>(v);
-  uint32_t bits;
-  memcpy(&bits, &f, 4);
-  const uint64_t wide = blaeck_detail::widenFloatBits(bits);
-  _emitBytes(reinterpret_cast<const byte *>(&wide), 8);
-}
-
 void Blaeck::_emitPropertyValue(const PropertyEntry &p)
 {
   if (p.kind == BLAECK_VALUE_TEXT)
@@ -3493,33 +3497,45 @@ void Blaeck::_emitPropertyValue(const PropertyEntry &p)
 // Stores v in a variable of the given type. False if it doesn't fit the type.
 static bool _storeNumber(void *address, dataType type, double v)
 {
+  if (!_fitsType(type, v))
+    return false;
   switch (type)
   {
-  case Blaeck_byte: if (v < 0 || v > 255) return false; *(byte *)address = (byte)v; return true;
+  case Blaeck_byte: *(byte *)address = (byte)v; return true;
   case Blaeck_short: case Blaeck_int:
-    if (v < -32768.0 || v > 32767.0)
-      return false;
     { int16_t x = (int16_t)v; memcpy(address, &x, 2); } return true;
   case Blaeck_ushort: case Blaeck_uint:
-    if (v < 0 || v > 65535.0)
-      return false;
     { uint16_t x = (uint16_t)v; memcpy(address, &x, 2); } return true;
   case Blaeck_long:
-    if (v < -2147483648.0 || v > 2147483647.0)
-      return false;
     { int32_t x = (int32_t)v; memcpy(address, &x, 4); } return true;
   case Blaeck_ulong:
-    if (v < 0 || v > 4294967295.0)
-      return false;
     { uint32_t x = (uint32_t)v; memcpy(address, &x, 4); } return true;
   case Blaeck_float: { float x = (float)v; memcpy(address, &x, sizeof x); } return true;
   case Blaeck_double: { double x = v; memcpy(address, &x, sizeof x); } return true;
-  // The bounds are the nearest doubles inside the range: 2^63 itself does not fit.
   case Blaeck_longlong:
-    if (v < -9223372036854775808.0 || v >= 9223372036854775808.0) return false;
     { long long x = (long long)v; memcpy(address, &x, sizeof x); } return true;
   default: return false;
   }
+}
+
+// A range bound, at the width and the type of the variable it bounds - the same form the
+// property's own value goes out in, which is what min, max and step were alone in not doing.
+//
+// Widening to eight bytes keeps the value and loses the decimal it was written as. A board whose
+// double is a float holds 0.01 as 0.00999999977, and a double carrying that exactly is what a
+// host offers as a step: Home Assistant counts min + n * step from it and cannot land on 0.05.
+// Sent at the variable's own width, the same float reads back as the shortest decimal that names
+// it, which is the 0.01 the sketch wrote. A double property is eight bytes wherever it exists:
+// on a board whose double is a float, one is registered as a float (BLAECK_DOUBLE_TYPE).
+void Blaeck::_emitRangeValue(dataType type, double v)
+{
+  // A bound that does not fit was refused by withRange(), so this cannot be reached with one.
+  // Zero is written rather than nothing regardless: the entry's length is measured by writing
+  // it twice, and a field that appears in one pass and not the other would misstate it.
+  byte value[8];
+  memset(value, 0, sizeof value);
+  _storeNumber(value, type, v);
+  _emitBytes(value, _signalValueSize(type));
 }
 
 // Reads a whole decimal integer, with an optional sign, into a long long. False if the text is
@@ -3954,11 +3970,11 @@ void Blaeck::writeEntitiesFrame(unsigned long msg_id)
         _emitByte(p.textSize > 0 ? (byte)(p.textSize - 1) : (byte)255);
       if (flags & blaeck_detail::PROPERTY_HAS_RANGE)
       {
-        _emitDouble(p.rangeMin);
-        _emitDouble(p.rangeMax);
+        _emitRangeValue(p.type, p.rangeMin);
+        _emitRangeValue(p.type, p.rangeMax);
       }
       if (flags & blaeck_detail::PROPERTY_HAS_STEP)
-        _emitDouble(p.rangeStep);
+        _emitRangeValue(p.type, p.rangeStep);
       if (flags & blaeck_detail::PROPERTY_HAS_UNIT)
         _emitFlashStr0(pr->unit);
       if (flags & blaeck_detail::PROPERTY_HAS_DISPLAY_NAME)

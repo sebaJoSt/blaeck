@@ -388,7 +388,6 @@ inline bool flashStrEmpty(BlaeckString value)
 
 // Checks the options of a select or an enum sensor: at least one entry and no blank ones.
 // Prints why on debug when it refuses. `name` is the property named in that message.
-uint64_t widenFloatBits(uint32_t bits);
 bool optionsAccepted(BlaeckString optionsCsv, Print *debug,
                      const char *name, bool nameInFlash);
 
@@ -457,7 +456,9 @@ struct PropertyEntry
   BlaeckPropertyCallback callback = nullptr;
   // An enum's options, comma-separated.
   detail::StoredString options;
-  // Doubles, sent as 8-byte doubles: exact for every 32-bit integer. On AVR a double is a float.
+  // In the variable's own type, at its width, as the catalog sends them. Widening a range to a
+  // fixed eight bytes would keep the value and lose the decimal it was written as: on a board
+  // whose double is a float, a step of 0.01 would reach a host as 0.009999999776482582.
   double rangeMin = 0.0;
   double rangeMax = 0.0;
   double rangeStep = 0.0;
@@ -1218,8 +1219,14 @@ public:
     step of min + n * step is stored as exactly that, so 0.9 arriving as 0.90000004
     stays 0.9; a value further off is kept as sent.
 
-    @param   min   Lowest accepted value.
-    @param   max   Highest accepted value; must be above min.
+    A bound or a step the variable cannot state exactly is dropped, and says so on debug:
+    a range reaching past the variable would admit a write that cannot be stored, and a
+    fraction on a whole-number variable would arrive truncated - 0.5 as 0. So an integer
+    input takes whole bounds and a whole step. The catalog carries min, max and step in
+    the variable's own type, at its width.
+
+    @param   min   Lowest accepted value; must be within what the variable holds.
+    @param   max   Highest accepted value; must be above min and within what the variable holds.
     @param   step  The step a host offers and the value is stored on; 0 for none.
     @return  The same handle, for chaining.
 
@@ -3176,8 +3183,8 @@ protected:
   // The owner of a catalog entry or push: 0 for the board, 1-254 for a device from addDevice(),
   // the same DeviceID as in the B7 device list.
   void _emitDeviceId(byte deviceId) { _emitByte(deviceId); }
-  // An 8-byte IEEE 754 double, whatever the board's double is.
-  void _emitDouble(double v);
+  // A range bound, at the width and the type of the variable it bounds.
+  void _emitRangeValue(dataType type, double v);
   // One entity-list entry: its DeviceID and kind, the length of what fields() writes, then the
   // fields. fields() runs twice, first only counting, so it must write the same both times.
   template <typename Fields>

@@ -2056,35 +2056,60 @@ static float readGauge() { return gaugeValue; }
 static bool readRunning() { return true; }
 static const char *readStatus() { return "ok"; }
 
+// A range goes out in the variable's own type, at its width - so a byte's range is three bytes,
+// not twenty-four - and a bound the variable cannot reach sets no range at all.
+static void rangeAtTheVariablesWidth()
+{
+  hostMillis() = 0;
+  FakeStream stream;
+  Capture debug;
+  TestBlaeck device;
+  device.begin(stream).withDebugStream(&debug);
+
+  byte percent = 10;
+  short position = 0;
+  device.addNumberInput(F("Percent"), &percent).withRange(0, 100, 5);
+  // 1000 is past what a byte holds, so no range is set and nothing is emitted for one.
+  byte level = 0;
+  device.addNumberInput(F("Level"), &level).withRange(0, 1000, 1);
+  device.addNumberInput(F("Position"), &position).withRange(-500, 500, 10);
+  // A byte carries no fraction, so a fractional step would arrive as 0 and a fractional bound
+  // truncated. Both are refused rather than sent as something else.
+  byte coarse = 0, shifted = 0;
+  device.addNumberInput(F("Coarse"), &coarse).withRange(0, 10, 0.5);
+  device.addNumberInput(F("Shifted"), &shifted).withRange(0.5, 10.5, 1);
+
+  assert(debug.text.find("a bound is not a value the variable holds") != std::string::npos);
+  assert(debug.text.find("the step is not a value the variable holds") != std::string::npos);
+
+  device.read();
+  std::string list = commandFramePayload(stream.data.output, 0x90, 0);
+  const auto u32 = [](uint32_t v) { return std::string(reinterpret_cast<const char *>(&v), 4); };
+  const auto i16 = [](int16_t v) { return std::string(reinterpret_cast<const char *>(&v), 2); };
+  // Percent: READWRITE + range + step, byte, value, then min, max and step as one byte each.
+  assert(list.find(std::string("Percent") + '\0' + '\x00' + u32(0x3 | (1UL << 2) | (1UL << 3)) +
+                   '\x01' + '\x0A' + '\x00' + '\x64' + '\x05') != std::string::npos);
+  // Level: the range is gone, bits and bytes both. The step is carried on its own bit and does
+  // not depend on a range, so it stays - one byte, as the variable is a byte.
+  assert(list.find(std::string("Level") + '\0' + '\x00' + u32(0x3 | (1UL << 3)) +
+                   '\x01' + '\x00' + '\x01') != std::string::npos);
+  // Position: a short, so two bytes each, signed.
+  assert(list.find(std::string("Position") + '\0' + '\x00' + u32(0x3 | (1UL << 2) | (1UL << 3)) +
+                   '\x02' + i16(0) + i16(-500) + i16(500) + i16(10)) != std::string::npos);
+  // Coarse: the range holds, the fractional step is dropped - a 0 there would say "no step at
+  // all" in a field that claims to name one.
+  assert(list.find(std::string("Coarse") + '\0' + '\x00' + u32(0x3 | (1UL << 2)) +
+                   '\x01' + '\x00' + '\x00' + '\x0A') != std::string::npos);
+  // Shifted: the fractional bounds are dropped, the whole step stays.
+  assert(list.find(std::string("Shifted") + '\0' + '\x00' + u32(0x3 | (1UL << 3)) +
+                   '\x01' + '\x00' + '\x01') != std::string::npos);
+}
+
 // Inputs and sensors: the entity list, a host's writes and their checks, change reports and names.
 // Events and buttons in the entity list, after the properties; a press; the 0x85 layout.
 // Signals, events and sub-devices are never sent as commands, so their names may hold '/', spaces
 // and anything printable. What a host needs: a name at all, no control characters, and for a
 // signal, one name per device.
-// A board whose double is a float (AVR) widens a range to an 8-byte double bit by bit. Checked
-// here against the compiler's own float-to-double conversion.
-static void widenedDoubles()
-{
-  const float samples[] = {0.0f, -0.0f, 1.0f, -2.5f, 0.1f, 1e-40f, -1e-45f, 3.4028235e38f,
-                           16777217.0f, 1.17549435e-38f, INFINITY, -INFINITY};
-  for (float f : samples)
-  {
-    uint32_t bits;
-    memcpy(&bits, &f, 4);
-    const double expected = static_cast<double>(f);
-    uint64_t expectedBits;
-    memcpy(&expectedBits, &expected, 8);
-    assert(blaeck::blaeck_detail::widenFloatBits(bits) == expectedBits);
-  }
-  const float nan = NAN;
-  uint32_t nanBits;
-  memcpy(&nanBits, &nan, 4);
-  const uint64_t wide = blaeck::blaeck_detail::widenFloatBits(nanBits);
-  double back;
-  memcpy(&back, &wide, 8);
-  assert(back != back);
-}
-
 static void entryNameRules()
 {
   FakeStream stream;
@@ -2281,12 +2306,12 @@ static void properties()
   std::string list = commandFramePayload(stream.data.output, 0x90, 0);
   const auto u32 = [](uint32_t v) { return std::string(reinterpret_cast<const char *>(&v), 4); };
   const auto f32 = [](float v) { return std::string(reinterpret_cast<const char *>(&v), 4); };
-  const auto f64 = [](double v) { return std::string(reinterpret_cast<const char *>(&v), 8); };
-  // Setpoint: board, property, length 45, name, number, READWRITE + range + step + unit, float,
-  // value, then min, max and step as doubles, unit.
-  const std::string setpointEntry = std::string("\x00\x00\x2D\x00", 4) + "Setpoint" + '\0' + '\x00' +
-      u32(0x3 | (1UL << 2) | (1UL << 3) | (1UL << 4)) + '\x08' + f32(21.0f) + f64(5.0) +
-      f64(30.0) + f64(static_cast<double>(0.1f)) + "C" + '\0';
+  // Setpoint: board, property, length 33, name, number, READWRITE + range + step + unit, float,
+  // value, then min, max and step at the variable's own width - a float here, so the 0.1 the
+  // sketch wrote reads back as 0.1 rather than as the 0.10000000149011612 a widened float names.
+  const std::string setpointEntry = std::string("\x00\x00\x21\x00", 4) + "Setpoint" + '\0' + '\x00' +
+      u32(0x3 | (1UL << 2) | (1UL << 3) | (1UL << 4)) + '\x08' + f32(21.0f) + f32(5.0f) +
+      f32(30.0f) + f32(0.1f) + "C" + '\0';
   assert(list.compare(0, setpointEntry.size(), setpointEntry) == 0);
   entryKinds(list);
   // Mode: an enum, its index as the value, then its options. Label: text, length-prefixed,
@@ -3583,7 +3608,7 @@ int main()
     deviceCommands();
     commandValues();
     properties();
-    widenedDoubles();
+    rangeAtTheVariablesWidth();
     entryNameRules();
     clearsAndIdentity();
     eventsAndButtons();
