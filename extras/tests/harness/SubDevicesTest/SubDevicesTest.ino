@@ -138,9 +138,9 @@ void setup()
   Serial.begin(115200);
   device.begin(Serial);
 
-  device.DeviceName = "SubDevicesTest";
-  device.DeviceHWVersion = "Arduino Mega 2560";
-  device.DeviceFWVersion = "1.0";
+  device.withName(F("SubDevicesTest"));
+  device.withHWVersion(F("Arduino Mega 2560"));
+  device.withFWVersion(F("1.0"));
 
   pump = device.addDevice(F("Pump controller"))
              .withHWVersion(F("Simulated"))

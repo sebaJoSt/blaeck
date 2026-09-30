@@ -81,9 +81,9 @@ void setup()
   device.begin(Serial)
       .withDebugStream(&Serial);
 
-  device.DeviceName = "Event Test";
-  device.DeviceHWVersion = HARNESS_BOARD;
-  device.DeviceFWVersion = "1.0";
+  device.withName(F("Event Test"));
+  device.withHWVersion(HARNESS_BOARD);
+  device.withFWVersion(F("1.0"));
 
   device.addSignal(F("Uptime"), &Uptime);
 

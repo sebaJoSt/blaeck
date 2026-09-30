@@ -85,8 +85,8 @@ void setup()
 
   device.begin(Serial);
 
-  device.DeviceName = "ConfigurableSignals";
-  device.DeviceFWVersion = FW_VERSION;
+  device.withName(F("ConfigurableSignals"));
+  device.withFWVersion(FW_VERSION);
 
   // Each becomes a dashboard control. The bounds are number inputs a host sets; applying them
   // is a button.

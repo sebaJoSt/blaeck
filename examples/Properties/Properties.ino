@@ -79,8 +79,8 @@ void setup()
       .withDebugStream(&Serial);
 #endif
 
-  device.DeviceName = HOST_NAME;
-  device.DeviceFWVersion = "1.0";
+  device.withName(HOST_NAME);
+  device.withFWVersion(F("1.0"));
 
   device.addSignal(F("Uptime"), &uptime);
 

@@ -40,12 +40,12 @@ void Blaeck::end()
   _transportErrorReported = false;
 }
 
-void Blaeck::setClientConnectedCallback(void (*callback)(byte clientNo))
+void Blaeck::onConnect(void (*callback)(byte clientNo))
 {
   _connectedCallback = callback;
 }
 
-void Blaeck::setClientDisconnectedCallback(void (*callback)(byte clientNo))
+void Blaeck::onDisconnect(void (*callback)(byte clientNo))
 {
   _disconnectedCallback = callback;
 }

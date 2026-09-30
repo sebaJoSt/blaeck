@@ -240,10 +240,10 @@ void readAllSensors()
   temperature = readSensor();
 }
 
-device.setBeforeWriteCallback(readAllSensors);
+device.onBeforeWrite(readAllSensors);
 ```
 
-The callback runs when a host interval is due, even if filtering leaves nothing to send.
+The function runs when a host interval is due, even if filtering leaves nothing to send.
 It also runs for explicit or host-requested `writeAll()`. It does not run for single-signal
 `write()` or the every-tick immediate change check; refresh those variables in your sketch.
 It runs in normal `loop()` context, not an interrupt.
@@ -266,7 +266,9 @@ that can sleep through a complete rollover needs a real clock instead:
 device.setTimestampMode(BLAECK_MICROS);
 ```
 
-`BLAECK_UNIX` takes the time from a clock only your sketch can reach, so it needs a callback:
+`BLAECK_UNIX` takes the time from a clock only your sketch can reach, so it needs a function
+that returns microseconds since 1970 UTC. An RTC that counts seconds has to be multiplied by a
+million:
 
 ```cpp
 unsigned long long unixMicros()
@@ -274,11 +276,10 @@ unsigned long long unixMicros()
   return (unsigned long long)rtc.getEpoch() * 1000000ULL;
 }
 
-device.setTimestampCallback(unixMicros);
-device.setTimestampMode(BLAECK_UNIX);
+device.setTimestampMode(BLAECK_UNIX, unixMicros);
 ```
 
-Without one it stamps zero and every reading lands in 1970. `hasValidTimestampCallback()` says
+Without one it stamps zero and every reading lands in 1970. `hasTimestampClock()` says
 whether you have one.
 
 Set the mode once, in `setup()`. Timestamps from either side of a change are not comparable.

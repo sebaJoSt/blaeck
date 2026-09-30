@@ -52,7 +52,7 @@ void setup()
   Serial.begin(115200);
   device.begin(Serial);
 
-  device.DeviceName = "Weather Station";
+  device.withName(F("Weather Station"));
 
   device.addSignal(F("Temperature"), &temperature);
   device.addSignal(F("Pressure"), &pressure);
@@ -98,7 +98,7 @@ void setup()
   server.begin();
   device.begin(server).withDebugStream(&Serial);
 
-  device.DeviceName = "Weather Station";
+  device.withName(F("Weather Station"));
 
   device.addSignal(F("Temperature"), &temperature);
   device.addSignal(F("Pressure"), &pressure);

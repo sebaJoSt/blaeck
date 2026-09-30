@@ -172,9 +172,9 @@ void setup()
   // what would catch that.
   device.begin(Serial).withDebugStream(&Serial);
 
-  device.DeviceName = "Command Test";
-  device.DeviceHWVersion = HARNESS_BOARD;
-  device.DeviceFWVersion = "1.0";
+  device.withName(F("Command Test"));
+  device.withHWVersion(HARNESS_BOARD);
+  device.withFWVersion(F("1.0"));
 
   device.addSignal(F("Uptime"), &Uptime);
   device.addSignal(F("Level"), &nLevel);

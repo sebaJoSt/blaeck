@@ -9,9 +9,9 @@
 
     - the three timestamp modes (PC / MICROS / UNIX) a device can choose, switched live
       through a select command so one flash covers all three;
-    - the landmine in the library's own docs: BLAECK_UNIX with no callback stamps every
+    - the landmine in the library's own docs: BLAECK_UNIX with no clock stamps every
       row at the Unix epoch instead of failing - reproduced on demand rather than only
-      once at boot, since setTimestampCallback(nullptr) re-arms it at any time;
+      once at boot, since setTimestampMode(BLAECK_UNIX) without a clock re-arms it;
     - write()'s per-call timestamp override, which should land in the row exactly as
       given, independent of whatever mode is otherwise active.
 
@@ -115,12 +115,10 @@ void onTimestampMode()
     break;
   case 2: // UNIX_calibrated - a real callback, restarted at "now" in the fake epoch
     calibratedStartMillis = millis();
-    device.setTimestampCallback(unixMicrosFake);
-    device.setTimestampMode(BLAECK_UNIX);
+    device.setTimestampMode(BLAECK_UNIX, unixMicrosFake);
     break;
   case 3: // UNIX_no_callback - the documented landmine, re-armed on demand: every row
           // after this stamps at the Unix epoch (1970-01-01) until a callback is set again.
-    device.setTimestampCallback(nullptr);
     device.setTimestampMode(BLAECK_UNIX);
     break;
   default:
@@ -184,9 +182,9 @@ void setup()
   device.begin(Serial)
       .withDebugStream(&Serial);
 
-  device.DeviceName = "Signal Timing Test";
-  device.DeviceHWVersion = HARNESS_BOARD;
-  device.DeviceFWVersion = "1.0";
+  device.withName(F("Signal Timing Test"));
+  device.withHWVersion(HARNESS_BOARD);
+  device.withFWVersion(F("1.0"));
 
   device.onCommand("WIDTHS", onWidths);
 

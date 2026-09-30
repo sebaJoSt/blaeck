@@ -29,7 +29,7 @@ import clang.cindex as ci
 # Constructors are left out: the handle types are returned by the library, never
 # constructed by a sketch, so nobody hovers them.
 #
-# Data members are in: DeviceName and its neighbours are assigned by every sketch
+# Data members are in: SignalCount and its neighbours are read by sketches
 # and hovered like anything else, and a comment written for a group of them shows
 # the group's text whichever one is hovered - the same defect the methods had.
 KINDS = {
@@ -144,8 +144,8 @@ def doc_sentences(raw):
 def repeated_prose(groups):
     """Sentences carried by more than one public name.
 
-    Reported, never a gate. Repetition is sometimes exactly right - DeviceName,
-    DeviceHWVersion and DeviceFWVersion each state the pointer-lifetime rule because
+    Reported, never a gate. Repetition is sometimes exactly right - clearAllControls()
+    and clearAllSensors() each warn that earlier handles no longer apply, because
     nobody hovers one on the way to another - and sometimes a precondition that
     belongs on the call establishing it, which is where "call begin() first" was
     before it moved onto begin(). The checker cannot tell those apart; it can only

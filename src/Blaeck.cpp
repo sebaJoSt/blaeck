@@ -45,7 +45,7 @@ void Blaeck::_emitTextBytes(const void *text, bool inFlash, size_t length)
       _emitByte(_textByte(text, true, i));
 }
 
-// A device's unset version, sent as "n/a" like the board's DeviceFWVersion default.
+// A device's unset version, sent as "n/a" like the board's firmware version default.
 static BlaeckString _orNotAvailable(BlaeckString value)
 {
   return value != nullptr ? value : BlaeckString(F("n/a"));
@@ -81,7 +81,7 @@ static const char *_defaultBoardName()
 }
 
 Blaeck::Blaeck()
-    : BlaeckDeviceBase(this, 0), DeviceHWVersion(_defaultBoardName()), Terminal(this),
+    : BlaeckDeviceBase(this, 0), Terminal(this),
       _bufferedWrites(BLAECK_SERIAL_BUFFERED_WRITES_DEFAULT)
 {
   validatePlatformSizes();
@@ -232,20 +232,28 @@ BlaeckDeviceRef Blaeck::addDevice(BlaeckString name)
     ++_rejectedDeviceCount;
     return BlaeckDeviceRef();
   }
-  // A host names a device after its path, so two devices of one board can't share a name.
-  for (byte i = 0; i < _deviceCount; ++i)
+  if (_hasControlChar(name))
   {
-    if (BlaeckString(_devices[i].name) == name)
+    if (_debugStream != nullptr)
+      _debugStream->println(F("Dropped a device whose name holds a control character."));
+    ++_rejectedDeviceCount;
+    return BlaeckDeviceRef();
+  }
+  // A host names a device after its path, so two devices of one board can't share a name - the
+  // board's own included.
+  bool taken = _deviceName() == name;
+  for (byte i = 0; i < _deviceCount && !taken; ++i)
+    taken = BlaeckString(_devices[i].name) == name;
+  if (taken)
+  {
+    if (_debugStream != nullptr)
     {
-      if (_debugStream != nullptr)
-      {
-        _debugStream->print(F("Dropped duplicate device name: "));
-        name.printTo(*_debugStream);
-        _debugStream->println();
-      }
-      ++_rejectedDeviceCount;
-      return BlaeckDeviceRef();
+      _debugStream->print(F("Dropped duplicate device name: "));
+      name.printTo(*_debugStream);
+      _debugStream->println();
     }
+    ++_rejectedDeviceCount;
+    return BlaeckDeviceRef();
   }
   if (_deviceCount >= MAX_DEVICES)
   {
@@ -427,6 +435,31 @@ int Blaeck::_registerSignal(byte deviceId, const __FlashStringHelper *signalName
 int Blaeck::_registerSignalCommon(byte deviceId, const char *ram, const __FlashStringHelper *flash,
                                         dataType type, void *address, bool textInFlash)
 {
+  // A host stores a signal under its name, so the name must be there, readable and unique on its
+  // device. Anything else, '/' included, is fine: signals are never sent as commands.
+  const BlaeckString name = flash != nullptr ? BlaeckString(flash) : BlaeckString(ram);
+  const __FlashStringHelper *why = nullptr;
+  if (name == nullptr || name.read(0) == 0)
+    why = F("the name is empty");
+  else if (_hasControlChar(name))
+    why = F("the name holds a control character");
+  else if ((flash != nullptr ? _findSignalIndex(deviceId, flash) : _findSignalIndex(deviceId, ram)) >= 0)
+    why = F("its device has a signal of that name already");
+  if (why != nullptr)
+  {
+    if (_debugStream != nullptr)
+    {
+      _debugStream->print(F("Dropped signal '"));
+      if (name != nullptr)
+        name.printTo(*_debugStream);
+      _debugStream->print(F("': "));
+      _debugStream->print(why);
+      _debugStream->println('.');
+    }
+    _rejectedSignalCount++;
+    return -1;
+  }
+
   if (_signalIndex >= MAX_TABLE_ENTRIES || !Signals.reserve(_signalIndex + 1))
   {
     if (flash != nullptr)
@@ -468,10 +501,11 @@ void Blaeck::clearAllSignals()
 
 uint16_t Blaeck::_computeSchemaHash()
 {
-  // CRC16-CCITT (init 0x0000, poly 0x1021) over the signal names and type codes, matching
-  // Python's binascii.crc_hqx(data, 0). Names go through _emitSignalName(), as in the device
-  // list. A device's signal is hashed as "<device name>/<signal name>", so swapping the names of
-  // two devices with the same signals changes the hash. The board's own signals hash as before.
+  // CRC-16/XMODEM (init 0x0000, poly 0x1021) over each signal's device list bytes: its name, the
+  // 0 that ends it, its type code; a sub-device's signal is preceded by the device's name and its
+  // 0. That is Python's binascii.crc_hqx(data, 0). Names go through _emitSignalName(), as in the
+  // device list. The 0 after each name keeps two different lists from feeding the same bytes, and
+  // lets names hold any character, '/' included.
   //
   // Signals are hashed in device list order: the board's first, then each device's. That is the
   // order the list gives them in and data frames number them by, so each signal's WireIndex is
@@ -489,9 +523,10 @@ uint16_t Blaeck::_computeSchemaHash()
       BlaeckString deviceName = d->name;
       for (size_t k = 0; deviceName.read(k) != 0; ++k)
         _schemaHashFeedByte(deviceName.read(k));
-      _schemaHashFeedByte('/');
+      _schemaHashFeedByte(0);
     }
     _signalNameFeedHash(Signals[j]);
+    _schemaHashFeedByte(0);
     _schemaHashFeedByte(_dtypeCode(Signals[j].DataType));
   }
   return _schemaHashAccum;
@@ -887,8 +922,7 @@ bool blaeck_detail::optionsAccepted(BlaeckString optionsCsv, Print *debug,
 
   if (debug != nullptr)
   {
-    debug->print(empty ? F("withOptions ignored, needs at least one option: ")
-                       : F("withOptions ignored, an option is blank: "));
+    debug->print(F("Dropped '"));
     if (name != nullptr)
     {
       if (nameInFlash)
@@ -896,7 +930,8 @@ bool blaeck_detail::optionsAccepted(BlaeckString optionsCsv, Print *debug,
       else
         debug->print(name);
     }
-    debug->println(F(". Every value is rejected and a host has nothing to offer."));
+    debug->println(empty ? F("': it needs at least one option.")
+                         : F("': one of its options is blank."));
   }
   return false;
 }
@@ -1077,9 +1112,42 @@ void Blaeck::read()
   _flushCatalogs();
 }
 
-void Blaeck::setBeforeWriteCallback(void (*callback)())
+void Blaeck::onBeforeWrite(void (*callback)())
 {
   _beforeWriteCallback = callback;
+}
+
+Blaeck &Blaeck::withName(BlaeckString name)
+{
+  // A sub-device already holds the name: the board keeps the one it has.
+  for (byte i = 0; i < _deviceCount; ++i)
+  {
+    if (name != nullptr && name.read(0) != 0 && BlaeckString(_devices[i].name) == name)
+    {
+      if (_debugStream != nullptr)
+      {
+        _debugStream->print(F("withName(): a device from addDevice() is named "));
+        name.printTo(*_debugStream);
+        _debugStream->println(F(" already; the board keeps its name."));
+      }
+      ++_rejectedDeviceCount;
+      return *this;
+    }
+  }
+  _storeString(_boardName, name);
+  return *this;
+}
+
+Blaeck &Blaeck::withHWVersion(BlaeckString hwVersion)
+{
+  _storeString(_boardHW, hwVersion);
+  return *this;
+}
+
+Blaeck &Blaeck::withFWVersion(BlaeckString fwVersion)
+{
+  _storeString(_boardFW, fwVersion);
+  return *this;
 }
 
 int Blaeck::_registerCommand(byte deviceId, const char *command, BlaeckCommandHandler handler,
@@ -1186,15 +1254,100 @@ void Blaeck::onAnyCommand(BlaeckAnyCommandHandler handler)
   _anyCommandHandler = handler;
 }
 
-void Blaeck::clearAllCommandHandlers()
+void Blaeck::clearAllCommands()
+{
+  // Plain commands only: a button is a control, and goes with clearAllControls().
+  for (uint16_t i = 0; i < _commandSlots(); i++)
+    if (_commandHandlers[i].inUse && _commandHandlers[i].press == nullptr)
+      _resetCommand(_commandHandlers[i]);
+  _anyCommandHandler = nullptr;
+}
+
+void Blaeck::clearAllControls()
 {
   for (uint16_t i = 0; i < _commandSlots(); i++)
-  {
-    if (_commandHandlers[i].press != nullptr)
+    if (_commandHandlers[i].inUse && _commandHandlers[i].press != nullptr)
+    {
+      _resetCommand(_commandHandlers[i]);
       _entityCatalogDirty = true;
-    _resetCommand(_commandHandlers[i]);
+    }
+  _clearProperties(true);
+}
+
+void Blaeck::clearAllSensors()
+{
+  _clearProperties(false);
+}
+
+void Blaeck::_clearProperties(bool writable)
+{
+#if BLAECK_ENABLE_IOT
+  // A property is numbered by its position, so the ones kept close the gap: each moves down,
+  // taking what it owns along. A slot left behind is empty and reused by the next add.
+  uint16_t kept = 0;
+  for (uint16_t i = 0; i < _propertyCount; ++i)
+  {
+    PropertyEntry &p = _properties[i];
+    if (p.writable == writable)
+    {
+      _resetProperty(p);
+      _entityCatalogDirty = true;
+      continue;
+    }
+    if (kept != i)
+      _moveProperty(_properties[kept], p);
+    ++kept;
   }
-  _anyCommandHandler = nullptr;
+  _propertyCount = kept;
+#else
+  (void)writable;
+#endif
+}
+
+void Blaeck::_resetProperty(PropertyEntry &p)
+{
+  delete p.reporting;
+  delete p.presentation;
+  p.reporting = nullptr;
+  p.presentation = nullptr;
+  p.name = nullptr;
+  p.options = nullptr;
+  p.address = nullptr;
+  p.getter = nullptr;
+  p.callback = nullptr;
+  p.rangeMin = p.rangeMax = p.rangeStep = 0.0;
+  p.flags = 0;
+  p.textSize = 0;
+  p.type = Blaeck_float;
+  p.kind = BLAECK_VALUE_NUMBER;
+  p.deviceId = 0;
+  p.getterType = 0;
+  p.writable = false;
+}
+
+// Moves everything from a property into an empty slot and leaves the source empty.
+void Blaeck::_moveProperty(PropertyEntry &to, PropertyEntry &from)
+{
+  to.name = from.name;
+  to.options = from.options;
+  to.address = from.address;
+  to.getter = from.getter;
+  to.callback = from.callback;
+  to.rangeMin = from.rangeMin;
+  to.rangeMax = from.rangeMax;
+  to.rangeStep = from.rangeStep;
+  to.reporting = from.reporting;
+  to.presentation = from.presentation;
+  to.flags = from.flags;
+  to.textSize = from.textSize;
+  to.type = from.type;
+  to.kind = from.kind;
+  to.deviceId = from.deviceId;
+  to.getterType = from.getterType;
+  to.writable = from.writable;
+  from.reporting = nullptr;
+  from.presentation = nullptr;
+  _resetProperty(from);
 }
 
 bool Blaeck::_storeString(detail::StoredString &slot, BlaeckString value)
@@ -1581,9 +1734,9 @@ void Blaeck::_parseCommandTokens(const char *raw)
   // Split on commas by hand, so empty fields between commas are kept.
   char *p = _parsedTokenBuffer;
 
-  // The prefix: the message id, "#<id>:". A malformed one stays part of the name, so the
-  // command doesn't match and is answered as unknown.
-  while (*p == '#')
+  // The prefix: the message id, "#<id>:", at most one. A malformed or second one stays part of
+  // the name, which can't start with '#', so the command is answered as unknown.
+  if (*p == '#')
   {
     const char *scan = p + 1;
     uint32_t id = 0;
@@ -1594,13 +1747,12 @@ void Blaeck::_parseCommandTokens(const char *raw)
       scan++;
       digits++;
     }
-    if (digits == 0 || *scan != ':')
-      break;
     // 0 means no id, so "#0:" is malformed.
-    if (id == 0 || id > 65535UL)
-      break;
-    _parsedPrefixMsgId = (uint16_t)id;
-    p = (char *)scan + 1;
+    if (digits > 0 && *scan == ':' && id != 0 && id <= 65535UL)
+    {
+      _parsedPrefixMsgId = (uint16_t)id;
+      p = (char *)scan + 1;
+    }
   }
   // The ack hashes the command after the prefix, as its sender wrote it.
   _parsedPrefixLen = static_cast<uint16_t>(p - _parsedTokenBuffer);
@@ -1648,6 +1800,11 @@ void Blaeck::_parseCommandTokens(const char *raw)
   // Out of parameter slots but more commas follow: the list was cut short.
   if (moreParams)
     _parsedTruncated = true;
+
+  // Every parameter may be percent-encoded, so a value can hold ',', '<', '>' and any byte.
+  // Decoded once here, for inputs, selects and plain commands alike.
+  for (byte i = 0; i < _parsedParamCount; i++)
+    _percentDecodeInPlace(const_cast<char *>(_parsedParamPtrs[i]));
 }
 
 void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
@@ -1704,14 +1861,15 @@ void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
 
   if (_anyCommandHandler != nullptr)
   {
-    _anyCommandHandler(
+    const bool took = _anyCommandHandler(
         _parsedCommand,
         (const char *const *)_parsedParamPtrs,
         _parsedParamCount);
 
-    if (!matched)
+    // A command nothing else has is accepted only if the catch-all says it took it, so a handler
+    // that only logs leaves a typo answered as unknown.
+    if (!matched && took)
     {
-      // Handled by onAnyCommand(), so accepted.
       matched = true;
       ackStatus = 0;
       ackReason = BLAECK_ACK_OK;
@@ -1832,6 +1990,14 @@ int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const 
     return -1;
   }
 
+  if (_hasControlChar(flashName != nullptr ? BlaeckString(flashName) : BlaeckString(channelName)))
+  {
+    if (_debugStream != nullptr)
+      _debugStream->println(F("Dropped an event whose name holds a control character."));
+    _rejectedEventChannelCount++;
+    return -1;
+  }
+
   if (channelName != nullptr && strlen(channelName) >= MAX_EVENT_NAME_COUNT)
   {
     if (_debugStream != nullptr)
@@ -1848,9 +2014,10 @@ int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const 
   int existing = flashName != nullptr ? _findEventChannel(deviceId, flashName) : _findEventChannel(deviceId, channelName);
   if (existing >= 0)
   {
+    _eventChannels[existing].displayName = nullptr;
     _eventChannels[existing].icon = nullptr;
     _eventChannels[existing].deviceClass = nullptr;
-    _eventChannels[existing].diagnostic = false;
+    _eventChannels[existing].category = 0;
     _eventChannels[existing].disabledByDefault = false;
     _entityCatalogDirty = true;
     return existing;
@@ -1887,9 +2054,10 @@ int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const 
         _rejectedEventChannelCount++;
         return -1;
       }
+      _eventChannels[i].displayName = nullptr;
       _eventChannels[i].icon = nullptr;
       _eventChannels[i].deviceClass = nullptr;
-      _eventChannels[i].diagnostic = false;
+      _eventChannels[i].category = 0;
       _eventChannels[i].disabledByDefault = false;
       _eventChannels[i].inUse = true;
       _eventChannels[i].deviceId = deviceId;
@@ -2479,7 +2647,7 @@ void Blaeck::_setBufferedWritesDefault(bool enabled)
   _bufferedWritesExplicit = false;
 }
 
-bool Blaeck::_frameOpen(byte msgKey, unsigned long msgId, bool withCrc)
+bool Blaeck::_frameOpen(byte msgKey, unsigned long msgId)
 {
   if (!_mayWriteFrame())
     return false;
@@ -2494,12 +2662,9 @@ bool Blaeck::_frameOpen(byte msgKey, unsigned long msgId, bool withCrc)
   // Layout: the envelope in the protocol spec's introduction.
   _putBytes((const byte *)"<blaeck:", 8);
   _frameEscaped = true;
-  if (withCrc)
-  {
-    // The CRC covers the key through the last data byte, not the start marker.
-    _crc.restart();
-    _frameCrcOn = true;
-  }
+  // Every frame ends with a CRC32 over the key through the last field, not the start marker.
+  _crc.restart();
+  _frameCrcOn = true;
   _emitByte(msgKey);
   _emitByte(':');
   ulngCvt.val = msgId;
@@ -2510,7 +2675,8 @@ bool Blaeck::_frameOpen(byte msgKey, unsigned long msgId, bool withCrc)
 
 bool Blaeck::_frameClose()
 {
-  _frameCrcOn = false;
+  const uint32_t crc = _frameCrcEnd();
+  _emitBytes((const byte *)&crc, 4);
   _frameEscaped = false;
   _putBytes((const byte *)"/>\n", 3);
   bool complete;
@@ -2613,7 +2779,8 @@ void Blaeck::writeDevicesFrame(unsigned long msg_id)
   _emitByte((byte)((payloadMax >> 8) & 0xFF));
   _emitByte((byte)(_deviceCount + 1));
   _emitDeviceRecord(0, _writeRestartedAlreadyDone ? 0 : DEVICE_STATE_RESTARTED, _deviceName(),
-                    DeviceHWVersion, DeviceFWVersion);
+                    _boardHW != nullptr ? BlaeckString(_boardHW) : BlaeckString(_defaultBoardName()),
+                    _orNotAvailable(_boardFW));
   _emitDeviceSignals(0);
   for (byte i = 0; i < _deviceCount; ++i)
   {
@@ -2671,7 +2838,7 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
     return;
 
   // Layout: Data (0xD3) in the protocol spec.
-  if (!_frameOpen(0xD3, msg_id, true))
+  if (!_frameOpen(0xD3, msg_id))
     return;
 
   bool restartFlagSnapshot = _sendRestartFlag;
@@ -2745,9 +2912,6 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
 
   }
 
-  uint32_t crc_value = _frameCrcEnd();
-  _emitBytes((byte *)&crc_value, 4);
-
   const bool complete = _frameClose();
   const uint32_t sentAt = static_cast<uint32_t>(millis());
   for (int i = signalIndex_start; i <= signalIndex_end; ++i)
@@ -2766,7 +2930,7 @@ void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int sig
     _sendRestartFlag = false;
 }
 
-void Blaeck::setTimestampMode(BlaeckTimestampMode mode)
+void Blaeck::setTimestampMode(BlaeckTimestampMode mode, unsigned long long (*clock)())
 {
   _timestampMode = mode;
 
@@ -2774,18 +2938,15 @@ void Blaeck::setTimestampMode(BlaeckTimestampMode mode)
   _prevMicros = 0;
   _overflowCount = 0;
 
-  // Install the clock for built-in modes.
   switch (mode)
   {
   case BLAECK_MICROS:
-    _timestampCallback = _microsWrapper;
+    _timestampCallback = clock != nullptr ? clock : _microsWrapper;
     break;
   case BLAECK_UNIX:
-    // BLAECK_UNIX needs the sketch's clock; keep one that is already set.
-    if (_timestampCallback == _microsWrapper)
-    {
-      _timestampCallback = nullptr;
-    }
+    _timestampCallback = clock;
+    if (clock == nullptr && _debugStream != nullptr)
+      _debugStream->println(F("setTimestampMode(): BLAECK_UNIX needs a clock; timestamps are 0."));
     break;
   case BLAECK_NO_TIMESTAMP:
   default:
@@ -2794,12 +2955,7 @@ void Blaeck::setTimestampMode(BlaeckTimestampMode mode)
   }
 }
 
-void Blaeck::setTimestampCallback(unsigned long long (*callback)())
-{
-  _timestampCallback = callback;
-}
-
-bool Blaeck::hasValidTimestampCallback() const
+bool Blaeck::hasTimestampClock() const
 {
   return (_timestampMode != BLAECK_NO_TIMESTAMP && _timestampCallback != nullptr);
 }
@@ -2808,7 +2964,7 @@ unsigned long long Blaeck::getTimeStamp()
 {
   unsigned long long timestamp = 0;
 
-  if (_timestampMode != BLAECK_NO_TIMESTAMP && hasValidTimestampCallback())
+  if (_timestampMode != BLAECK_NO_TIMESTAMP && hasTimestampClock())
   {
     if (_timestampMode == BLAECK_MICROS)
     {
@@ -3040,7 +3196,7 @@ void BlaeckPropertyRefBase::_setText(detail::StoredString blaeck_detail::Propert
     _owner->_entityCatalogDirty = true;
 }
 
-void BlaeckPropertyRefBase::_setRange(float mn, float mx, float st) const
+void BlaeckPropertyRefBase::_setRange(double mn, double mx, double st) const
 {
   blaeck_detail::PropertyEntry *e = _entry();
   if (e == nullptr)
@@ -3048,10 +3204,10 @@ void BlaeckPropertyRefBase::_setRange(float mn, float mx, float st) const
   Print *debug = _owner->_debugStream;
   if (!(mx > mn) && debug != nullptr)
     debug->println(F("withRange(): max is not above min, so no range is set."));
-  if (st != 0.0f && !(st > 0.0f) && debug != nullptr)
+  if (st != 0.0 && !(st > 0.0) && debug != nullptr)
     debug->println(F("withRange(): a step must be above 0, so no step is set."));
   const bool hasRange = mx > mn;
-  const bool hasStep = st > 0.0f;
+  const bool hasStep = st > 0.0;
   if (e->rangeMin != mn || e->rangeMax != mx || e->rangeStep != st)
   {
     e->rangeMin = mn;
@@ -3092,6 +3248,28 @@ void BlaeckPropertyRefBase::_setReporting(double delta, uint32_t minIntervalMs) 
   e->reporting->minIntervalMs = minIntervalMs;
 }
 
+// A name a host sends in a command: ASCII letters, digits, '_', '-' and '.'. Anything else either
+// can't be sent (',', '<', '>') or reads differently on the way (spaces, '%', non-ASCII).
+static bool _isCommandNameChar(char c)
+{
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+         c == '_' || c == '-' || c == '.';
+}
+
+bool Blaeck::_hasControlChar(BlaeckString name)
+{
+  if (name == nullptr)
+    return false;
+  for (size_t k = 0;; ++k)
+  {
+    const byte c = static_cast<byte>(name.read(k));
+    if (c == 0)
+      return false;
+    if (c < 0x20 || c == 0x7F)
+      return true;
+  }
+}
+
 bool Blaeck::_nameRefused(BlaeckString name, bool isCommand)
 {
   const __FlashStringHelper *why = nullptr;
@@ -3099,10 +3277,14 @@ bool Blaeck::_nameRefused(BlaeckString name, bool isCommand)
   if (name != nullptr)
     while (name.read(length) != 0)
       ++length;
+  bool commandChars = true;
+  for (size_t k = 0; k < length; ++k)
+    if (!_isCommandNameChar(name.read(k)))
+      commandChars = false;
   if (length == 0)
     why = F("the name is empty");
-  else if (name.read(0) == '#')
-    why = F("a name can't start with #");
+  else if (!commandChars)
+    why = F("a name a host sends may hold only letters, digits, _, - and .");
   else if (length >= 7 && name.read(0) == 'B' && name.read(1) == 'L' && name.read(2) == 'A' &&
            name.read(3) == 'E' && name.read(4) == 'C' && name.read(5) == 'K' && name.read(6) == '.')
     why = F("BLAECK. is reserved for the built-in commands");
@@ -3201,7 +3383,7 @@ int Blaeck::_registerProperty(byte deviceId, BlaeckString name, uint8_t kind, bo
   p.getter = getter;
   p.getterType = getterType;
   p.callback = onChange;
-  p.rangeMin = p.rangeMax = p.rangeStep = 0.0f;
+  p.rangeMin = p.rangeMax = p.rangeStep = 0.0;
   p.flags = 0;
   p.textSize = kind == BLAECK_VALUE_TEXT ? (getter != nullptr ? 256 : textSize) : 0;
   p.type = type;
@@ -3249,6 +3431,46 @@ static byte _propertyTextLength(const char *text, uint16_t textSize)
 {
   const size_t limit = textSize > 0 ? static_cast<size_t>(textSize - 1) : 255;
   return static_cast<byte>(_textLength(text, false, limit > 255 ? 255 : limit));
+}
+
+// The bits of an IEEE 754 double holding the same value as a float's bits. For boards whose
+// double is a float (AVR), so a range still goes out as the 8-byte double the protocol has.
+uint64_t blaeck_detail::widenFloatBits(uint32_t bits)
+{
+  const uint64_t sign = (uint64_t)(bits >> 31) << 63;
+  const uint32_t exponent = (bits >> 23) & 0xFF;
+  uint64_t mantissa = bits & 0x7FFFFFUL;
+  if (exponent == 0xFF)
+    return sign | (0x7FFULL << 52) | (mantissa << 29);
+  if (exponent == 0)
+  {
+    if (mantissa == 0)
+      return sign;
+    // A subnormal float is a normal double: shift its leading 1 into the implicit place.
+    int shift = 0;
+    while ((mantissa & 0x800000UL) == 0)
+    {
+      mantissa <<= 1;
+      ++shift;
+    }
+    mantissa &= 0x7FFFFFUL;
+    return sign | ((uint64_t)(1023 - 126 - shift) << 52) | (mantissa << 29);
+  }
+  return sign | ((uint64_t)(exponent - 127 + 1023) << 52) | (mantissa << 29);
+}
+
+void Blaeck::_emitDouble(double v)
+{
+  if (sizeof(double) == 8)
+  {
+    _emitBytes(reinterpret_cast<const byte *>(&v), 8);
+    return;
+  }
+  const float f = static_cast<float>(v);
+  uint32_t bits;
+  memcpy(&bits, &f, 4);
+  const uint64_t wide = blaeck_detail::widenFloatBits(bits);
+  _emitBytes(reinterpret_cast<const byte *>(&wide), 8);
 }
 
 void Blaeck::_emitPropertyValue(const PropertyEntry &p)
@@ -3324,13 +3546,83 @@ static bool _parseLongLong(const char *text, long long &out)
   return true;
 }
 
+// A number as JSON writes one (RFC 8259), with an optional leading '+': a sign, digits without
+// leading zeros, an optional fraction and an optional exponent. No spaces, hex, NaN or Infinity.
+// Checked here rather than left to strtod(), which accepts more, and differently per platform.
+// whole is set for a number with neither fraction nor exponent.
+static bool _isNumberText(const char *v, bool &whole)
+{
+  const char *p = v;
+  if (*p == '-' || *p == '+')
+    ++p;
+  if (*p == '0')
+    ++p;
+  else if (*p >= '1' && *p <= '9')
+    while (*p >= '0' && *p <= '9')
+      ++p;
+  else
+    return false;
+  whole = true;
+  if (*p == '.')
+  {
+    ++p;
+    if (*p < '0' || *p > '9')
+      return false;
+    while (*p >= '0' && *p <= '9')
+      ++p;
+    whole = false;
+  }
+  if (*p == 'e' || *p == 'E')
+  {
+    ++p;
+    if (*p == '-' || *p == '+')
+      ++p;
+    if (*p < '0' || *p > '9')
+      return false;
+    while (*p >= '0' && *p <= '9')
+      ++p;
+    whole = false;
+  }
+  return *p == '\0';
+}
+
+// Stores a whole number exactly, however few digits the board's double holds. False if it
+// doesn't fit the type.
+static bool _storeWhole(void *address, dataType type, long long v)
+{
+  switch (type)
+  {
+  case Blaeck_byte: if (v < 0 || v > 255) return false; *(byte *)address = (byte)v; return true;
+  case Blaeck_short: case Blaeck_int:
+    if (v < -32768LL || v > 32767LL)
+      return false;
+    { int16_t x = (int16_t)v; memcpy(address, &x, 2); } return true;
+  case Blaeck_ushort: case Blaeck_uint:
+    if (v < 0 || v > 65535LL)
+      return false;
+    { uint16_t x = (uint16_t)v; memcpy(address, &x, 2); } return true;
+  case Blaeck_long:
+    if (v < -2147483648LL || v > 2147483647LL)
+      return false;
+    { int32_t x = (int32_t)v; memcpy(address, &x, 4); } return true;
+  case Blaeck_ulong:
+    if (v < 0 || v > 4294967295LL)
+      return false;
+    { uint32_t x = (uint32_t)v; memcpy(address, &x, 4); } return true;
+  case Blaeck_longlong: memcpy(address, &v, sizeof v); return true;
+  case Blaeck_float: { float x = (float)v; memcpy(address, &x, sizeof x); } return true;
+  case Blaeck_double: { double x = (double)v; memcpy(address, &x, sizeof x); } return true;
+  default: return false;
+  }
+}
+
 static bool _isIntegerType(dataType type)
 {
   return type != Blaeck_float && type != Blaeck_double && type != Blaeck_bool && type != Blaeck_string;
 }
 
 // The decimal places a step is written with: 0.01 gives 2, 0.5 gives 1, 2 gives 0. A step is
-// held as a float, which no decimal fraction lands on exactly, so the answer is the first
+// held as a double, a float on AVR, which no decimal fraction lands on exactly, so the answer is the first
 // scaling that leaves a whole number to within the same thousandth the snap itself allows.
 // Six is as far as it looks, which is past the point a float distinguishes steps at all.
 static int _stepDecimals(double step)
@@ -3369,21 +3661,30 @@ byte Blaeck::_receiveProperty(uint16_t index)
   {
   case BLAECK_VALUE_NUMBER:
   {
-    // A 64-bit integer is taken exactly when the text is a whole number; the range compares
-    // as doubles, and a whole number needs no step.
-    long long whole;
-    if (p.type == Blaeck_longlong && _parseLongLong(v, whole))
+    bool wholeText = false;
+    if (!_isNumberText(v, wholeText))
+      return BLAECK_ACK_NOT_A_NUMBER;
+    // A whole number is read as an integer, exactly, whatever the variable: a double on AVR
+    // holds only 24 bits exactly. The range compares as doubles, and a whole number needs no step.
+    if (wholeText)
     {
+      long long whole;
+      if (!_parseLongLong(v, whole))
+        return BLAECK_ACK_OUT_OF_RANGE;
       if ((p.flags & blaeck_detail::PROPERTY_HAS_RANGE) &&
           ((double)whole < p.rangeMin || (double)whole > p.rangeMax))
         return BLAECK_ACK_OUT_OF_RANGE;
-      memcpy(p.address, &whole, sizeof whole);
+      if (!_storeWhole(p.address, p.type, whole))
+        return BLAECK_ACK_OUT_OF_RANGE;
       return BLAECK_ACK_OK;
     }
-    // The whole string must be a number: atof() would read "abc" as 0.
-    char *end = nullptr;
-    double number = strtod(v, &end);
-    if (end == v || *end != '\0' || isnan(number) || isinf(number))
+    // A 64-bit integer takes digits only: without a 64-bit double on AVR, "1e3" or "12.0" can't
+    // be checked exactly.
+    if (p.type == Blaeck_longlong)
+      return BLAECK_ACK_NOT_AN_INTEGER;
+    // The text is a valid number, so strtod() reads all of it the same way everywhere.
+    double number = strtod(v, nullptr);
+    if (isinf(number))
       return BLAECK_ACK_OUT_OF_RANGE;
     if ((p.flags & blaeck_detail::PROPERTY_HAS_RANGE) &&
         (number < p.rangeMin || number > p.rangeMax))
@@ -3396,7 +3697,7 @@ byte Blaeck::_receiveProperty(uint16_t index)
       if (fabs(steps - nearest) < 1e-3)
       {
         double snapped = (double)p.rangeMin + nearest * (double)p.rangeStep;
-        // min + n * step is arithmetic on two floats, neither of which is the decimal it was
+        // min + n * step is arithmetic on two binary numbers, neither of which is the decimal it was
         // written as, so the sum lands beside the step rather than on it - 0.1 came back as
         // 0.099999994, a whole float step out and worse than the value that arrived. Rounding
         // the sum to the step's own decimals puts it back: the scaling is by an exact power of
@@ -3443,7 +3744,6 @@ byte Blaeck::_receiveProperty(uint16_t index)
   }
   case BLAECK_VALUE_TEXT:
   {
-    _percentDecodeInPlace(v);
     const size_t length = strlen(v);
     if (length + 1 > p.textSize)
       return BLAECK_ACK_TOO_LONG;
@@ -3616,46 +3916,60 @@ void Blaeck::writeEntitiesFrame(unsigned long msg_id)
     else
       flags &= ~blaeck_detail::PROPERTY_HAS_DISPLAY_PRECISION;
 
-    _emitDeviceId(p.deviceId);
-    _emitByte(0); // EntryKind: property
-    _emitFlashStr0(p.name);
-    _emitByte(p.kind);
-    _emitByte((byte)(flags & 0xFF));
-    _emitByte((byte)((flags >> 8) & 0xFF));
-    _emitByte((byte)((flags >> 16) & 0xFF));
-    _emitByte((byte)((flags >> 24) & 0xFF));
-    _emitByte(_dtypeCode(p.type));
-    _emitPropertyValue(p);
-    if (p.kind == BLAECK_VALUE_ENUM)
-      _emitFlashStr0(p.options);
+    // The value is read once, before the entry is measured: a getter may answer differently
+    // the second time, and the length must match the bytes that follow it.
+    bool textInFlash = false;
+    const char *text = nullptr;
+    byte textLength = 0;
+    byte value[8];
     if (p.kind == BLAECK_VALUE_TEXT)
     {
-      const uint16_t maxLength = p.textSize > 0 ? (uint16_t)(p.textSize - 1) : 0;
-      _emitByte((byte)(maxLength & 0xFF));
-      _emitByte((byte)((maxLength >> 8) & 0xFF));
+      text = _propertyText(p, textInFlash);
+      textLength = _propertyTextLength(text, p.textSize);
     }
-    if (flags & blaeck_detail::PROPERTY_HAS_RANGE)
+    else
+      _propertyValue(p, value);
+
+    _emitEntry(p.deviceId, 0, [&]()
     {
-      fltCvt.val = p.rangeMin;
-      _emitBytes(fltCvt.bval, 4);
-      fltCvt.val = p.rangeMax;
-      _emitBytes(fltCvt.bval, 4);
-    }
-    if (flags & blaeck_detail::PROPERTY_HAS_STEP)
-    {
-      fltCvt.val = p.rangeStep;
-      _emitBytes(fltCvt.bval, 4);
-    }
-    if (flags & blaeck_detail::PROPERTY_HAS_UNIT)
-      _emitFlashStr0(pr->unit);
-    if (flags & blaeck_detail::PROPERTY_HAS_DISPLAY_NAME)
-      _emitFlashStr0(pr->displayName);
-    if (flags & blaeck_detail::PROPERTY_HAS_ICON)
-      _emitFlashStr0(pr->icon);
-    if (flags & blaeck_detail::PROPERTY_HAS_DEVICE_CLASS)
-      _emitFlashStr0(pr->deviceClass);
-    if (flags & blaeck_detail::PROPERTY_HAS_DISPLAY_PRECISION)
-      _emitByte(pr->displayPrecision);
+      _emitFlashStr0(p.name);
+      _emitByte(p.kind);
+      _emitByte((byte)(flags & 0xFF));
+      _emitByte((byte)((flags >> 8) & 0xFF));
+      _emitByte((byte)((flags >> 16) & 0xFF));
+      _emitByte((byte)((flags >> 24) & 0xFF));
+      _emitByte(_dtypeCode(p.type));
+      if (p.kind == BLAECK_VALUE_TEXT)
+      {
+        _emitByte(textLength);
+        if (textLength > 0)
+          _emitTextBytes(text, textInFlash, textLength);
+      }
+      else
+        _emitBytes(value, _signalValueSize(p.type));
+      if (p.kind == BLAECK_VALUE_ENUM)
+        _emitFlashStr0(p.options);
+      // A text holds at most 255 bytes; a text from a function has no buffer to be smaller.
+      if (p.kind == BLAECK_VALUE_TEXT)
+        _emitByte(p.textSize > 0 ? (byte)(p.textSize - 1) : (byte)255);
+      if (flags & blaeck_detail::PROPERTY_HAS_RANGE)
+      {
+        _emitDouble(p.rangeMin);
+        _emitDouble(p.rangeMax);
+      }
+      if (flags & blaeck_detail::PROPERTY_HAS_STEP)
+        _emitDouble(p.rangeStep);
+      if (flags & blaeck_detail::PROPERTY_HAS_UNIT)
+        _emitFlashStr0(pr->unit);
+      if (flags & blaeck_detail::PROPERTY_HAS_DISPLAY_NAME)
+        _emitFlashStr0(pr->displayName);
+      if (flags & blaeck_detail::PROPERTY_HAS_ICON)
+        _emitFlashStr0(pr->icon);
+      if (flags & blaeck_detail::PROPERTY_HAS_DEVICE_CLASS)
+        _emitFlashStr0(pr->deviceClass);
+      if (flags & blaeck_detail::PROPERTY_HAS_DISPLAY_PRECISION)
+        _emitByte(pr->displayPrecision);
+    });
   }
 
   for (uint16_t i = 0; i < _eventChannelSlots(); i++)
@@ -3664,38 +3978,42 @@ void Blaeck::writeEntitiesFrame(unsigned long msg_id)
     if (!e.inUse)
       continue;
 
-    uint16_t flags = 0;
-    if (e.icon != nullptr)
+    // Laid out as a button's: display name, icon, device class, category, disabled by default.
+    uint16_t flags = (uint16_t)((e.category & 0x03) << 3);
+    if (e.displayName != nullptr)
       flags |= 0x0001;
-    if (e.diagnostic)
+    if (e.icon != nullptr)
       flags |= 0x0002;
     if (e.deviceClass != nullptr)
       flags |= 0x0004;
     if (e.disabledByDefault)
-      flags |= 0x0008;
-
-    _emitDeviceId(e.deviceId);
-    _emitByte(1); // EntryKind: event
-    if (e.nameInFlash)
-      _emitFlashStr0(reinterpret_cast<const __FlashStringHelper *>(e.name));
-    else
-      _emitStr0(e.name);
-    _emitByte((byte)(flags & 0xFF));
-    _emitByte((byte)((flags >> 8) & 0xFF));
-    if (flags & 0x0001)
-      _emitFlashStr0(e.icon);
-    if (flags & 0x0004)
-      _emitFlashStr0(e.deviceClass);
+      flags |= 0x0020;
 
     uint16_t typeCount = 0;
     for (uint16_t t = 0; t < _eventTypeCount; t++)
       if (_eventTypes[t].channelIndex == i)
         typeCount++;
-    _emitByte((byte)(typeCount & 0xFF));
-    _emitByte((byte)((typeCount >> 8) & 0xFF));
-    for (uint16_t t = 0; t < _eventTypeCount; t++)
-      if (_eventTypes[t].channelIndex == i)
-        _emitEventType0(_eventTypes[t]);
+
+    _emitEntry(e.deviceId, 1, [&]()
+    {
+      if (e.nameInFlash)
+        _emitFlashStr0(reinterpret_cast<const __FlashStringHelper *>(e.name));
+      else
+        _emitStr0(e.name);
+      _emitByte((byte)(flags & 0xFF));
+      _emitByte((byte)((flags >> 8) & 0xFF));
+      if (flags & 0x0001)
+        _emitFlashStr0(e.displayName);
+      if (flags & 0x0002)
+        _emitFlashStr0(e.icon);
+      if (flags & 0x0004)
+        _emitFlashStr0(e.deviceClass);
+      _emitByte((byte)(typeCount & 0xFF));
+      _emitByte((byte)((typeCount >> 8) & 0xFF));
+      for (uint16_t t = 0; t < _eventTypeCount; t++)
+        if (_eventTypes[t].channelIndex == i)
+          _emitEventType0(_eventTypes[t]);
+    });
   }
 
   for (uint16_t i = 0; i < _commandSlots(); i++)
@@ -3715,17 +4033,18 @@ void Blaeck::writeEntitiesFrame(unsigned long msg_id)
     if (e.disabledByDefault)
       flags |= 0x0020;
 
-    _emitDeviceId(e.deviceId);
-    _emitByte(2); // EntryKind: button
-    _emitStr0(e.command);
-    _emitByte((byte)(flags & 0xFF));
-    _emitByte((byte)((flags >> 8) & 0xFF));
-    if (flags & 0x0001)
-      _emitFlashStr0(e.displayName);
-    if (flags & 0x0002)
-      _emitFlashStr0(e.icon);
-    if (flags & 0x0004)
-      _emitFlashStr0(e.deviceClass);
+    _emitEntry(e.deviceId, 2, [&]()
+    {
+      _emitStr0(e.command);
+      _emitByte((byte)(flags & 0xFF));
+      _emitByte((byte)((flags >> 8) & 0xFF));
+      if (flags & 0x0001)
+        _emitFlashStr0(e.displayName);
+      if (flags & 0x0002)
+        _emitFlashStr0(e.icon);
+      if (flags & 0x0004)
+        _emitFlashStr0(e.deviceClass);
+    });
   }
 #endif
   if (!_frameClose())

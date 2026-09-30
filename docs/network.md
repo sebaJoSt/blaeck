@@ -162,7 +162,7 @@ wait. Short lines don't get there.
 ## When a connection drops
 
 A connection that closes properly frees its slot at once, and
-`setClientDisconnectedCallback()` is called. One that dies without closing - a pulled cable,
+the `onDisconnect()` function is called. One that dies without closing - a pulled cable,
 a laptop going to sleep - is noticed only when the network stack gives up on it.
 
 A host that reconnects starts as a terminal again, and receives nothing until it sends a
@@ -172,8 +172,8 @@ down, the first host that connects afterwards learns of it once, from the device
 for or from a restart notice. Devices from `addDevice()` that went missing, came back or
 restarted meanwhile are reported the same way.
 
-`setClientConnectedCallback()` and `setClientDisconnectedCallback()` receive the connection's
-slot, starting at 0. They are for the sketch's own use, such as a status LED.
+The functions given to `onConnect()` and `onDisconnect()` receive the connection's slot,
+starting at 0. They are for the sketch's own use, such as a status LED.
 
 ## Boards
 
@@ -199,7 +199,7 @@ ESP32-C6-Bug's Ethernet add-on. These use their own network setup.
 
 The hardware name defaults to the selected build target, with a friendly name for recognised
 boards or the core's board identifier otherwise. It is not physical board detection.
-`DeviceHWVersion` can still describe custom hardware: the C6 Bug example overrides it because
+`withHWVersion()` can still describe custom hardware: the C6 Bug example overrides it because
 its generic ESP32C6 build target cannot identify that board or its wiring.
 
 ## Network timestamps

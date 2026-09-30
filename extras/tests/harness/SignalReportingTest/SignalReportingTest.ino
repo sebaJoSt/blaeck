@@ -36,7 +36,7 @@ void beforeWrite()
 
 void resetSignals(bool buffered)
 {
-  device.setBeforeWriteCallback(nullptr);
+  device.onBeforeWrite(nullptr);
   device.clearAllSignals();
   device.setBufferedWrites(buffered);
   periodic = filtered = immediate = combined = floating = 0;
@@ -125,7 +125,7 @@ void onTest(const char *, const char *const *params, byte count)
     if (ok) delay(duration);
   }
   else if (strcmp(action, "CALLBACK") == 0 && count == 3)
-    device.setBeforeWriteCallback(atoi(params[2]) ? beforeWrite : nullptr);
+    device.onBeforeWrite(atoi(params[2]) ? beforeWrite : nullptr);
   else if (strcmp(action, "SYNC") != 0 || count != 2)
     ok = false;
 
@@ -145,8 +145,8 @@ void setup()
 {
   Serial.begin(115200);
   device.begin(Serial);
-  device.DeviceName = "Signal Reporting Test";
-  device.DeviceFWVersion = "1";
+  device.withName(F("Signal Reporting Test"));
+  device.withFWVersion(F("1"));
   device.setTimestampMode(BLAECK_MICROS);
   resetSignals(false);
   device.onCommand("TEST", onTest);

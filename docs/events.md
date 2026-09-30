@@ -95,9 +95,11 @@ history, or make it a [sensor](properties.md) if it only has to be visible.
 
 | Call | What it does |
 |---|---|
+| `withDisplayName(F("Front door"))` | Label shown instead of the name. A host still knows the event by the name |
 | `withIcon(F("mdi:pulse"))` | A [Material Design Icons](https://pictogrammers.com/library/mdi/) name |
 | `withDeviceClass(F("doorbell"))` | `button`, `doorbell` or `motion`: what kind of thing the event reports |
-| `diagnostic()` | Marks it as information about the device rather than what it does |
+| `config()` | Files it as a setting; Home Assistant shows such an event as an ordinary one |
+| `diagnostic()` | Files it as information about the device rather than what it does |
 | `disabledByDefault()` | Registered, but switched off until someone enables it |
 
 Ordinary event names, type lists and metadata strings are copied; their buffers can be reused

@@ -82,17 +82,17 @@ To ask in code: `hasRejections()`, for any table at all.
 
 ## Naming the device
 
-Three fields say what the device is. A host lists it by the name, and groups its signals and
+Three calls say what the device is. A host lists it by the name, and groups its signals and
 controls under it:
 
 ```cpp
-device.DeviceName = "Waveform Generator";
-device.DeviceHWVersion = "Weather Station PCB v2"; // Optional hardware-name override
-device.DeviceFWVersion = "1.0";
+device.withName(F("Waveform Generator"))
+      .withHWVersion(F("Weather Station PCB v2"))  // Optional hardware-name override
+      .withFWVersion(F("1.0"));
 ```
 
-The device name starts as `"Unnamed"` and the firmware version as `"n/a"`. A device name set
-to an empty string or to null goes out as `"Unnamed"` too.
+The device name starts as `"Unnamed"` and the firmware version as `"n/a"`. An empty name goes
+out as `"Unnamed"` too.
 
 The hardware name defaults to the board selected when compiling. Mega 2560, Uno, Nano,
 Leonardo, Micro, GIGA R1, UNO R4 WiFi/Minima, MKR Zero and Nano ESP32 have friendly names.
@@ -100,10 +100,9 @@ Other targets use the core's `ARDUINO_BOARD` string if available, otherwise `"n/
 This is the build target, not detection of the physical board, its manufacturer or PCB
 revision. A generic ESP32 target therefore reports its generic identifier.
 
-Omit `DeviceHWVersion` in a portable sketch, or assign it to describe your own hardware as
-above. The default is set only at construction; `begin()` does not reset an override.
-All three fields are kept as pointers rather than copied, so a quoted literal is always safe
-and a name built at runtime has to live in a global buffer.
+Omit `withHWVersion()` in a portable sketch, or call it to describe your own hardware as
+above; `begin()` does not reset it. `F()` literals stay in flash; an ordinary string is copied,
+so a name built at runtime can come from a local buffer.
 
 ## Compile-time settings
 

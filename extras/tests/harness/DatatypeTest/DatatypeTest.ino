@@ -92,9 +92,9 @@ void setup()
   device.begin(Serial);
 
   // Used by Loggbok to identify the device
-  device.DeviceName = "Datatype Test";
-  device.DeviceHWVersion = HARNESS_BOARD;
-  device.DeviceFWVersion = ExampleVersion;
+  device.withName(F("Datatype Test"));
+  device.withHWVersion(HARNESS_BOARD);
+  device.withFWVersion(ExampleVersion);
 
   device.onCommand("WIDTHS", onWidths);
   PrintWidths();

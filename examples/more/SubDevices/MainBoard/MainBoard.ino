@@ -142,8 +142,8 @@ void setup()
 
   device.begin(Serial);
 
-  device.DeviceName = "Greenhouse";
-  device.DeviceFWVersion = "1.0";
+  device.withName(F("Greenhouse"));
+  device.withFWVersion(F("1.0"));
 
   pump = device.addDevice(F("Pump controller"))
              .withHWVersion(F("Arduino Uno"))

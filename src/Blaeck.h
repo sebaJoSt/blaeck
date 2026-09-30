@@ -184,7 +184,7 @@ enum BlaeckIntervalMode : uint8_t
 constexpr double BLAECK_ANY_CHANGE = 0;
 
 // The default of every timestamp parameter: blaeck takes the timestamp from the timestamp mode
-// when the value is sent (micros(), or the setTimestampCallback() function). Never a real
+// when the value is sent (micros(), or the clock given to setTimestampMode()). Never a real
 // timestamp - in microseconds it lies about 585,000 years ahead - so 0 stays one.
 constexpr unsigned long long BLAECK_NOW = ~0ULL;
 
@@ -239,7 +239,8 @@ enum BlaeckTimestampMode
 
 // paramCount is 0 for a command sent without parameters.
 typedef void (*BlaeckCommandHandler)(const char *command, const char *const *params, byte paramCount);
-typedef void (*BlaeckAnyCommandHandler)(const char *command, const char *const *params, byte paramCount);
+// Returns true if it took a command nothing else has, which is then accepted; false leaves it unknown.
+typedef bool (*BlaeckAnyCommandHandler)(const char *command, const char *const *params, byte paramCount);
 
 // Runs on each press of a button. A press carries no value; fixed arguments go in a lambda:
 // addButton("ACTIVATE_ALL", []() { activateRange(1, 40); }).
@@ -275,7 +276,7 @@ enum BlaeckCommandAckReason
 {
   BLAECK_ACK_OK = 0,            // accepted
   BLAECK_ACK_UNKNOWN = 1,       // no input, sensor, button or command of that name
-  BLAECK_ACK_OUT_OF_RANGE = 2,  // number outside [min, max], or too big for its variable
+  BLAECK_ACK_OUT_OF_RANGE = 2,  // number outside [min, max], or outside what its variable holds
   BLAECK_ACK_BAD_SWITCH = 3,    // switch value not 0 or 1
   BLAECK_ACK_BAD_SELECT = 4,    // not one of the select's options
   BLAECK_ACK_TOO_LONG = 5,      // text longer than its buffer holds
@@ -283,7 +284,8 @@ enum BlaeckCommandAckReason
   BLAECK_ACK_TRUNCATED = 7,     // too long or too many parameters to receive whole
   BLAECK_ACK_DEVICE_NOT_RESPONDING = 8, // its device from addDevice() is marked missing
   BLAECK_ACK_NOT_AN_INTEGER = 9, // a number with a fraction for an input bound to an integer
-  BLAECK_ACK_READ_ONLY = 10      // a sensor, which a host cannot set
+  BLAECK_ACK_READ_ONLY = 10,     // a sensor, which a host cannot set
+  BLAECK_ACK_NOT_A_NUMBER = 11   // a number input got a value that isn't a number
 };
 
 // Runs after a host has set an input, not when the sketch changes the variable itself. The
@@ -386,6 +388,7 @@ inline bool flashStrEmpty(BlaeckString value)
 
 // Checks the options of a select or an enum sensor: at least one entry and no blank ones.
 // Prints why on debug when it refuses. `name` is the property named in that message.
+uint64_t widenFloatBits(uint32_t bits);
 bool optionsAccepted(BlaeckString optionsCsv, Print *debug,
                      const char *name, bool nameInFlash);
 
@@ -454,9 +457,10 @@ struct PropertyEntry
   BlaeckPropertyCallback callback = nullptr;
   // An enum's options, comma-separated.
   detail::StoredString options;
-  float rangeMin = 0.0f;
-  float rangeMax = 0.0f;
-  float rangeStep = 0.0f;
+  // Doubles, sent as 8-byte doubles: exact for every 32-bit integer. On AVR a double is a float.
+  double rangeMin = 0.0;
+  double rangeMax = 0.0;
+  double rangeStep = 0.0;
   // The baseline a change is measured from. Allocated when the property is added.
   ReportingState *reporting = nullptr;
   PropertyPresentation *presentation = nullptr;
@@ -485,9 +489,11 @@ struct EventChannelEntry
   // A heap copy, or a flash pointer when nameInFlash. Read it through the helpers only.
   const char *name = nullptr;
   bool nameInFlash = false;
+  detail::StoredString displayName;
   detail::StoredString icon;
   detail::StoredString deviceClass;
-  bool diagnostic = false;
+  // 0 none, 1 config, 2 diagnostic: the entity category, as on buttons and properties.
+  uint8_t category = 0;
   bool disabledByDefault = false;
   bool inUse = false;
   // The device from addDevice() the channel belongs to, 0 for the board itself.
@@ -911,7 +917,37 @@ public:
   BlaeckEventRef withIcon(BlaeckString icon);
 
   /*!
-    @brief   Marks the channel as diagnostic.
+    @brief   Sets the label a host shows instead of the name.
+
+    The name stays what the event is known by, so the label can change without a host seeing
+    a new event.
+
+    @param   displayName  Any text.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addEvent(F("Doorbell"), F("ring")).withDisplayName(F("Front door"));
+    @endcode
+  */
+  BlaeckEventRef withDisplayName(BlaeckString displayName);
+
+  /*!
+    @brief   Files the event under the device's configuration.
+
+    @param   on  false undoes it.
+    @return  The same handle, for chaining.
+
+    @note    Home Assistant files events under diagnostics or nowhere, so it shows a config
+             event as an ordinary one.
+
+    @code
+      device.addEvent(F("Calibrated"), F("done")).config();
+    @endcode
+  */
+  BlaeckEventRef config(bool on = true);
+
+  /*!
+    @brief   Files the event under the device's diagnostics.
 
     @param   on  false undoes it.
     @return  The same handle, for chaining.
@@ -955,6 +991,7 @@ public:
   BlaeckEventRef disabledByDefault(bool on = true);
 
 private:
+  void _setCategory(uint8_t category, bool on);
   Blaeck *_owner;
   int16_t _index;
 };
@@ -979,7 +1016,7 @@ protected:
   // Sets the bits in mask to value, marking the entity list changed if they differ.
   void _setFlags(uint32_t mask, uint32_t value) const;
   void _setText(detail::StoredString blaeck_detail::PropertyPresentation::*field, BlaeckString text) const;
-  void _setRange(float mn, float mx, float st) const;
+  void _setRange(double mn, double mx, double st) const;
   void _setDisplayPrecision(uint8_t decimals) const;
   void _setReporting(double delta, uint32_t minIntervalMs) const;
 
@@ -1190,7 +1227,7 @@ public:
       device.addNumberInput(F("Setpoint"), &setpoint).withRange(5.0f, 30.0f, 0.5f);
     @endcode
   */
-  BlaeckNumberPropertyRef &withRange(float min, float max, float step = 0.0f)
+  BlaeckNumberPropertyRef &withRange(double min, double max, double step = 0.0)
   {
     _setRange(min, max, step);
     return *this;
@@ -1972,47 +2009,47 @@ public:
   Blaeck &operator=(const Blaeck &) = delete;
 
   /*!
-    @brief  The device's name, which a host lists it under. Defaults to "Unnamed".
+    @brief   Sets the name a host lists the board under. Defaults to "Unnamed".
 
-    An empty string or null is sent as "Unnamed" too.
+    An empty name is sent as "Unnamed" too. Accepts F() literals, which stay in flash, and
+    ordinary strings, which are copied.
 
-    @note   Only the pointer is kept. A string literal is fine; a name built at
-            runtime must be in a global buffer.
+    @param   name  The board's name.
+    @return  The board, for chaining.
 
     @code
-      device.DeviceName = "Waveform Generator Demo";
+      device.withName(F("Greenhouse")).withHWVersion(F("Mega")).withFWVersion(F("1.0"));
     @endcode
   */
-  const char *DeviceName = BLAECK_DEVICE_NAME_UNNAMED;
+  Blaeck &withName(BlaeckString name);
 
   /*!
-    @brief  The hardware's name or revision. Defaults to the selected build target.
+    @brief   Sets the hardware's name or revision. Defaults to the selected build target.
 
-    Recognised boards use a friendly name, otherwise the core's ARDUINO_BOARD string
-    is used if available, or "n/a". This identifies the target selected when compiling,
-    not the physical board or PCB revision. Assign your own value to describe custom
-    hardware; begin() does not overwrite it.
+    Recognised boards use a friendly name, otherwise the core's ARDUINO_BOARD string is used
+    if available, or "n/a". The default describes the target selected when compiling, not the
+    physical board or PCB revision.
 
-    @note   Only the pointer is kept. A string literal is fine; a name built at
-            runtime must be in a global buffer.
+    @param   hwVersion  The hardware's name or revision.
+    @return  The board, for chaining.
 
     @code
-      device.DeviceHWVersion = "Weather Station PCB v2";
+      device.withHWVersion(F("Weather Station PCB v2"));
     @endcode
   */
-  const char *DeviceHWVersion;
+  Blaeck &withHWVersion(BlaeckString hwVersion);
 
   /*!
-    @brief  The firmware's version. Defaults to "n/a".
+    @brief   Sets the firmware's version. Defaults to "n/a".
 
-    @note   Only the pointer is kept. A string literal is fine; a name built at
-            runtime must be in a global buffer.
+    @param   fwVersion  The firmware's version.
+    @return  The board, for chaining.
 
     @code
-      device.DeviceFWVersion = "1.0";
+      device.withFWVersion(F("1.0"));
     @endcode
   */
-  const char *DeviceFWVersion = "n/a";
+  Blaeck &withFWVersion(BlaeckString fwVersion);
 
   // ----- Signals -----
 
@@ -2215,30 +2252,74 @@ public:
   /*!
     @brief   Registers a handler that runs for every command.
 
-    It runs after any matching handler, for logging or forwarding.
+    It runs after any matching handler, for built-ins and refused commands too, for logging or
+    forwarding. It returns whether it took the command: a command nothing else has is then
+    acknowledged as accepted. A handler that only logs returns false, so a typo is still
+    answered as unknown.
 
-    @param   handler  Called for every command.
-
-    @note    With this set, a command that matches no other handler is acknowledged
-             as accepted instead of unknown.
+    @param   handler  Called for every command; returns true if it took one.
 
     @code
-      device.onAnyCommand(onAny);
+      bool forward(const char *command, const char *const *params, byte count)
+      {
+        if (strncmp(command, "PUMP_", 5) != 0)
+          return false;
+        Serial2.print(command);
+        for (byte i = 0; i < count; i++)
+        {
+          Serial2.print(',');
+          Serial2.print(params[i]);
+        }
+        Serial2.println();
+        return true;
+      }
+
+      device.onAnyCommand(forward);
     @endcode
   */
   void onAnyCommand(BlaeckAnyCommandHandler handler);
 
   /*!
-    @brief   Removes every command and button, and onAnyCommand().
+    @brief   Removes every plain command from onCommand(), and onAnyCommand().
 
-    The table keeps its memory for new ones, and the new list is sent to the host.
+    Buttons stay: they go with clearAllControls(). The table keeps its memory for new ones.
 
     @code
-      device.clearAllCommandHandlers();
+      device.clearAllCommands();
       device.onCommand("LED", onLED);
     @endcode
   */
-  void clearAllCommandHandlers();
+  void clearAllCommands();
+
+  /*!
+    @brief   Removes every control: the inputs and the buttons.
+
+    What a host shows as controls: addNumberInput(), addTextInput(), addSwitch(),
+    addSelect() and addButton(). Sensors stay. The tables keep their memory, and the new
+    list is sent to the host.
+
+    @warning Handles returned before the call no longer refer to what they did.
+
+    @code
+      device.clearAllControls();
+      device.addSwitch(F("Heater"), &heaterOn);
+    @endcode
+  */
+  void clearAllControls();
+
+  /*!
+    @brief   Removes every sensor from addSensor().
+
+    Controls stay. The table keeps its memory, and the new list is sent to the host.
+
+    @warning Handles returned before the call no longer refer to what they did.
+
+    @code
+      device.clearAllSensors();
+      device.addSensor(F("Pressure"), &pressure);
+    @endcode
+  */
+  void clearAllSensors();
 
   /*!
     @brief   Compares a string in RAM with an F() literal, without copying either.
@@ -2254,6 +2335,7 @@ public:
       {
         if (device.equalsFlash(command, F("RESET")))
           Uptime = 0;
+        return false;
       });
     @endcode
   */
@@ -2382,19 +2464,22 @@ public:
     @param   callback  The refresh function, or nullptr to remove it.
 
     @code
-      device.setBeforeWriteCallback(readAllSensors);
+      device.onBeforeWrite(readAllSensors);
     @endcode
   */
-  void setBeforeWriteCallback(void (*callback)());
+  void onBeforeWrite(void (*callback)());
 
   /*!
     @brief   Sets whether and how data is timestamped.
 
     BLAECK_NO_TIMESTAMP, the default, sends none and the host uses arrival time.
     BLAECK_MICROS uses micros(), extended so it keeps counting past its 71-minute
-    rollover. BLAECK_UNIX needs a clock from setTimestampCallback().
+    rollover, or the clock given. BLAECK_UNIX needs a clock: a function returning
+    microseconds since the Unix epoch, such as one reading an RTC or NTP time. An RTC that
+    counts seconds has to be multiplied by 1000000.
 
-    @param   mode  A BlaeckTimestampMode value.
+    @param   mode   A BlaeckTimestampMode value.
+    @param   clock  The function the timestamps are read from; nullptr for micros().
 
     @warning Set it in setup(). Changing it later restarts the count, so timestamps
              before and after don't line up.
@@ -2404,23 +2489,10 @@ public:
 
     @code
       device.setTimestampMode(BLAECK_MICROS);
+      device.setTimestampMode(BLAECK_UNIX, unixMicros);
     @endcode
   */
-  void setTimestampMode(BlaeckTimestampMode mode);
-
-  /*!
-    @brief   Sets the clock BLAECK_UNIX reads, such as an RTC or NTP time.
-
-    It can be set before or after setTimestampMode().
-
-    @param   callback  Returns microseconds since the Unix epoch.
-
-    @code
-      device.setTimestampCallback(unixMicros);
-      device.setTimestampMode(BLAECK_UNIX);
-    @endcode
-  */
-  void setTimestampCallback(unsigned long long (*callback)());
+  void setTimestampMode(BlaeckTimestampMode mode, unsigned long long (*clock)() = nullptr);
 
   /*!
     @brief   Returns the timestamp mode.
@@ -2442,11 +2514,11 @@ public:
     @warning BLAECK_UNIX without a clock sends 0 as every timestamp.
 
     @code
-      if (!device.hasValidTimestampCallback())
+      if (!device.hasTimestampClock())
         Serial.println(F("no clock - timestamps will be zero"));
     @endcode
   */
-  bool hasValidTimestampCallback() const;
+  bool hasTimestampClock() const;
 
   /*!
     @brief   Sets whether each frame is built in RAM and sent in one write.
@@ -2600,10 +2672,10 @@ public:
     @param   callback  Receives the connection's slot, starting at 0.
 
     @code
-      device.setClientConnectedCallback(onClientConnected);
+      device.onConnect(onClientConnected);
     @endcode
   */
-  void setClientConnectedCallback(void (*callback)(byte clientNo));
+  void onConnect(void (*callback)(byte clientNo));
 
   /*!
     @brief   Sets a function to call when a connection closes.
@@ -2614,10 +2686,10 @@ public:
     @param   callback  Receives the connection's slot, starting at 0.
 
     @code
-      device.setClientDisconnectedCallback(onClientDisconnected);
+      device.onDisconnect(onClientDisconnected);
     @endcode
   */
-  void setClientDisconnectedCallback(void (*callback)(byte clientNo));
+  void onDisconnect(void (*callback)(byte clientNo));
 
 protected:
   // The two halves of tick(). Protected, so a test can call them apart through a subclass.
@@ -2943,12 +3015,13 @@ protected:
     _writesPaused = false;
   }
 
-  // DeviceName, or "Unnamed" when it is null or empty.
-  const char *_deviceName() const
+  // The board's name, or "Unnamed" when none or an empty one is set.
+  BlaeckString _deviceName() const
   {
-    return (DeviceName == nullptr || DeviceName[0] == '\0')
-               ? BLAECK_DEVICE_NAME_UNNAMED
-               : DeviceName;
+    const BlaeckString name = _boardName;
+    return (name == nullptr || name.read(0) == 0)
+               ? BlaeckString(BLAECK_DEVICE_NAME_UNNAMED)
+               : name;
   }
 
   void _clearWritesPaused()
@@ -2974,11 +3047,18 @@ protected:
   bool _shortWriteReported = false;
   // On while a data frame's CRC is being computed.
   bool _frameCrcOn = false;
+  // The board's identity, from withName(), withHWVersion() and withFWVersion(); unset is the default.
+  detail::StoredString _boardName;
+  detail::StoredString _boardHW;
+  detail::StoredString _boardFW;
+  // Set while an entity-list entry is written once to count its bytes; see _emitEntry().
+  bool _measuring = false;
+  size_t _measured = 0;
   // Set between the start and the end marker, where <, \, CR and LF are escaped.
   bool _frameEscaped = false;
 
   // Starts a frame. False if no frame may be written (no host yet, or writes paused).
-  bool _frameOpen(byte msgKey, unsigned long msgId, bool withCrc = false);
+  bool _frameOpen(byte msgKey, unsigned long msgId);
   // False if buffering failed or the transport did not accept every byte.
   bool _frameClose();
   uint32_t _frameCrcEnd()
@@ -3009,6 +3089,12 @@ protected:
   void _emitByte(byte b) { _emitBytes(&b, 1); }
   void _emitBytes(const byte *data, size_t len)
   {
+    // Measuring an entity-list entry: count what would be written, write nothing.
+    if (_measuring)
+    {
+      _measured += len;
+      return;
+    }
     if (_frameCrcOn)
       _crc.add(data, len);
     if (!_frameEscaped)
@@ -3090,6 +3176,24 @@ protected:
   // The owner of a catalog entry or push: 0 for the board, 1-254 for a device from addDevice(),
   // the same DeviceID as in the B7 device list.
   void _emitDeviceId(byte deviceId) { _emitByte(deviceId); }
+  // An 8-byte IEEE 754 double, whatever the board's double is.
+  void _emitDouble(double v);
+  // One entity-list entry: its DeviceID and kind, the length of what fields() writes, then the
+  // fields. fields() runs twice, first only counting, so it must write the same both times.
+  template <typename Fields>
+  void _emitEntry(byte deviceId, byte kind, Fields fields)
+  {
+    _emitDeviceId(deviceId);
+    _emitByte(kind);
+    _measuring = true;
+    _measured = 0;
+    fields();
+    _measuring = false;
+    const uint16_t length = static_cast<uint16_t>(_measured);
+    _emitByte(static_cast<byte>(length & 0xFF));
+    _emitByte(static_cast<byte>(length >> 8));
+    fields();
+  }
 
   static unsigned long long _microsWrapper()
   {
@@ -3177,6 +3281,11 @@ protected:
   // Why name can't be used for a property or command, printed on the debug stream; false if it
   // can.
   bool _nameRefused(BlaeckString name, bool isCommand);
+  static bool _hasControlChar(BlaeckString name);
+  // Removes the inputs (writable) or the sensors, closing the gaps; see clearAllControls().
+  void _clearProperties(bool writable);
+  void _resetProperty(blaeck_detail::PropertyEntry &p);
+  void _moveProperty(blaeck_detail::PropertyEntry &to, blaeck_detail::PropertyEntry &from);
   int _findProperty(BlaeckString name) const;
   // The current value: a number or bool into out (at most 8 bytes), or the text and whether it
   // is in flash.
@@ -3405,18 +3514,50 @@ inline BlaeckEventRef BlaeckEventRef::withIcon(BlaeckString icon)
   return *this;
 }
 
-inline BlaeckEventRef BlaeckEventRef::diagnostic(bool on)
+inline BlaeckEventRef BlaeckEventRef::withDisplayName(BlaeckString displayName)
 {
 #if BLAECK_ENABLE_IOT
   if (_index >= 0 && _owner != nullptr)
-    if (_owner->_eventChannels[_index].diagnostic != on)
+    if (_owner->_eventChannels[_index].displayName != displayName)
     {
-      _owner->_eventChannels[_index].diagnostic = on;
+      if (!_owner->_storeString(_owner->_eventChannels[_index].displayName, displayName))
+        return *this;
       _owner->_entityCatalogDirty = true;
     }
 #else
+  (void)displayName;
+#endif
+  return *this;
+}
+
+inline void BlaeckEventRef::_setCategory(uint8_t category, bool on)
+{
+#if BLAECK_ENABLE_IOT
+  if (_index < 0 || _owner == nullptr)
+    return;
+  uint8_t &current = _owner->_eventChannels[_index].category;
+  // Undoing a category the event doesn't have leaves it as it is.
+  const uint8_t wanted = on ? category : (current == category ? 0 : current);
+  if (current != wanted)
+  {
+    current = wanted;
+    _owner->_entityCatalogDirty = true;
+  }
+#else
+  (void)category;
   (void)on;
 #endif
+}
+
+inline BlaeckEventRef BlaeckEventRef::config(bool on)
+{
+  _setCategory(1, on);
+  return *this;
+}
+
+inline BlaeckEventRef BlaeckEventRef::diagnostic(bool on)
+{
+  _setCategory(2, on);
   return *this;
 }
 

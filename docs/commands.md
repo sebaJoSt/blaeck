@@ -48,19 +48,20 @@ void loop()
 ```
 
 - The handler is a plain function, written outside `setup()` and `loop()`. `params` holds the
-  parameters as text, and `paramCount` says how many arrived.
+  parameters as text, and `paramCount` says how many arrived. A host may percent-encode a
+  parameter (`%2C` for a comma); it arrives decoded.
 - `device.tick()` in `loop()` is what reads the serial port and calls the handler.
 - Nothing is checked: the handler decides what the parameters mean, and what to do with ones
   that don't fit.
 
 A plain command is not listed anywhere, so a host can send it but offers no control for it.
-The name travels on the wire, so write it as an identifier: `SET_RANGE`, not `Set range`. It
-may not start with `#` or `BLAECK.`.
+The name travels on the wire, so it may hold only letters, digits, `_`, `-` and `.`:
+`SET_RANGE`, not `Set range`. It may not start with `BLAECK.`.
 
 ## Buttons
 
 A button is a press a host offers as a control. It carries no value, so its function takes no
-parameters:
+parameters, and parameters sent with a press are ignored:
 
 ```cpp
 void onStatus()
@@ -94,13 +95,35 @@ Ordinary configuration strings are copied; their buffers can be reused after the
 
 ## Every command
 
-`onAnyCommand()` registers one function that sees every command, the built-in `BLAECK.` ones
-and a host's values for inputs included - for logging, or for forwarding commands elsewhere.
+`onAnyCommand()` registers one function that sees every command, the built-in `BLAECK.` ones,
+a host's values for inputs and refused commands included - for logging, or for forwarding
+commands elsewhere. It returns whether it took the command: a command nothing else has is then
+acknowledged as accepted. A function that only logs returns `false`, so a mistyped name is
+still answered as unknown.
+
+```cpp
+bool forwardPump(const char *command, const char *const *params, byte count)
+{
+  if (strncmp(command, "PUMP_", 5) != 0)
+    return false;
+  Serial2.print(command);
+  for (byte i = 0; i < count; i++)
+  {
+    Serial2.print(',');
+    Serial2.print(params[i]);
+  }
+  Serial2.println();
+  return true;
+}
+
+device.onAnyCommand(forwardPump);
+```
 
 ## Names
 
 A command name belongs to one input, sensor, button or command on the whole board. A second one
-is refused. Registering a plain command or button again under its own name replaces its
+is refused. A host sends the name, so it may hold only letters, digits, `_`, `-` and `.`; a
+label with spaces or other characters goes in `withDisplayName()`. Registering a plain command or button again under its own name replaces its
 function.
 
 ## When a command is rejected

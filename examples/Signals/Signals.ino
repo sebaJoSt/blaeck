@@ -63,8 +63,8 @@ void setup()
   device.begin(Serial);
 #endif
 
-  device.DeviceName = HOST_NAME;
-  device.DeviceFWVersion = "1.0";
+  device.withName(HOST_NAME);
+  device.withFWVersion(F("1.0"));
 
   // The name is the column name, so a unit that belongs in the log goes into it.
   device.addSignal(F("Temperature [C]"), &Temperature);

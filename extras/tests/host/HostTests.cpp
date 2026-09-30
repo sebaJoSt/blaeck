@@ -281,8 +281,8 @@ static void sessionBehavior(bool buffered)
   device.begin(server).withClients(3).withDebugStream(&debug);
   assert(device.isBufferedWrites() == buffered);
   assert(server.noDelay == BLAECK_TCP_NO_DELAY_DEFAULT);
-  device.setClientConnectedCallback(onOpen);
-  device.setClientDisconnectedCallback(onClose);
+  device.onConnect(onOpen);
+  device.onDisconnect(onClose);
   device.onCommand("Ping", onPing);
   float value = 12.5f;
   device.addSignal(F("Value"), &value);
@@ -477,14 +477,14 @@ static void detachFromCallbacks()
   SocketState a, b;
   TestBlaeck device;
   callbackDevice = &device;
-  device.setClientConnectedCallback(detachInCallback);
+  device.onConnect(detachInCallback);
   device.begin(server);
   server.pending.push_back(&a);
   device.read();
   assert(!a.open && device.transportError() == Blaeck::TransportError::NotStarted);
   TestBlaeck disconnected;
   callbackDevice = &disconnected;
-  disconnected.setClientDisconnectedCallback(detachInCallback);
+  disconnected.onDisconnect(detachInCallback);
   disconnected.begin(server);
   server.pending.push_back(&b);
   disconnected.read();
@@ -496,7 +496,7 @@ static void detachFromCallbacks()
   SocketState first, second;
   TestBlaeck takeover;
   callbackDevice = &takeover;
-  takeover.setClientDisconnectedCallback(detachInCallback);
+  takeover.onDisconnect(detachInCallback);
   takeover.begin(server);
   server.pending = {&first, &second};
   takeover.read();
@@ -675,8 +675,9 @@ struct DataFrame
 };
 
 // The frames in a device's output as the readers below take them: unescaped, between
-// "<BLAECK:" and "/BLAECK>\r\n". Checks each frame on the way: nothing between its markers may
-// read as a frame's start or a line's end, and it ends in "/>" and LF.
+// "<BLAECK:" and "/BLAECK>\r\n", without their CRC32. Checks each frame on the way: nothing
+// between its markers may read as a frame's start or a line's end, it ends in "/>" and LF, and its
+// last 4 bytes are the CRC32 of everything from the key on.
 static std::string unescaped(const std::string &wire)
 {
   std::string out;
@@ -691,6 +692,7 @@ static std::string unescaped(const std::string &wire)
     }
     out.append(wire, p, start - p);
     out += "<BLAECK:";
+    const size_t frameStart = out.size();
     size_t q = start + 8;
     for (;;)
     {
@@ -699,8 +701,14 @@ static std::string unescaped(const std::string &wire)
       assert(c != '<' && c != '\r');
       if (c == '\n')
       {
-        assert(out.size() >= 2 && out.compare(out.size() - 2, 2, "/>") == 0);
+        assert(out.size() >= frameStart + 6 && out.compare(out.size() - 2, 2, "/>") == 0);
         out.erase(out.size() - 2);
+        uint32_t sent;
+        memcpy(&sent, out.data() + out.size() - 4, 4);
+        blaeck::detail::BlaeckCRC32 frameCrc;
+        frameCrc.add(reinterpret_cast<const byte *>(out.data() + frameStart), out.size() - 4 - frameStart);
+        assert(frameCrc.calc() == sent);
+        out.erase(out.size() - 4);
         out += "/BLAECK>\r\n";
         break;
       }
@@ -727,7 +735,7 @@ static std::vector<DataFrame> takeData(std::string &wire, const std::vector<int>
   while ((start = output.find(marker, start)) != std::string::npos)
   {
     const size_t end = output.find("/BLAECK>\r\n", start);
-    assert(end != std::string::npos && end >= start + 22);
+    assert(end != std::string::npos && end >= start + 18);
     size_t p = start + marker.size() + 4;
     assert(output[p++] == ':');
     DataFrame frame;
@@ -741,24 +749,20 @@ static std::vector<DataFrame> takeData(std::string &wire, const std::vector<int>
       memcpy(&frame.timestamp, output.data() + p, 8);
       p += 8;
     }
-    while (p < end - 4)
+    while (p < end)
     {
       uint16_t id;
       memcpy(&id, output.data() + p, 2);
       p += 2;
       assert(id < widths.size());
       const size_t size = widths[id] < 0 ? static_cast<byte>(output[p++]) : widths[id];
-      assert(p + size <= end - 4);
+      assert(p + size <= end);
       frame.ids.push_back(id);
       frame.values.push_back(output.substr(p, size));
       p += size;
     }
-    assert(p == end - 4);
-    uint32_t actual;
-    memcpy(&actual, output.data() + end - 4, 4);
-    blaeck::detail::BlaeckCRC32 crc;
-    crc.add(reinterpret_cast<const byte *>(output.data() + start + 8), end - 4 - start - 8);
-    assert(crc.calc() == actual);
+    // unescaped() has checked the CRC32 and taken it off.
+    assert(p == end);
     result.push_back(frame);
     start = end + 10;
   }
@@ -927,16 +931,22 @@ static void commandBufferBoundaries(bool tcp, bool buffered)
   assert(pings == std::vector<std::string>({"recovered"}));
   expectAck("Ping,recovered", 0, BLAECK_ACK_OK);
 
-  std::string prefix;
-  while (prefix.size() + 3 + 11 < capacity)
-    prefix += "#1:";
-  prefix += "#42:";
-  if (capacity >= 300)
-    assert(prefix.size() > 255);
+  // One message id prefix. A second one is part of the name, which can't start with '#'.
+  const std::string prefix = "#42:";
   pings.clear();
   receive("<" + prefix + "Ping,ok>");
   assert(pings == std::vector<std::string>({"ok"}));
   expectAck("Ping,ok", 42, BLAECK_ACK_OK);
+
+  receive("<#1:#42:Ping,ok>");
+  assert(pings == std::vector<std::string>({"ok"}));
+  {
+    const std::string ack = commandFramePayload(io.output, 0xA5, 1);
+    assert(ack.size() == 10);
+    assert(static_cast<byte>(ack[8]) == 1);
+    assert(static_cast<byte>(ack[9]) == BLAECK_ACK_UNKNOWN);
+    io.output.clear();
+  }
 
   pings.clear();
   const std::string oversized = "Ping," + std::string(capacity, 'x');
@@ -1267,7 +1277,9 @@ static void ordinaryConfiguration(bool buffered)
   assert(device.propertyMeta(0).presentation->unit == nullptr);
   assert(device.propertyMeta(3).presentation->unit == nullptr && device.propertyMeta(3).presentation->icon == nullptr);
   assert(!device.hasRejections());
-  device.clearAllCommandHandlers();
+  device.clearAllCommands();
+  device.clearAllControls();
+  device.clearAllSensors();
   device.clearAllEvents();
   device.clearAllSignals();
   assert(device.commandMeta(0).press == nullptr && device.commandMeta(0).icon == nullptr);
@@ -1472,6 +1484,25 @@ static void beginOnlyOnce()
 
 // The DeviceID byte of the catalog record that holds `name`. It sits right before the name,
 // or before the payload length in a command record.
+// Walks an entity list by its lengths alone, as a host that knows no entry kind would: each
+// entry's DeviceID, kind and length, then as many bytes as the length says. The walk must end
+// exactly at the end of the list, or a length is wrong. Returns the kinds in order.
+static std::vector<int> entryKinds(const std::string &list)
+{
+  std::vector<int> kinds;
+  size_t p = 0;
+  while (p < list.size())
+  {
+    assert(p + 4 <= list.size());
+    kinds.push_back(static_cast<byte>(list[p + 1]));
+    const size_t length = static_cast<byte>(list[p + 2]) | (static_cast<byte>(list[p + 3]) << 8);
+    p += 4 + length;
+  }
+  assert(p == list.size());
+  return kinds;
+}
+
+// The DeviceID before a name, gap bytes back: 3 in the entity list, past the kind and the length.
 static std::string ownerOf(const std::string &payload, const char *name, size_t gap = 0)
 {
   const std::string key = std::string(name) + '\0';
@@ -1525,8 +1556,8 @@ static void noDeviceOwnership()
   FakeStream stream;
   TestBlaeck device;
   device.begin(stream);
-  device.DeviceName = "Solo";
-  device.DeviceHWVersion = "Mega";
+  device.withName("Solo");
+  device.withHWVersion("Mega");
   float value = 1;
   device.addSignal(F("Value"), &value);
   device.read();
@@ -1546,8 +1577,8 @@ static void subDevices(bool buffered)
   TestBlaeck device;
   device.begin(stream).withDebugStream(&debug);
   device.setBufferedWrites(buffered);
-  device.DeviceName = "Board";
-  device.DeviceHWVersion = "Mega";
+  device.withName("Board");
+  device.withHWVersion("Mega");
 
   float boardValue = 1, flow = 2, pressure = 3, orphan = 4;
   byte speed = 0;
@@ -1616,11 +1647,11 @@ static void subDevices(bool buffered)
   // In the entity list, the entry kind sits between the DeviceID and the name.
   command(device, stream, "<BLAECK.WRITE_ENTITIES>");
   std::string payload = commandFramePayload(stream.data.output, 0x90, 0);
-  assert(ownerOf(payload, "PUMP_SPEED", 1) == owner(1));
-  assert(ownerOf(payload, "PUMP_ON", 1) == owner(1));
-  assert(ownerOf(payload, "PumpStatus", 1) == owner(1));
-  assert(ownerOf(payload, "FanAlarm", 1) == owner(2));
-  assert(ownerOf(payload, "BOARD_RESET", 1) == owner(0));
+  assert(ownerOf(payload, "PUMP_SPEED", 3) == owner(1));
+  assert(ownerOf(payload, "PUMP_ON", 3) == owner(1));
+  assert(ownerOf(payload, "PumpStatus", 3) == owner(1));
+  assert(ownerOf(payload, "FanAlarm", 3) == owner(2));
+  assert(ownerOf(payload, "BOARD_RESET", 3) == owner(0));
   stream.data.output.clear();
 
   // Names are found within the handle's own device only. A 0x95 carries the property's index.
@@ -1762,8 +1793,8 @@ static void deviceNoticesBeforeHost()
   SocketState host;
   TestBlaeck device;
   device.begin(server);
-  device.DeviceName = "Board";
-  device.DeviceHWVersion = "Mega";
+  device.withName("Board");
+  device.withHWVersion("Mega");
   BlaeckDeviceRef pump = device.addDevice(F("Pump"));
   BlaeckDeviceRef fan = device.addDevice(F("Fan"));
   pump.markMissing();
@@ -1795,7 +1826,7 @@ static void deviceNoticesBeforeHost()
                        deviceRecord(2, 0, "Fan", "n/a", "n/a") + signalList()));
 }
 
-// CRC16-CCITT (init 0, poly 0x1021), as a host computes the schema hash.
+// CRC-16/XMODEM (init 0, poly 0x1021), as a host computes the schema hash.
 static uint16_t crc16(const std::string &data)
 {
   uint16_t crc = 0;
@@ -1921,9 +1952,9 @@ static void sameNamesAcrossDevices()
 
   command(device, stream, "<BLAECK.WRITE_ENTITIES>");
   payload = commandFramePayload(stream.data.output, 0x90, 0);
-  assert(ownerOf(payload, "Status", 1) == owner(0));
-  assert(ownerOf(payload, "SpeedA", 1) == owner(1) && ownerOf(payload, "SpeedB", 1) == owner(2));
-  assert((ownersOf(payload, "Alarm", 1) == std::vector<std::string>{owner(0), owner(1)}));
+  assert(ownerOf(payload, "Status", 3) == owner(0));
+  assert(ownerOf(payload, "SpeedA", 3) == owner(1) && ownerOf(payload, "SpeedB", 3) == owner(2));
+  assert((ownersOf(payload, "Alarm", 3) == std::vector<std::string>{owner(0), owner(1)}));
   stream.data.output.clear();
 
   // Each handle reaches its own device's properties only: Status, SpeedA, SpeedB are 0, 1, 2.
@@ -1953,12 +1984,17 @@ static void sameNamesAcrossDevices()
   frames = takeData(stream.data.output, widths);
   assert(frames.size() == 1 && (frames[0].ids == std::vector<int>{0}));
 
-  // The schema hash covers a device's signal as "<device name>/<signal name>".
+  // The schema hash covers each signal's device list bytes, a sub-device's name first.
   const char f = static_cast<char>(0x08); // float
+  const char z = '\0';                     // ends each name, as in the device list
   assert(frames[0].schemaHash ==
-         crc16(std::string("Temperature") + f + "Zone A/Temperature" + f + "Zone B/Temperature" + f));
+         crc16(std::string("Temperature") + z + f + "Zone A" + z + "Temperature" + z + f + "Zone B" + z + "Temperature" + z + f));
 
   const uint16_t hash = frames[0].schemaHash;
+
+  // The check value and the worked example on the protocol's Schema Hash page.
+  assert(crc16("123456789") == 0x31C3);
+  assert(crc16(std::string("Temperature") + z + f + "Zone A" + z + "Flow" + z + static_cast<char>(0x07)) == 0xE658);
 
   // Signals are numbered and hashed in device list order, so registering zone B's signal
   // before zone A's changes nothing a host sees.
@@ -1992,7 +2028,7 @@ static void sameNamesAcrossDevices()
   frames = takeData(swappedStream.data.output, widths);
   assert(frames.size() == 1 && frames[0].schemaHash != hash);
   assert(frames[0].schemaHash ==
-         crc16(std::string("Temperature") + f + "Zone B/Temperature" + f + "Zone A/Temperature" + f));
+         crc16(std::string("Temperature") + z + f + "Zone B" + z + "Temperature" + z + f + "Zone A" + z + "Temperature" + z + f));
 
   // A board without devices hashes exactly as before: names and type codes only.
   FakeStream plainStream;
@@ -2003,7 +2039,7 @@ static void sameNamesAcrossDevices()
   plainStream.data.output.clear();
   plain.writeAll();
   frames = takeData(plainStream.data.output, {4});
-  assert(frames.size() == 1 && frames[0].schemaHash == crc16(std::string("Temperature") + f));
+  assert(frames.size() == 1 && frames[0].schemaHash == crc16(std::string("Temperature") + z + f));
 }
 
 // The ack of the one command in output: its status and reason.
@@ -2022,6 +2058,63 @@ static const char *readStatus() { return "ok"; }
 
 // Inputs and sensors: the entity list, a host's writes and their checks, change reports and names.
 // Events and buttons in the entity list, after the properties; a press; the 0x85 layout.
+// Signals, events and sub-devices are never sent as commands, so their names may hold '/', spaces
+// and anything printable. What a host needs: a name at all, no control characters, and for a
+// signal, one name per device.
+// A board whose double is a float (AVR) widens a range to an 8-byte double bit by bit. Checked
+// here against the compiler's own float-to-double conversion.
+static void widenedDoubles()
+{
+  const float samples[] = {0.0f, -0.0f, 1.0f, -2.5f, 0.1f, 1e-40f, -1e-45f, 3.4028235e38f,
+                           16777217.0f, 1.17549435e-38f, INFINITY, -INFINITY};
+  for (float f : samples)
+  {
+    uint32_t bits;
+    memcpy(&bits, &f, 4);
+    const double expected = static_cast<double>(f);
+    uint64_t expectedBits;
+    memcpy(&expectedBits, &expected, 8);
+    assert(blaeck::blaeck_detail::widenFloatBits(bits) == expectedBits);
+  }
+  const float nan = NAN;
+  uint32_t nanBits;
+  memcpy(&nanBits, &nan, 4);
+  const uint64_t wide = blaeck::blaeck_detail::widenFloatBits(nanBits);
+  double back;
+  memcpy(&back, &wide, 8);
+  assert(back != back);
+}
+
+static void entryNameRules()
+{
+  FakeStream stream;
+  Capture debug;
+  TestBlaeck device;
+  device.begin(stream).withDebugStream(&debug);
+  float a = 0, b = 0;
+
+  device.addSignal(F("Flow l/min"), &a);
+  assert(!device.hasRejections() && device.SignalCount == 1);
+
+  device.addSignal(F("Flow l/min"), &b);
+  assert(debug.text.find("Dropped signal 'Flow l/min': its device has a signal of that name already.") != std::string::npos);
+  device.addSignal("", &b);
+  assert(debug.text.find("Dropped signal '': the name is empty.") != std::string::npos);
+  device.addSignal("Tab\there", &b);
+  assert(debug.text.find("the name holds a control character") != std::string::npos);
+
+  // The same name on another device is a different signal.
+  BlaeckDeviceRef zone = device.addDevice(F("Zone A/1"));
+  zone.addSignal(F("Flow l/min"), &b);
+  assert(device.SignalCount == 2);
+
+  device.addDevice("Bad\nName");
+  assert(debug.text.find("Dropped a device whose name holds a control character.") != std::string::npos);
+  device.addEvent("Bell\x01", F("ring"));
+  assert(debug.text.find("Dropped an event whose name holds a control character.") != std::string::npos);
+  assert(device.hasRejections());
+}
+
 static void eventsAndButtons()
 {
   FakeStream stream;
@@ -2042,10 +2135,27 @@ static void eventsAndButtons()
   stream.data.output.clear();
   device.sendEntities();
   const std::string list = commandFramePayload(stream.data.output, 0x90, 0);
-  const std::string event = std::string("\x00\x01" "Door\0" "\x03\x00" "mdi:door\0" "\x02\x00" "open\0" "closed\0", 32);
-  const std::string button = std::string("\x00\x02" "STATUS\0" "\x2D\x00" "Status\0" "identify\0", 27);
+  // DeviceID, kind, the length of what follows it, then the fields. An event's flags are laid
+  // out as a button's: bit 1 icon, bits 3-4 the category (2, diagnostic).
+  const std::string event = std::string("\x00\x01" "\x1E\x00" "Door\0" "\x12\x00" "mdi:door\0" "\x02\x00" "open\0" "closed\0", 34);
+  const std::string button = std::string("\x00\x02" "\x19\x00" "STATUS\0" "\x2D\x00" "Status\0" "identify\0", 29);
   assert(list.size() > event.size() + button.size());
   assert(list.substr(list.size() - event.size() - button.size()) == event + button);
+  assert((entryKinds(list) == std::vector<int>{0, 1, 2}));
+
+  // An event takes a display name and a category, as a button does.
+  device.addEvent(F("Bell"), F("ring")).withDisplayName(F("Front door")).config();
+  stream.data.output.clear();
+  device.sendEntities();
+  const std::string bell = std::string("\x00\x01" "\x19\x00" "Bell\0" "\x09\x00" "Front door\0" "\x01\x00" "ring\0", 29);
+  const std::string withBell = commandFramePayload(stream.data.output, 0x90, 0);
+  assert(withBell.find(bell) != std::string::npos);
+  assert((entryKinds(withBell) == std::vector<int>{0, 1, 1, 2}));
+  // Undoing a category the event doesn't have leaves the one it has.
+  device.addEvent(F("Bell"), F("ring")).withDisplayName(F("Front door")).config().diagnostic(false);
+  stream.data.output.clear();
+  device.sendEntities();
+  assert(commandFramePayload(stream.data.output, 0x90, 0).find(bell) != std::string::npos);
   assert(list.find("PLAIN") == std::string::npos);
 
   // A press runs the function; parameters sent with it are ignored.
@@ -2086,7 +2196,7 @@ static void longLongValues()
   FakeStream stream;
   ConfigurationProbe device;
   device.begin(stream);
-  device.DeviceName = "Big";
+  device.withName("Big");
   // 2^53 + 1: a double would round it.
   long long counter = 9007199254740993LL;
   device.addSignal(F("Counter"), &counter);
@@ -2121,8 +2231,9 @@ static void longLongValues()
   command(device, stream, "<Setpoint,1.5>");
   assert(reason() == BLAECK_ACK_NOT_AN_INTEGER);
   stream.data.output.clear();
+  // A 64-bit input takes digits only: "2e3" can't be checked exactly without a 64-bit double.
   command(device, stream, "<Setpoint,2e3>");
-  assert(reason() == BLAECK_ACK_OK && setpoint == 2000);
+  assert(reason() == BLAECK_ACK_NOT_AN_INTEGER);
   stream.data.output.clear();
 
   // The entity list carries the DTYPE and eight bytes of each value.
@@ -2170,21 +2281,23 @@ static void properties()
   std::string list = commandFramePayload(stream.data.output, 0x90, 0);
   const auto u32 = [](uint32_t v) { return std::string(reinterpret_cast<const char *>(&v), 4); };
   const auto f32 = [](float v) { return std::string(reinterpret_cast<const char *>(&v), 4); };
-  // Setpoint: board, property, name, number, READWRITE + range + step + unit, float, value,
-  // min, max, step, unit.
-  const std::string setpointEntry = std::string("\x00\x00", 2) + "Setpoint" + '\0' + '\x00' +
-      u32(0x3 | (1UL << 2) | (1UL << 3) | (1UL << 4)) + '\x08' + f32(21.0f) + f32(5.0f) +
-      f32(30.0f) + f32(0.1f) + "C" + '\0';
+  const auto f64 = [](double v) { return std::string(reinterpret_cast<const char *>(&v), 8); };
+  // Setpoint: board, property, length 45, name, number, READWRITE + range + step + unit, float,
+  // value, then min, max and step as doubles, unit.
+  const std::string setpointEntry = std::string("\x00\x00\x2D\x00", 4) + "Setpoint" + '\0' + '\x00' +
+      u32(0x3 | (1UL << 2) | (1UL << 3) | (1UL << 4)) + '\x08' + f32(21.0f) + f64(5.0) +
+      f64(30.0) + f64(static_cast<double>(0.1f)) + "C" + '\0';
   assert(list.compare(0, setpointEntry.size(), setpointEntry) == 0);
+  entryKinds(list);
   // Mode: an enum, its index as the value, then its options. Label: text, length-prefixed,
-  // then its maximum length. Temperature: READ.
+  // then its maximum length in one byte. Temperature: READ. Status: text from a function, 255.
   assert(list.find(std::string("Mode") + '\0' + '\x02' + u32(0x3) + '\x01' + '\x00' + "Off,Heat,Auto" + '\0') !=
          std::string::npos);
-  assert(list.find(std::string("Label") + '\0' + '\x03' + u32(0x3) + '\x0A' + '\x03' + "lab" + '\x07' + '\x00') !=
+  assert(list.find(std::string("Label") + '\0' + '\x03' + u32(0x3) + '\x0A' + '\x03' + "lab" + '\x07') !=
          std::string::npos);
   assert(list.find(std::string("Temperature") + '\0' + '\x00' + u32(0x1) + '\x08' + f32(20.0f)) !=
          std::string::npos);
-  assert(list.find(std::string("Status") + '\0' + '\x03' + u32(0x1) + '\x0A' + '\x02' + "ok" + std::string("\xFF\x00", 2)) !=
+  assert(list.find(std::string("Status") + '\0' + '\x03' + u32(0x1) + '\x0A' + '\x02' + "ok" + '\xFF') !=
          std::string::npos);
   stream.data.output.clear();
   hostMillis() = 1000;
@@ -2216,7 +2329,7 @@ static void properties()
     stream.data.output.clear();
   };
   refused("<Setpoint,31>", BLAECK_ACK_OUT_OF_RANGE);
-  refused("<Setpoint,abc>", BLAECK_ACK_OUT_OF_RANGE);
+  refused("<Setpoint,abc>", BLAECK_ACK_NOT_A_NUMBER);
   refused("<Setpoint>", BLAECK_ACK_MISSING_VALUE);
   refused("<Setpoint,>", BLAECK_ACK_MISSING_VALUE);
   refused("<Percent,2.5>", BLAECK_ACK_NOT_AN_INTEGER);
@@ -2303,10 +2416,13 @@ static void properties()
   device.addSensor("BLAECK.X", &other);
   assert(debug.text.find("BLAECK. is reserved") != std::string::npos);
   device.addSensor("#1", &other);
-  assert(debug.text.find("can't start with #") != std::string::npos);
+  assert(debug.text.find("may hold only letters, digits, _, - and .") != std::string::npos);
   device.addSensor(std::string(80, 'n').c_str(), &other);
   assert(debug.text.find("too long to be received") != std::string::npos);
   device.addSelect("NoOptions", &mode, F(""));
+  assert(debug.text.find("Dropped 'NoOptions': it needs at least one option.") != std::string::npos);
+  device.addSelect("BlankOption", &mode, F("On,,Off"));
+  assert(debug.text.find("Dropped 'BlankOption': one of its options is blank.") != std::string::npos);
   device.addTextInput("NoBuffer", label, 0);
   device.addSensor("Nothing", static_cast<float *>(nullptr));
   failAfter = 0;
@@ -2315,7 +2431,7 @@ static void properties()
   assert(debug.text.find("Dropped 'NoRam': no room for another property.") != std::string::npos);
   Capture rejections;
   assert(device.printRejections(&rejections));
-  assert(rejections.text.find("8 input and sensor registrations rejected.") != std::string::npos);
+  assert(rejections.text.find("9 input and sensor registrations rejected.") != std::string::npos);
 
   // A missing device's inputs are refused like its commands.
   BlaeckDeviceRef pump = device.addDevice(F("Pump"));
@@ -2339,6 +2455,166 @@ static void ackResult(const std::string &output, uint32_t messageId, const char 
   const std::string name = std::string(bare).substr(0, std::string(bare).find(','));
   assert(hash == commandHash(bare) && nameHash == commandHash(name));
   assert(static_cast<byte>(ack[8]) == status);
+}
+
+// What a host may write as a value: every parameter percent-decoded, numbers as JSON writes them,
+// whole numbers stored exactly, and a catch-all that decides whether an unknown name is taken.
+static std::vector<std::string> plainParams;
+static bool heaterFlag = false;
+static void onPlain(const char *, const char *const *params, byte count)
+{
+  plainParams.assign(params, params + count);
+}
+static bool logOnly(const char *, const char *const *, byte) { return false; }
+static bool forwardPumps(const char *command, const char *const *, byte)
+{
+  return strncmp(command, "PUMP_", 5) == 0;
+}
+
+static byte ackReason(FakeStream &stream, uint32_t id)
+{
+  const std::string ack = commandFramePayload(stream.data.output, 0xA5, id);
+  stream.data.output.clear();
+  return static_cast<byte>(ack[9]);
+}
+
+static void commandValues()
+{
+  FakeStream stream;
+  TestBlaeck device;
+  device.begin(stream);
+  float f = 0;
+  long n = 0;
+  unsigned long u = 0;
+  long long ll = 0;
+  byte mode = 1;
+  char text[16] = "";
+  device.addNumberInput("F", &f);
+  device.addNumberInput("N", &n);
+  device.addNumberInput("U", &u);
+  device.addNumberInput("L", &ll);
+  device.addSelect("M", &mode, F("Heat mode,Off"));
+  device.addTextInput("T", text, sizeof(text));
+  device.onCommand("P", onPlain);
+  assert(!device.hasRejections());
+  command(device, stream, "<BLAECK.GET_DEVICES>");
+  stream.data.output.clear();
+
+  struct Case { const char *command; uint32_t id; byte reason; };
+  const Case cases[] = {
+      {"<#1:F,21.5>", 1, BLAECK_ACK_OK},
+      {"<#2:F,abc>", 2, BLAECK_ACK_NOT_A_NUMBER},
+      {"<#3:F,.5>", 3, BLAECK_ACK_NOT_A_NUMBER},
+      {"<#4:F, 3>", 4, BLAECK_ACK_NOT_A_NUMBER},
+      {"<#5:F,0x1A>", 5, BLAECK_ACK_NOT_A_NUMBER},
+      {"<#6:F,nan>", 6, BLAECK_ACK_NOT_A_NUMBER},
+      {"<#7:F,007>", 7, BLAECK_ACK_NOT_A_NUMBER},
+      {"<#8:F,+3>", 8, BLAECK_ACK_OK},
+      {"<#9:N,4294967295>", 9, BLAECK_ACK_OUT_OF_RANGE},
+      {"<#10:U,4294967295>", 10, BLAECK_ACK_OK},
+      {"<#11:N,1e3>", 11, BLAECK_ACK_OK},
+      {"<#12:N,12.5>", 12, BLAECK_ACK_NOT_AN_INTEGER},
+      {"<#13:L,-9007199254740993>", 13, BLAECK_ACK_OK},
+      {"<#14:L,1e3>", 14, BLAECK_ACK_NOT_AN_INTEGER},
+      {"<#15:L,99999999999999999999>", 15, BLAECK_ACK_OUT_OF_RANGE},
+      {"<#16:M,Heat%20mode>", 16, BLAECK_ACK_OK},
+      {"<#17:T,a%2Cb%3E>", 17, BLAECK_ACK_OK},
+  };
+  for (const Case &c : cases)
+  {
+    command(device, stream, c.command);
+    assert(ackReason(stream, c.id) == c.reason);
+  }
+  assert(f == 3.0f && n == 1000 && u == 4294967295UL && ll == -9007199254740993LL);
+  assert(mode == 0 && strcmp(text, "a,b>") == 0);
+
+  // A plain command's parameters are decoded too; an invalid sequence stays as it is.
+  command(device, stream, "<#18:P,x%3Cy,%41,50%>");
+  assert(ackReason(stream, 18) == BLAECK_ACK_OK);
+  assert((plainParams == std::vector<std::string>{"x<y", "A", "50%"}));
+
+  // A catch-all that only logs leaves an unknown name unknown; one that takes it makes it accepted.
+  device.onAnyCommand(logOnly);
+  command(device, stream, "<#19:TYPO>");
+  assert(ackReason(stream, 19) == BLAECK_ACK_UNKNOWN);
+  device.onAnyCommand(forwardPumps);
+  command(device, stream, "<#20:PUMP_GO>");
+  assert(ackReason(stream, 20) == BLAECK_ACK_OK);
+  command(device, stream, "<#21:TYPO>");
+  assert(ackReason(stream, 21) == BLAECK_ACK_UNKNOWN);
+}
+
+// Clearing controls or sensors keeps the rest, numbered without gaps: a 0x95 names a property by
+// its position, so a kept sensor has to move down with everything it owns.
+static void clearsAndIdentity()
+{
+  FakeStream stream;
+  Capture debug;
+  ConfigurationProbe device;
+  device.begin(stream).withDebugStream(&debug);
+  float a = 1, s1 = 2, b = 3, s2 = 4;
+  device.addNumberInput(F("A"), &a);
+  device.addSensor(F("S1"), &s1).withUnit(F("V"));
+  device.addNumberInput(F("B"), &b);
+  device.addSensor(F("S2"), &s2);
+  device.addButton("GO", onPress);
+  device.onCommand("PLAIN", onPing);
+  assert(!device.hasRejections());
+  command(device, stream, "<BLAECK.GET_DEVICES>");
+  stream.data.output.clear();
+
+  device.clearAllControls();
+  assert(device.propertyIndex("S1") == 0 && device.propertyIndex("S2") == 1);
+  assert(device.propertyIndex("A") == -1 && device.propertyIndex("B") == -1);
+  device.sendEntities();
+  const std::string list = commandFramePayload(stream.data.output, 0x90, 0);
+  assert((entryKinds(list) == std::vector<int>{0, 0}));
+  assert(list.find("GO") == std::string::npos && list.find(std::string("V") + '\0') != std::string::npos);
+  stream.data.output.clear();
+
+  // The kept sensor answers to its new position.
+  s2 = 5;
+  device.writeProperty(F("S2"));
+  const std::string value = commandFramePayload(stream.data.output, 0x95, 0);
+  assert(static_cast<byte>(value[0]) == 1 && static_cast<byte>(value[1]) == 0);
+  stream.data.output.clear();
+
+  // Buttons went with the controls; plain commands stay until clearAllCommands().
+  command(device, stream, "<GO>");
+  assert(ackReason(stream, 0) == BLAECK_ACK_UNKNOWN);
+  command(device, stream, "<PLAIN>");
+  assert(ackReason(stream, 0) == BLAECK_ACK_OK);
+  device.clearAllCommands();
+  command(device, stream, "<PLAIN>");
+  assert(ackReason(stream, 0) == BLAECK_ACK_UNKNOWN);
+
+  // A freed slot is reused by the next add.
+  device.clearAllSensors();
+  assert(device.propertyIndex("S1") == -1);
+  device.addSwitch(F("Heater"), &heaterFlag);
+  assert(device.propertyIndex("Heater") == 0 && !device.hasRejections());
+
+  // The board's identity takes F() literals and ordinary strings.
+  device.withName(F("Greenhouse")).withHWVersion("PCB v2").withFWVersion(F("1.3"));
+  command(device, stream, "<BLAECK.GET_DEVICES>");
+  const std::string devices = commandFramePayload(stream.data.output, 0xB7, 0);
+  assert(devices.find(std::string("Greenhouse") + '\0' + "PCB v2" + '\0' + "1.3" + '\0') != std::string::npos);
+  stream.data.output.clear();
+
+  // The board and its sub-devices share no name, whichever is named first.
+  device.addDevice(F("Greenhouse"));
+  assert(debug.text.find("Dropped duplicate device name: Greenhouse") != std::string::npos);
+  device.addDevice(F("Zone A"));
+  device.withName(F("Zone A"));
+  assert(debug.text.find("withName(): a device from addDevice() is named Zone A already") != std::string::npos);
+  command(device, stream, "<BLAECK.GET_DEVICES>");
+  assert(commandFramePayload(stream.data.output, 0xB7, 0).find(std::string("Greenhouse") + '\0') != std::string::npos);
+  stream.data.output.clear();
+
+  // BLAECK_UNIX without a clock says so, and no timestamp is real.
+  device.setTimestampMode(BLAECK_UNIX);
+  assert(!device.hasTimestampClock());
+  assert(debug.text.find("BLAECK_UNIX needs a clock") != std::string::npos);
 }
 
 static void deviceCommands()
@@ -2366,13 +2642,23 @@ static void deviceCommands()
   const std::string ack = commandFramePayload(stream.data.output, 0xA5, 0);
   assert(static_cast<byte>(ack[8]) == 1 && static_cast<byte>(ack[9]) == BLAECK_ACK_UNKNOWN);
   stream.data.output.clear();
-  // So a name may start with it.
-  device.onCommand("@PING", onPing);
-  assert(!device.hasRejections());
-  command(device, stream, "<#9:@PING,1>");
-  ackResult(stream.data.output, 9, "@PING,1", 0);
-  stream.data.output.clear();
-  pings.pop_back();
+  // A name a host sends holds only letters, digits, '_', '-' and '.': '@', spaces, ',', '<', '>'
+  // and '%' are refused at registration.
+  for (const char *bad : {"@PING", "SET SPEED", "A,B", "A<B", "A>B", "50%", "Temp\xC3\xA9"})
+  {
+    TestBlaeck other;
+    FakeStream otherStream;
+    other.begin(otherStream);
+    other.onCommand(bad, onPing);
+    assert(other.hasRejections());
+  }
+  {
+    TestBlaeck other;
+    FakeStream otherStream;
+    other.begin(otherStream);
+    other.onCommand("Set_speed-2.x", onPing);
+    assert(!other.hasRejections());
+  }
 
   // While the pump is missing its command is refused and the handler doesn't run.
   pump.markMissing();
@@ -2875,7 +3161,7 @@ static void reportingCallbacksAndTimestamps()
   beforeWriteCalls = 0;
   device.addSignal(F("Value"), &callbackValue)
       .writeAtInterval(BLAECK_ON_CHANGE, 10).writeOnChange(1, 0);
-  device.setBeforeWriteCallback(sampleBeforeWrite);
+  device.onBeforeWrite(sampleBeforeWrite);
   device.writeIfDue();
   expectData(stream, {4}, {0});
   assert(beforeWriteCalls == 0);
@@ -2893,7 +3179,7 @@ static void reportingCallbacksAndTimestamps()
   device.writeAll();
   expectData(stream, {4}, {0});
   assert(beforeWriteCalls == 2);
-  device.setBeforeWriteCallback(nullptr);
+  device.onBeforeWrite(nullptr);
   device.setTimestampMode(BLAECK_MICROS);
   hostMicros() = UINT32_MAX - 5;
   device.writeIfDue(); // quiet polls must still extend the clock
@@ -2904,8 +3190,7 @@ static void reportingCallbacksAndTimestamps()
   device.writeIfDue();
   auto frames = takeData(stream.data.output, {4});
   assert(frames.size() == 1 && frames[0].timestamp == (1ULL << 32) + 10);
-  device.setTimestampCallback(fakeUnix);
-  device.setTimestampMode(BLAECK_UNIX);
+  device.setTimestampMode(BLAECK_UNIX, fakeUnix);
   callbackValue += 1;
   device.writeIfDue();
   frames = takeData(stream.data.output, {4});
@@ -3017,7 +3302,7 @@ static void reportingReconfiguration()
   callbackValue = 0;
   beforeWriteCalls = 0;
   device.addSignal(F("Callback"), &callbackValue).writeAtInterval(BLAECK_ON_CHANGE, 10);
-  device.setBeforeWriteCallback(sampleBeforeWrite);
+  device.onBeforeWrite(sampleBeforeWrite);
   device.writeIfDue();
   expectData(stream, {4}, {0});
   device.writeIfDue();
@@ -3156,7 +3441,7 @@ static void reportingCallbackWriteClock()
   device.addSignal(F("V"), &callbackValue).writeAtInterval(BLAECK_OFF).writeOnChange(0);
   device.writeIfDue();
   expectData(stream, {4}, {0});
-  device.setBeforeWriteCallback(writeDuringRefresh);
+  device.onBeforeWrite(writeDuringRefresh);
   command(device, stream, "<BLAECK.ACTIVATE,1000>");
   hostMillis() = 1000;
   device.writeIfDue();
@@ -3296,7 +3581,11 @@ int main()
     subDevices(false);
     subDevices(true);
     deviceCommands();
+    commandValues();
     properties();
+    widenedDoubles();
+    entryNameRules();
+    clearsAndIdentity();
     eventsAndButtons();
     longLongValues();
     deviceNoticesBeforeHost();

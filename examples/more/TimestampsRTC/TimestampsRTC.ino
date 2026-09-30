@@ -1,7 +1,7 @@
 /*
   TimestampsRTC.ino
 
-  Timestamp data with a real-time clock using BLAECK_UNIX and a callback that returns
+  Timestamp data with a real-time clock using BLAECK_UNIX and a clock function that returns
   microseconds since the Unix epoch. The RTC here has whole-second resolution.
 
   Requires an RTC. This sketch uses the one built into the Arduino UNO R4;
@@ -46,13 +46,12 @@ void setup()
 
   device.begin(Serial);
 
-  device.DeviceName = "TimestampsRTC";
-  device.DeviceFWVersion = "1.0";
+  device.withName(F("TimestampsRTC"));
+  device.withFWVersion(F("1.0"));
 
   device.addSignal(F("Sine_1"), &sine);
 
-  device.setTimestampCallback(GetRTCUnixTimeMicros);
-  device.setTimestampMode(BLAECK_UNIX);
+  device.setTimestampMode(BLAECK_UNIX, GetRTCUnixTimeMicros);
 }
 
 void loop()

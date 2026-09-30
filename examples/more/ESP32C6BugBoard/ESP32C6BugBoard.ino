@@ -123,10 +123,10 @@ void setup()
       .withClients(MAX_CLIENTS)
       .withDebugStream(&device.Terminal);
 
-  device.DeviceName = HOST_NAME;
+  device.withName(HOST_NAME);
   // This wiring is for a specific board that the generic ESP32C6 build target cannot name.
-  device.DeviceHWVersion = "ESP32-C6-Bug V2.1.0";
-  device.DeviceFWVersion = "1.0";
+  device.withHWVersion(F("ESP32-C6-Bug V2.1.0"));
+  device.withFWVersion(F("1.0"));
 
   device.addSignal(F("Small Number"), &randomSmallNumber);
   device.addSignal(F("Big Number"), &randomBigNumber);

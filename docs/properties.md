@@ -56,8 +56,8 @@ void loop()
 
 | Call | Binds | A host may send |
 |---|---|---|
-| `addNumberInput(name, &value)` | any number type | a number; within `withRange()` if set, without a fraction for an integer |
-| `addTextInput(name, buffer, size)` | a `char` buffer | text up to `size - 1` bytes; an empty value clears it |
+| `addNumberInput(name, &value)` | any number type | a number as JSON writes it (`21.5`, `-3`, `1e3`); within `withRange()` if set, and within what the variable holds; without a fraction for an integer |
+| `addTextInput(name, buffer, size)` | a `char` buffer of up to 256 bytes | text up to `size - 1` bytes, at most 255; an empty value clears it |
 | `addSwitch(name, &value)` | a `bool` | `0` or `1` |
 | `addSelect(name, &index, options)` | any integer type | an option's name, or its position counted from 0 |
 
@@ -153,8 +153,20 @@ Ordinary strings are copied, so their buffers can be reused after the call.
 
 A property is set by its name alone, so a name belongs to one input, sensor, button or command
 on the whole board, devices from `addDevice()` included. A second one is refused. Names compare
-case-sensitively, can't start with `#` or `BLAECK.`, and must fit the command buffer. A signal
-may share a property's name.
+case-sensitively, may hold only letters, digits, `_`, `-` and `.`, can't start with `BLAECK.`,
+and must fit the command buffer. A label with spaces or other characters goes in
+`withDisplayName()`. A signal may share a property's name.
+
+## Changing the set while running
+
+`clearAllControls()` removes the inputs and the buttons, `clearAllSensors()` the sensors; what
+the other call covers stays. Add the new ones after it, and the changed list is sent to the host
+by itself. Handles returned before the call no longer refer to what they did.
+
+```cpp
+device.clearAllSensors();
+device.addSensor(F("Pressure"), &pressure);
+```
 
 ## When a property is rejected
 

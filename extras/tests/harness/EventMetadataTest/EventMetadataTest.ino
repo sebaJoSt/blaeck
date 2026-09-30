@@ -108,9 +108,9 @@ void setup()
   device.begin(Serial)
       .withDebugStream(&Serial);
 
-  device.DeviceName = "Event Metadata Test";
-  device.DeviceHWVersion = HARNESS_BOARD;
-  device.DeviceFWVersion = "1.0";
+  device.withName(F("Event Metadata Test"));
+  device.withHWVersion(HARNESS_BOARD);
+  device.withFWVersion(F("1.0"));
 
   device.onCommand("WIDTHS", onWidths);
 

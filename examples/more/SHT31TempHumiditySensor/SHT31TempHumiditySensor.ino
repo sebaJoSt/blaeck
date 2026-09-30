@@ -39,8 +39,8 @@ void setup()
 
   device.begin(Serial);
 
-  device.DeviceName = "SHT31TempHumiditySensor";
-  device.DeviceFWVersion = "1.0";
+  device.withName(F("SHT31TempHumiditySensor"));
+  device.withFWVersion(F("1.0"));
 
   // Logged: a column each, with the unit in the name.
   device.addSignal(F("Temperature [°C]"), &temperature);

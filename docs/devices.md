@@ -27,7 +27,7 @@ void setup()
 {
   Serial.begin(115200);
   device.begin(Serial);
-  device.DeviceName = "Greenhouse";
+  device.withName(F("Greenhouse"));
 
   pump = device.addDevice(F("Pump controller"))
              .withHWVersion(F("Arduino Uno"))
@@ -91,7 +91,8 @@ it connects, and does not ask again for a change made later.
 
 A host identifies a device by its name below the board's name, so keep device names unique and
 stable. Renaming a device makes it a new device to the host, just as renaming the board does.
-`addDevice()` refuses an empty or duplicate name.
+`addDevice()` refuses an empty name, or one another device or the board already has; `withName()`
+keeps the board's name when a device already has the new one.
 
 Devices are one level deep: a device cannot have devices of its own.
 

@@ -1,7 +1,7 @@
 /*
   TimestampsNTP.ino
 
-  Timestamp data with the network clock using BLAECK_UNIX and a callback that returns
+  Timestamp data with the network clock using BLAECK_UNIX and a clock function that returns
   microseconds since the Unix epoch. Runs on the ESP32-PoE and WT32-ETH01 through
   NetworkSetup.h and needs access to an NTP server.
 
@@ -64,13 +64,12 @@ void setup()
   server.begin();
   device.begin(server);
 
-  device.DeviceName = HOST_NAME;
-  device.DeviceFWVersion = "1.0";
+  device.withName(HOST_NAME);
+  device.withFWVersion(F("1.0"));
 
   device.addSignal(F("Sine_1"), &sine);
 
-  device.setTimestampCallback(GetNtpUnixTimeMicros);
-  device.setTimestampMode(BLAECK_UNIX);
+  device.setTimestampMode(BLAECK_UNIX, GetNtpUnixTimeMicros);
 }
 
 void loop()
