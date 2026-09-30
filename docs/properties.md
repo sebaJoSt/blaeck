@@ -94,6 +94,13 @@ would arrive truncated, 0.5 as 0. `withRange(0, 10, 0.5)` on a `byte` keeps the 
 the step; `withRange(0.5, 10.5, 1)` drops the range and keeps the step. Both say so on debug.
 Declare the variable as a `float` for a fractional step.
 
+Written as whole numbers, a range is kept as whole numbers, exactly. `withRange(0, 4000000000, 1)`
+on an `unsigned long` says what it means on an AVR, where a `double` is a `float` and names only
+24 bits: kept as one, the upper bound would become a neighbour of the number written, and a write
+would then be refused or accepted by that neighbour instead. Write a decimal anywhere in the call -
+`withRange(0, 100.0f, 0.5f)` - and all three are kept as `double`s, which is what a fractional
+range needs. One call takes whole numbers, decimals and a mix of the two.
+
 ## Sensors
 
 `addSensor()` takes a variable or a function, and what it is decides the kind:

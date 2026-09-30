@@ -445,6 +445,68 @@ enum : uint8_t
   GETTER_LONG, GETTER_ULONG, GETTER_FLOAT, GETTER_DOUBLE, GETTER_TEXT, GETTER_LONGLONG
 };
 
+// A range bound, held as the variable's own kind of number. A whole-number variable keeps whole
+// bounds exactly, however few digits the board's double has: on a board where a double is a
+// float, only 24 bits of one are exact, so a bound past 16,777,216 on a long variable would be
+// kept as a neighbour of the one the sketch wrote. Which member is the live one is the
+// variable's own type, so the union needs no tag of its own.
+union RangeBound
+{
+  double asDouble;
+  long long asInteger;
+  // Zeroes the wider member, which is every bit of the other one too.
+  RangeBound() : asInteger(0) {}
+};
+
+// Whether an argument to withRange() is a whole number as written, which is what decides whether
+// a range is kept as whole numbers or as doubles, and whether it has a sign. Spelled out here
+// rather than taken from <type_traits>, which an AVR build has no complete copy of.
+template <typename T>
+struct WholeArg
+{
+  static const bool value = false;
+  static const bool isSigned = true;
+};
+
+#define BLAECK_WHOLE_ARG(T, SIGNED)      \
+  template <>                            \
+  struct WholeArg<T>                     \
+  {                                      \
+    static const bool value = true;      \
+    static const bool isSigned = SIGNED; \
+  }
+BLAECK_WHOLE_ARG(char, true);
+BLAECK_WHOLE_ARG(signed char, true);
+BLAECK_WHOLE_ARG(short, true);
+BLAECK_WHOLE_ARG(int, true);
+BLAECK_WHOLE_ARG(long, true);
+BLAECK_WHOLE_ARG(long long, true);
+BLAECK_WHOLE_ARG(unsigned char, false);
+BLAECK_WHOLE_ARG(unsigned short, false);
+BLAECK_WHOLE_ARG(unsigned int, false);
+BLAECK_WHOLE_ARG(unsigned long, false);
+BLAECK_WHOLE_ARG(unsigned long long, false);
+#undef BLAECK_WHOLE_ARG
+
+// A whole argument as the long long a whole range is kept in. An unsigned one above what a long
+// long holds stops there, which is the widest bound any variable has anyway: no variable holds
+// more, so nothing is admitted that would not have been.
+template <typename T>
+long long wholeArgValue(T v)
+{
+  return WholeArg<T>::isSigned || (unsigned long long)v <= 9223372036854775807ULL
+             ? (long long)v
+             : 9223372036854775807LL;
+}
+
+// Picks which of the two range functions a withRange() call reaches. A tag, rather than a
+// second overload of withRange() itself, because an int converts to a double and to a long long
+// alike, so a bare withRange(0, 10, 1) would name neither.
+template <bool AllWhole>
+struct RangeArgs
+{
+};
+
 // One input or sensor.
 struct PropertyEntry
 {
@@ -459,9 +521,11 @@ struct PropertyEntry
   // In the variable's own type, at its width, as the catalog sends them. Widening a range to a
   // fixed eight bytes would keep the value and lose the decimal it was written as: on a board
   // whose double is a float, a step of 0.01 would reach a host as 0.009999999776482582.
-  double rangeMin = 0.0;
-  double rangeMax = 0.0;
-  double rangeStep = 0.0;
+  // A whole-number variable's bounds live in the union's long long, where a board whose double
+  // holds 24 bits does not round them; type says which member to read.
+  RangeBound rangeMin;
+  RangeBound rangeMax;
+  RangeBound rangeStep;
   // The baseline a change is measured from. Allocated when the property is added.
   ReportingState *reporting = nullptr;
   PropertyPresentation *presentation = nullptr;
@@ -1018,6 +1082,20 @@ protected:
   void _setFlags(uint32_t mask, uint32_t value) const;
   void _setText(detail::StoredString blaeck_detail::PropertyPresentation::*field, BlaeckString text) const;
   void _setRange(double mn, double mx, double st) const;
+  void _setRange(long long mn, long long mx, long long st) const;
+  // The two spellings of a range, chosen by the arguments' own types, so bare whole numbers,
+  // decimals and a mix of the two each reach the one that keeps them.
+  template <typename A, typename B, typename C>
+  void _setRangeArgs(A mn, B mx, C st, blaeck_detail::RangeArgs<true>) const
+  {
+    _setRange(blaeck_detail::wholeArgValue(mn), blaeck_detail::wholeArgValue(mx),
+              blaeck_detail::wholeArgValue(st));
+  }
+  template <typename A, typename B, typename C>
+  void _setRangeArgs(A mn, B mx, C st, blaeck_detail::RangeArgs<false>) const
+  {
+    _setRange((double)mn, (double)mx, (double)st);
+  }
   void _setDisplayPrecision(uint8_t decimals) const;
   void _setReporting(double delta, uint32_t minIntervalMs) const;
 
@@ -1225,6 +1303,11 @@ public:
     input takes whole bounds and a whole step. The catalog carries min, max and step in
     the variable's own type, at its width.
 
+    Written as whole numbers, a range is kept as whole numbers, exactly, however few digits
+    the board's double has: withRange(0, 4000000000, 1) on an unsigned long says what it
+    means on an AVR, where a double holds 24 bits. Written with a decimal anywhere, all
+    three are kept as doubles.
+
     @param   min   Lowest accepted value; must be within what the variable holds.
     @param   max   Highest accepted value; must be above min and within what the variable holds.
     @param   step  The step a host offers and the value is stored on; 0 for none.
@@ -1232,12 +1315,37 @@ public:
 
     @code
       device.addNumberInput(F("Setpoint"), &setpoint).withRange(5.0f, 30.0f, 0.5f);
+      device.addNumberInput(F("Count"), &count).withRange(0, 4000000000, 1);
     @endcode
   */
-  BlaeckNumberPropertyRef &withRange(double min, double max, double step = 0.0)
+  template <typename A, typename B, typename C>
+  BlaeckNumberPropertyRef &withRange(A min, B max, C step)
   {
-    _setRange(min, max, step);
+    _setRangeArgs(min, max, step,
+                  blaeck_detail::RangeArgs<blaeck_detail::WholeArg<A>::value &&
+                                           blaeck_detail::WholeArg<B>::value &&
+                                           blaeck_detail::WholeArg<C>::value>());
     return *this;
+  }
+
+  /*!
+    @brief   Sets the values an input accepts, leaving it on no step.
+
+    As withRange(A, B, C) with a step of 0: a host offers the whole range, and a value
+    inside it is stored as it arrived.
+
+    @param   min   Lowest accepted value; must be within what the variable holds.
+    @param   max   Highest accepted value; must be above min and within what the variable holds.
+    @return  The same handle, for chaining.
+
+    @code
+      device.addNumberInput(F("Offset"), &offset).withRange(-10.0f, 10.0f);
+    @endcode
+  */
+  template <typename A, typename B>
+  BlaeckNumberPropertyRef &withRange(A min, B max)
+  {
+    return withRange(min, max, 0);
   }
 
   /*!
@@ -3184,7 +3292,7 @@ protected:
   // the same DeviceID as in the B7 device list.
   void _emitDeviceId(byte deviceId) { _emitByte(deviceId); }
   // A range bound, at the width and the type of the variable it bounds.
-  void _emitRangeValue(dataType type, double v);
+  void _emitRangeValue(dataType type, const blaeck_detail::RangeBound &b);
   // One entity-list entry: its DeviceID and kind, the length of what fields() writes, then the
   // fields. fields() runs twice, first only counting, so it must write the same both times.
   template <typename Fields>

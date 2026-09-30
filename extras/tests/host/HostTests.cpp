@@ -2105,6 +2105,83 @@ static void rangeAtTheVariablesWidth()
                    '\x01' + '\x00' + '\x01') != std::string::npos);
 }
 
+// Written as whole numbers, a range is kept as whole numbers. A 64-bit input's bounds go out
+// exactly and a write is checked against them exactly, neither passing through a double, which
+// names 53 of their bits - 24 on a board where a double is a float, where 4000000000 on an
+// unsigned long would be kept as a neighbour of the bound the sketch wrote.
+static void aWholeRangeIsKeptWhole()
+{
+  hostMillis() = 0;
+  FakeStream stream;
+  Capture debug;
+  TestBlaeck device;
+  device.begin(stream).withDebugStream(&debug);
+
+  // 2^53 + 1 and 2^53 + 3: neighbours a double cannot tell apart.
+  long long counter = 0;
+  device.addNumberInput(F("Counter"), &counter).withRange(9007199254740993LL, 9007199254740995LL, 1);
+  unsigned long ticks = 0;
+  device.addNumberInput(F("Ticks"), &ticks).withRange(0, 4000000000, 1);
+  // A decimal anywhere keeps all three as doubles, and the bare 0 beside them still reads as
+  // the bound it is: one call takes whole numbers, decimals and a mix of the two.
+  float ratio = 0;
+  device.addNumberInput(F("Ratio"), &ratio).withRange(0, 100.0f, 0.5f);
+  // The two-argument form, on a float and on whole numbers alike: a range and no step.
+  float offset = 0;
+  device.addNumberInput(F("Offset"), &offset).withRange(-10.0f, 10.0f);
+  short span = 0;
+  device.addNumberInput(F("Span"), &span).withRange(-500, 500);
+
+  assert(debug.text.find("is not a value the variable holds") == std::string::npos);
+
+  // A bound no variable could reach is refused and never converted to a whole number, which
+  // for 1e300 has no answer at all.
+  byte narrow = 0;
+  device.addNumberInput(F("Narrow"), &narrow).withRange(0.0, 1e300, 1.0);
+  assert(debug.text.find("a bound is not a value the variable holds") != std::string::npos);
+
+  device.read();
+  const std::string list = commandFramePayload(stream.data.output, 0x90, 0);
+  const auto u32 = [](uint32_t v) { return std::string(reinterpret_cast<const char *>(&v), 4); };
+  const auto i64 = [](long long v) { return std::string(reinterpret_cast<const char *>(&v), 8); };
+  const auto i16 = [](int16_t v) { return std::string(reinterpret_cast<const char *>(&v), 2); };
+  const auto f32 = [](float v) { return std::string(reinterpret_cast<const char *>(&v), 4); };
+  const uint32_t rangeAndStep = 0x3 | (1UL << 2) | (1UL << 3);
+  // Eight bytes each, and 2^53 + 1 is itself rather than the even neighbour a double would give.
+  assert(list.find(std::string("Counter") + '\0' + '\x00' + u32(rangeAndStep) + '\x0B' +
+                   i64(0) + i64(9007199254740993LL) + i64(9007199254740995LL) + i64(1)) !=
+         std::string::npos);
+  assert(list.find(std::string("Ticks") + '\0' + '\x00' + u32(rangeAndStep) + '\x07' +
+                   u32(0) + u32(0) + u32(4000000000UL) + u32(1)) != std::string::npos);
+  assert(list.find(std::string("Ratio") + '\0' + '\x00' + u32(rangeAndStep) + '\x08' +
+                   f32(0.0f) + f32(0.0f) + f32(100.0f) + f32(0.5f)) != std::string::npos);
+  // A range and no step: the step bit is clear and no step field follows.
+  const uint32_t rangeOnly = 0x3 | (1UL << 2);
+  assert(list.find(std::string("Offset") + '\0' + '\x00' + u32(rangeOnly) + '\x08' +
+                   f32(0.0f) + f32(-10.0f) + f32(10.0f)) != std::string::npos);
+  assert(list.find(std::string("Span") + '\0' + '\x00' + u32(rangeOnly) + '\x02' +
+                   i16(0) + i16(-500) + i16(500)) != std::string::npos);
+  // Narrow: no range, and the step it did carry is a byte wide.
+  assert(list.find(std::string("Narrow") + '\0' + '\x00' + u32(0x3 | (1UL << 3)) +
+                   '\x01' + '\x00' + '\x01') != std::string::npos);
+  stream.data.output.clear();
+
+  // A write is refused by what the bound says, not by what a double would have rounded it to.
+  const auto reason = [&]()
+  { return static_cast<byte>(commandFramePayload(stream.data.output, 0xA5, 0)[9]); };
+  command(device, stream, "<Counter,9007199254740992>");
+  assert(reason() == BLAECK_ACK_OUT_OF_RANGE && counter == 0);
+  stream.data.output.clear();
+  command(device, stream, "<Counter,9007199254740993>");
+  assert(reason() == BLAECK_ACK_OK && counter == 9007199254740993LL);
+  stream.data.output.clear();
+  command(device, stream, "<Counter,9007199254740996>");
+  assert(reason() == BLAECK_ACK_OUT_OF_RANGE && counter == 9007199254740993LL);
+  stream.data.output.clear();
+  command(device, stream, "<Ticks,4000000000>");
+  assert(reason() == BLAECK_ACK_OK && ticks == 4000000000UL);
+}
+
 // Inputs and sensors: the entity list, a host's writes and their checks, change reports and names.
 // Events and buttons in the entity list, after the properties; a press; the 0x85 layout.
 // Signals, events and sub-devices are never sent as commands, so their names may hold '/', spaces
@@ -3609,6 +3686,7 @@ int main()
     commandValues();
     properties();
     rangeAtTheVariablesWidth();
+    aWholeRangeIsKeptWhole();
     entryNameRules();
     clearsAndIdentity();
     eventsAndButtons();

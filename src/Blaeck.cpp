@@ -693,6 +693,11 @@ static size_t _signalValueSize(dataType type)
   }
 }
 
+static bool _isIntegerType(dataType type)
+{
+  return type != Blaeck_float && type != Blaeck_double && type != Blaeck_bool && type != Blaeck_string;
+}
+
 // Whether v is inside what a variable of this type holds. A float or a double takes any finite
 // value; a whole number is bounded by its width. Used both by a write, which must not store what
 // the variable cannot hold, and by withRange(), where a bound the variable cannot reach would
@@ -726,6 +731,58 @@ static bool _representable(dataType type, double v)
   case Blaeck_float: case Blaeck_double: return true;
   default: return v == floor(v);
   }
+}
+
+// _fitsType() for a whole number, compared as one. A bound on a wide integer is checked without
+// a double ever holding it: on a board where a double is a float, 4000000000 would round to a
+// neighbour before the comparison and pass or fail on that instead.
+static bool _fitsTypeWhole(dataType type, long long v)
+{
+  switch (type)
+  {
+  case Blaeck_byte: return v >= 0 && v <= 255LL;
+  case Blaeck_short: case Blaeck_int: return v >= -32768LL && v <= 32767LL;
+  case Blaeck_ushort: case Blaeck_uint: return v >= 0 && v <= 65535LL;
+  case Blaeck_long: return v >= -2147483648LL && v <= 2147483647LL;
+  case Blaeck_ulong: return v >= 0 && v <= 4294967295LL;
+  // A whole number reaches any of these: a long long by being one, a float or a double by
+  // being a value they take, exactly or as the nearest they have.
+  case Blaeck_float: case Blaeck_double: case Blaeck_longlong: return true;
+  default: return false;
+  }
+}
+
+// A bound as a double, whichever member of it is the live one. A whole-number variable's bound
+// is a long long; every other variable's is a double already.
+static double _boundAsDouble(dataType type, const blaeck_detail::RangeBound &b)
+{
+  return _isIntegerType(type) ? (double)b.asInteger : b.asDouble;
+}
+
+// A bound in the kind the variable keeps it in, ready to store.
+static blaeck_detail::RangeBound _makeBound(dataType type, double v)
+{
+  blaeck_detail::RangeBound b;
+  if (!_isIntegerType(type))
+    b.asDouble = v;
+  // A bound the variable cannot reach is refused before it is ever sent, but it still passes
+  // through here, and converting one to a long long anyway is what the language leaves
+  // undefined - 1e300 has no answer. It is kept as nothing at all instead.
+  else if (_fitsType(type, v))
+    b.asInteger = (long long)v;
+  else
+    b.asInteger = 0;
+  return b;
+}
+
+static blaeck_detail::RangeBound _makeBound(dataType type, long long v)
+{
+  blaeck_detail::RangeBound b;
+  if (_isIntegerType(type))
+    b.asInteger = v;
+  else
+    b.asDouble = (double)v;
+  return b;
 }
 
 // Makes room in r for a text snapshot of this length. False, reported once, if RAM ran out.
@@ -1350,10 +1407,11 @@ void Blaeck::_resetProperty(PropertyEntry &p)
   p.address = nullptr;
   p.getter = nullptr;
   p.callback = nullptr;
-  p.rangeMin = p.rangeMax = p.rangeStep = 0.0;
   p.flags = 0;
   p.textSize = 0;
   p.type = Blaeck_float;
+  // The member the type makes the live one, so nothing reads the other.
+  p.rangeMin = p.rangeMax = p.rangeStep = _makeBound(p.type, 0.0);
   p.kind = BLAECK_VALUE_NUMBER;
   p.deviceId = 0;
   p.getterType = 0;
@@ -3231,34 +3289,76 @@ void BlaeckPropertyRefBase::_setText(detail::StoredString blaeck_detail::Propert
     _owner->_entityCatalogDirty = true;
 }
 
+// Reports on debug what a range check refused. A bound the variable cannot state would accept a
+// write it cannot store, and the catalog sends a range at the variable's own width, where such a
+// bound does not survive either: a fractional bound on a whole-number variable arrives truncated.
+static void _reportRangeChecks(Print *debug, bool maxAboveMin, bool boundsFit,
+                               bool stepGiven, bool stepPositive, bool stepFits)
+{
+  if (debug == nullptr)
+    return;
+  if (!maxAboveMin)
+    debug->println(F("withRange(): max is not above min, so no range is set."));
+  if (stepGiven && !stepPositive)
+    debug->println(F("withRange(): a step must be above 0, so no step is set."));
+  if (maxAboveMin && !boundsFit)
+    debug->println(F("withRange(): a bound is not a value the variable holds, so no range is set."));
+  if (stepPositive && !stepFits)
+    debug->println(F("withRange(): the step is not a value the variable holds, so no step is set."));
+}
+
+// Puts a checked range on the entry. True if it differs from the one already there, compared
+// through the member the variable's own type makes the live one.
+static bool _storeRange(blaeck_detail::PropertyEntry &e, const blaeck_detail::RangeBound &mn,
+                        const blaeck_detail::RangeBound &mx, const blaeck_detail::RangeBound &st)
+{
+  const bool same = _isIntegerType(e.type)
+                        ? (e.rangeMin.asInteger == mn.asInteger &&
+                           e.rangeMax.asInteger == mx.asInteger &&
+                           e.rangeStep.asInteger == st.asInteger)
+                        : (e.rangeMin.asDouble == mn.asDouble &&
+                           e.rangeMax.asDouble == mx.asDouble &&
+                           e.rangeStep.asDouble == st.asDouble);
+  if (same)
+    return false;
+  e.rangeMin = mn;
+  e.rangeMax = mx;
+  e.rangeStep = st;
+  return true;
+}
+
 void BlaeckPropertyRefBase::_setRange(double mn, double mx, double st) const
 {
   blaeck_detail::PropertyEntry *e = _entry();
   if (e == nullptr)
     return;
-  Print *debug = _owner->_debugStream;
-  if (!(mx > mn) && debug != nullptr)
-    debug->println(F("withRange(): max is not above min, so no range is set."));
-  if (st != 0.0 && !(st > 0.0) && debug != nullptr)
-    debug->println(F("withRange(): a step must be above 0, so no step is set."));
-  // A bound the variable cannot state would accept a write it cannot store, and the catalog
-  // sends a range at the variable's own width, where such a bound does not survive either: a
-  // fractional bound on a whole-number variable would arrive truncated.
   const bool fits = _representable(e->type, mn) && _representable(e->type, mx);
-  if (mx > mn && !fits && debug != nullptr)
-    debug->println(F("withRange(): a bound is not a value the variable holds, so no range is set."));
   const bool stepFits = _representable(e->type, st);
-  if (st > 0.0 && !stepFits && debug != nullptr)
-    debug->println(F("withRange(): the step is not a value the variable holds, so no step is set."));
+  _reportRangeChecks(_owner->_debugStream, mx > mn, fits, st != 0.0, st > 0.0, stepFits);
   const bool hasRange = mx > mn && fits;
   const bool hasStep = st > 0.0 && stepFits;
-  if (e->rangeMin != mn || e->rangeMax != mx || e->rangeStep != st)
-  {
-    e->rangeMin = mn;
-    e->rangeMax = mx;
-    e->rangeStep = st;
+  if (_storeRange(*e, _makeBound(e->type, mn), _makeBound(e->type, mx), _makeBound(e->type, st)))
     _owner->_entityCatalogDirty = true;
-  }
+  _setFlags(blaeck_detail::PROPERTY_HAS_RANGE | blaeck_detail::PROPERTY_HAS_STEP,
+            (hasRange ? blaeck_detail::PROPERTY_HAS_RANGE : 0) |
+                (hasStep ? blaeck_detail::PROPERTY_HAS_STEP : 0));
+}
+
+// The same range, written as whole numbers and kept as whole numbers. A whole number has no
+// fraction to lose, so reaching the variable is all there is to check - and it is checked as a
+// whole number, which a board whose double holds 24 bits could not do for a wide bound.
+void BlaeckPropertyRefBase::_setRange(long long mn, long long mx, long long st) const
+{
+  blaeck_detail::PropertyEntry *e = _entry();
+  if (e == nullptr)
+    return;
+  const bool fits = _fitsTypeWhole(e->type, mn) && _fitsTypeWhole(e->type, mx);
+  const bool stepFits = _fitsTypeWhole(e->type, st);
+  _reportRangeChecks(_owner->_debugStream, mx > mn, fits, st != 0, st > 0, stepFits);
+  const bool hasRange = mx > mn && fits;
+  const bool hasStep = st > 0 && stepFits;
+  if (_storeRange(*e, _makeBound(e->type, mn), _makeBound(e->type, mx), _makeBound(e->type, st)))
+    _owner->_entityCatalogDirty = true;
   _setFlags(blaeck_detail::PROPERTY_HAS_RANGE | blaeck_detail::PROPERTY_HAS_STEP,
             (hasRange ? blaeck_detail::PROPERTY_HAS_RANGE : 0) |
                 (hasStep ? blaeck_detail::PROPERTY_HAS_STEP : 0));
@@ -3427,10 +3527,11 @@ int Blaeck::_registerProperty(byte deviceId, BlaeckString name, uint8_t kind, bo
   p.getter = getter;
   p.getterType = getterType;
   p.callback = onChange;
-  p.rangeMin = p.rangeMax = p.rangeStep = 0.0;
   p.flags = 0;
   p.textSize = kind == BLAECK_VALUE_TEXT ? (getter != nullptr ? 256 : textSize) : 0;
   p.type = type;
+  // The member the type makes the live one, so nothing reads the other.
+  p.rangeMin = p.rangeMax = p.rangeStep = _makeBound(type, 0.0);
   p.kind = kind;
   p.deviceId = deviceId;
   p.writable = writable;
@@ -3518,6 +3619,36 @@ static bool _storeNumber(void *address, dataType type, double v)
   }
 }
 
+// Stores a whole number exactly, however few digits the board's double holds. False if it
+// doesn't fit the type.
+static bool _storeWhole(void *address, dataType type, long long v)
+{
+  switch (type)
+  {
+  case Blaeck_byte: if (v < 0 || v > 255) return false; *(byte *)address = (byte)v; return true;
+  case Blaeck_short: case Blaeck_int:
+    if (v < -32768LL || v > 32767LL)
+      return false;
+    { int16_t x = (int16_t)v; memcpy(address, &x, 2); } return true;
+  case Blaeck_ushort: case Blaeck_uint:
+    if (v < 0 || v > 65535LL)
+      return false;
+    { uint16_t x = (uint16_t)v; memcpy(address, &x, 2); } return true;
+  case Blaeck_long:
+    if (v < -2147483648LL || v > 2147483647LL)
+      return false;
+    { int32_t x = (int32_t)v; memcpy(address, &x, 4); } return true;
+  case Blaeck_ulong:
+    if (v < 0 || v > 4294967295LL)
+      return false;
+    { uint32_t x = (uint32_t)v; memcpy(address, &x, 4); } return true;
+  case Blaeck_longlong: memcpy(address, &v, sizeof v); return true;
+  case Blaeck_float: { float x = (float)v; memcpy(address, &x, sizeof x); } return true;
+  case Blaeck_double: { double x = (double)v; memcpy(address, &x, sizeof x); } return true;
+  default: return false;
+  }
+}
+
 // A range bound, at the width and the type of the variable it bounds - the same form the
 // property's own value goes out in, which is what min, max and step were alone in not doing.
 //
@@ -3527,14 +3658,19 @@ static bool _storeNumber(void *address, dataType type, double v)
 // Sent at the variable's own width, the same float reads back as the shortest decimal that names
 // it, which is the 0.01 the sketch wrote. A double property is eight bytes wherever it exists:
 // on a board whose double is a float, one is registered as a float (BLAECK_DOUBLE_TYPE).
-void Blaeck::_emitRangeValue(dataType type, double v)
+void Blaeck::_emitRangeValue(dataType type, const blaeck_detail::RangeBound &b)
 {
   // A bound that does not fit was refused by withRange(), so this cannot be reached with one.
   // Zero is written rather than nothing regardless: the entry's length is measured by writing
   // it twice, and a field that appears in one pass and not the other would misstate it.
   byte value[8];
   memset(value, 0, sizeof value);
-  _storeNumber(value, type, v);
+  // A whole-number variable's bound is kept as a long long and goes out as one, never through a
+  // double: on a board where that is a float, 4000000000 would leave as its 24-bit neighbour.
+  if (_isIntegerType(type))
+    _storeWhole(value, type, b.asInteger);
+  else
+    _storeNumber(value, type, b.asDouble);
   _emitBytes(value, _signalValueSize(type));
 }
 
@@ -3602,41 +3738,6 @@ static bool _isNumberText(const char *v, bool &whole)
   return *p == '\0';
 }
 
-// Stores a whole number exactly, however few digits the board's double holds. False if it
-// doesn't fit the type.
-static bool _storeWhole(void *address, dataType type, long long v)
-{
-  switch (type)
-  {
-  case Blaeck_byte: if (v < 0 || v > 255) return false; *(byte *)address = (byte)v; return true;
-  case Blaeck_short: case Blaeck_int:
-    if (v < -32768LL || v > 32767LL)
-      return false;
-    { int16_t x = (int16_t)v; memcpy(address, &x, 2); } return true;
-  case Blaeck_ushort: case Blaeck_uint:
-    if (v < 0 || v > 65535LL)
-      return false;
-    { uint16_t x = (uint16_t)v; memcpy(address, &x, 2); } return true;
-  case Blaeck_long:
-    if (v < -2147483648LL || v > 2147483647LL)
-      return false;
-    { int32_t x = (int32_t)v; memcpy(address, &x, 4); } return true;
-  case Blaeck_ulong:
-    if (v < 0 || v > 4294967295LL)
-      return false;
-    { uint32_t x = (uint32_t)v; memcpy(address, &x, 4); } return true;
-  case Blaeck_longlong: memcpy(address, &v, sizeof v); return true;
-  case Blaeck_float: { float x = (float)v; memcpy(address, &x, sizeof x); } return true;
-  case Blaeck_double: { double x = (double)v; memcpy(address, &x, sizeof x); } return true;
-  default: return false;
-  }
-}
-
-static bool _isIntegerType(dataType type)
-{
-  return type != Blaeck_float && type != Blaeck_double && type != Blaeck_bool && type != Blaeck_string;
-}
-
 // The decimal places a step is written with: 0.01 gives 2, 0.5 gives 1, 2 gives 0. A step is
 // held as a double, a float on AVR, which no decimal fraction lands on exactly, so the answer is the first
 // scaling that leaves a whole number to within the same thousandth the snap itself allows.
@@ -3681,15 +3782,23 @@ byte Blaeck::_receiveProperty(uint16_t index)
     if (!_isNumberText(v, wholeText))
       return BLAECK_ACK_NOT_A_NUMBER;
     // A whole number is read as an integer, exactly, whatever the variable: a double on AVR
-    // holds only 24 bits exactly. The range compares as doubles, and a whole number needs no step.
+    // holds only 24 bits exactly. A whole number needs no step.
     if (wholeText)
     {
       long long whole;
       if (!_parseLongLong(v, whole))
         return BLAECK_ACK_OUT_OF_RANGE;
-      if ((p.flags & blaeck_detail::PROPERTY_HAS_RANGE) &&
-          ((double)whole < p.rangeMin || (double)whole > p.rangeMax))
-        return BLAECK_ACK_OUT_OF_RANGE;
+      // Compared as whole numbers where the variable keeps its range as whole numbers, so a
+      // bound past what the board's double names exactly still refuses what it says it does.
+      if (p.flags & blaeck_detail::PROPERTY_HAS_RANGE)
+      {
+        const bool inside = _isIntegerType(p.type)
+                                ? (whole >= p.rangeMin.asInteger && whole <= p.rangeMax.asInteger)
+                                : ((double)whole >= p.rangeMin.asDouble &&
+                                   (double)whole <= p.rangeMax.asDouble);
+        if (!inside)
+          return BLAECK_ACK_OUT_OF_RANGE;
+      }
       if (!_storeWhole(p.address, p.type, whole))
         return BLAECK_ACK_OUT_OF_RANGE;
       return BLAECK_ACK_OK;
@@ -3702,17 +3811,22 @@ byte Blaeck::_receiveProperty(uint16_t index)
     double number = strtod(v, nullptr);
     if (isinf(number))
       return BLAECK_ACK_OUT_OF_RANGE;
+    // A fraction cannot be compared as a whole number, so here the range is read as doubles.
+    // The variable is narrower than a long long by now, so its bounds survive the reading.
     if ((p.flags & blaeck_detail::PROPERTY_HAS_RANGE) &&
-        (number < p.rangeMin || number > p.rangeMax))
+        (number < _boundAsDouble(p.type, p.rangeMin) ||
+         number > _boundAsDouble(p.type, p.rangeMax)))
       return BLAECK_ACK_OUT_OF_RANGE;
     // On its step: a value within a thousandth of a step of one is stored as exactly that.
     if (p.flags & blaeck_detail::PROPERTY_HAS_STEP)
     {
-      const double steps = (number - p.rangeMin) / p.rangeStep;
+      const double rangeMin = _boundAsDouble(p.type, p.rangeMin);
+      const double rangeStep = _boundAsDouble(p.type, p.rangeStep);
+      const double steps = (number - rangeMin) / rangeStep;
       const double nearest = floor(steps + 0.5);
       if (fabs(steps - nearest) < 1e-3)
       {
-        double snapped = (double)p.rangeMin + nearest * (double)p.rangeStep;
+        double snapped = rangeMin + nearest * rangeStep;
         // min + n * step is arithmetic on two binary numbers, neither of which is the decimal it was
         // written as, so the sum lands beside the step rather than on it - 0.1 came back as
         // 0.099999994, a whole float step out and worse than the value that arrived. Rounding
@@ -3721,7 +3835,7 @@ byte Blaeck::_receiveProperty(uint16_t index)
         // where the scaling would run out of digits, which the range a step this fine can
         // cover does not reach.
         double scale = 1.0;
-        for (int i = _stepDecimals(p.rangeStep); i > 0; i--)
+        for (int i = _stepDecimals(rangeStep); i > 0; i--)
           scale *= 10.0;
         if (fabs(snapped) * scale < 1e15)
           snapped = floor(fabs(snapped) * scale + 0.5) / scale * (snapped < 0.0 ? -1.0 : 1.0);
