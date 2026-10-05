@@ -47,21 +47,21 @@ Blaeck device;
 #endif
 
 // ---- signals -----------------------------------------------------------------------------
-unsigned long Uptime = 0;      // periodic only, seconds since boot - the metronome every
+unsigned long uptime = 0;      // periodic only, seconds since boot - the metronome every
                                 // other row is read against.
-long Periodic = 0;             // periodic only, increments every loop() pass - never
+long periodic = 0;             // periodic only, increments every loop() pass - never
                                 // touched by a command, so any jump in it is loop() alone.
-long Pushed = 0;                // changed only by Fire_push - proves write() lands its own
+long pushed = 0;                // changed only by Fire_push - proves write() lands its own
                                 // row between two periodic ticks rather than waiting for one.
-long ExplicitTS = 0;            // changed only by Fire_explicit_ts, always with the same
+long explicitTS = 0;            // changed only by Fire_explicit_ts, always with the same
                                 // hardcoded timestamp, independent of TimestampMode.
-long Burst = 0;                 // changed only by Fire_burst, five times back-to-back.
-long Changed = 0;              // immediate change reporting only, no interval participation.
+long burst = 0;                 // changed only by Fire_burst, five times back-to-back.
+long changed = 0;              // immediate change reporting only, no interval participation.
 
 // ---- TimestampMode select state -----------------------------------------------------------
 // Index into "PC,MICROS,UNIX_calibrated,UNIX_no_callback", mirrored back as this select's
 // own state so a driver can see which mode is currently live.
-byte TimestampModeIdx = 0;
+byte timestampModeIdx = 0;
 
 // A fixed, recognizable epoch far from "now" (2030-01-01T00:00:00Z) plus millis() since the
 // mode was chosen, in microseconds - lets a driver confirm BLAECK_UNIX actually reads this
@@ -102,10 +102,10 @@ void onWidths(const char *command, const char *const *params, byte paramCount)
   PrintWidths();
 }
 
-// Runs after a host has set the TimestampMode select; TimestampModeIdx already holds it.
+// Runs after a host has set the TimestampMode select; timestampModeIdx already holds it.
 void onTimestampMode()
 {
-  switch (TimestampModeIdx)
+  switch (timestampModeIdx)
   {
   case 0: // PC - no device timestamp at all, lgbk stamps on arrival
     device.setTimestampMode(BLAECK_NO_TIMESTAMP);
@@ -131,8 +131,8 @@ void onTimestampMode()
 void onFirePush()
 {
   const char *command = "Fire_push";
-  Pushed++;
-  device.write("Pushed", Pushed);
+  pushed++;
+  device.write("Pushed", pushed);
   Serial.print(F("CMD "));
   Serial.println(command);
 }
@@ -140,8 +140,8 @@ void onFirePush()
 void onFireExplicitTs()
 {
   const char *command = "Fire_explicit_ts";
-  ExplicitTS++;
-  device.write("ExplicitTS", ExplicitTS, EXPLICIT_TS_US);
+  explicitTS++;
+  device.write("ExplicitTS", explicitTS, EXPLICIT_TS_US);
   Serial.print(F("CMD "));
   Serial.println(command);
 }
@@ -152,8 +152,8 @@ void onFireBurst()
   for (byte i = 1; i <= 5; i++)
   {
     burstBase++;
-    Burst = burstBase;
-    device.write("Burst", Burst);
+    burst = burstBase;
+    device.write("Burst", burst);
   }
   Serial.print(F("CMD "));
   Serial.println(command);
@@ -162,7 +162,7 @@ void onFireBurst()
 void onFireChange()
 {
   const char *command = "Fire_change";
-  Changed++;
+  changed++;
   Serial.print(F("CMD "));
   Serial.println(command);
 }
@@ -170,7 +170,7 @@ void onFireChange()
 void onFireSame()
 {
   const char *command = "Fire_same";
-  device.write("Changed", Changed);
+  device.write("Changed", changed);
   Serial.print(F("CMD "));
   Serial.println(command);
 }
@@ -188,14 +188,14 @@ void setup()
 
   device.onCommand("WIDTHS", onWidths);
 
-  device.addSignal(F("Uptime"), &Uptime);
-  device.addSignal(F("Periodic"), &Periodic);
-  device.addSignal(F("Pushed"), &Pushed);
-  device.addSignal(F("ExplicitTS"), &ExplicitTS);
-  device.addSignal(F("Burst"), &Burst);
-  device.addSignal(F("Changed"), &Changed).writeAtInterval(BLAECK_OFF).writeOnChange(0);
+  device.addSignal(F("Uptime"), &uptime);
+  device.addSignal(F("Periodic"), &periodic);
+  device.addSignal(F("Pushed"), &pushed);
+  device.addSignal(F("ExplicitTS"), &explicitTS);
+  device.addSignal(F("Burst"), &burst);
+  device.addSignal(F("Changed"), &changed).writeAtInterval(BLAECK_OFF).writeOnChange(0);
 
-  device.addSelect(F("TimestampMode"), &TimestampModeIdx,
+  device.addSelect(F("TimestampMode"), &timestampModeIdx,
                    F("PC,MICROS,UNIX_calibrated,UNIX_no_callback"), onTimestampMode);
 
   device.addButton("Fire_push", onFirePush);
@@ -210,7 +210,7 @@ void setup()
 
 void loop()
 {
-  Uptime = millis() / 1000UL;
-  Periodic++;
+  uptime = millis() / 1000UL;
+  periodic++;
   device.tick();
 }

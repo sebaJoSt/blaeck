@@ -44,10 +44,10 @@ long pRepeats = 0;
 char status[40] = "";
 
 // Signals, so a logging session has something to log.
-unsigned long Uptime = 0;
+unsigned long uptime = 0;
 
 // Every accepted command bumps this. A refused one must leave it alone.
-unsigned long Accepted = 0;
+unsigned long accepted = 0;
 
 int checks = 0;
 int failures = 0;
@@ -63,7 +63,7 @@ void Check(const __FlashStringHelper *what, bool ok)
 // One line per accepted command, in a shape a driver can parse: CMD <name> <value>
 void Accept(const char *command, const char *value)
 {
-  Accepted++;
+  accepted++;
   Serial.print(F("CMD "));
   Serial.print(command);
   Serial.print(' ');
@@ -119,7 +119,7 @@ void onSecret() { Accept("T_secret", tSecret); }
 
 void onPing()
 {
-  snprintf(status, sizeof(status), "alive, %lu accepted", Accepted + 1);
+  snprintf(status, sizeof(status), "alive, %lu accepted", accepted + 1);
   Accept("B_ping", "pressed");
 }
 
@@ -176,7 +176,7 @@ void setup()
   device.withHWVersion(HARNESS_BOARD);
   device.withFWVersion(F("1.0"));
 
-  device.addSignal(F("Uptime"), &Uptime);
+  device.addSignal(F("Uptime"), &uptime);
   device.addSignal(F("Level"), &nLevel);
   device.addSignal(F("Flag"), &sFlag);
 
@@ -218,7 +218,7 @@ void setup()
       .withMode(BLAECK_TEXT_MODE_PASSWORD);
 
   // ---- R: sensors, which a host cannot set -----------------------------------------------
-  device.addSensor(F("R_uptime"), &Uptime);
+  device.addSensor(F("R_uptime"), &uptime);
   device.addSensor(F("Status"), status, sizeof(status));
 
   device.onCommand("WIDTHS", onWidths);
@@ -238,7 +238,7 @@ void RunLocalChecks()
   if (device.hasRejections())
     device.printRejections(&Serial);
 
-  Check(F("nothing accepted before a host sends anything"), Accepted == 0);
+  Check(F("nothing accepted before a host sends anything"), accepted == 0);
   Check(F("defaults intact: nInt"), nInt == 0);
   Check(F("defaults intact: sEnabled"), sEnabled == false);
   Check(F("defaults intact: lWave"), lWave == 0);
@@ -254,6 +254,6 @@ void RunLocalChecks()
 
 void loop()
 {
-  Uptime = millis() / 1000UL;
+  uptime = millis() / 1000UL;
   device.tick();
 }

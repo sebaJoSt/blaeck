@@ -24,7 +24,7 @@ Blaeck device;
 
 // A host that refuses to log with zero signals declared needs one to have something to do;
 // what it says is not this harness's question.
-unsigned long Uptime = 0;
+unsigned long uptime = 0;
 
 // The board this was built for, so a recording says which one produced it.
 #if defined(ARDUINO_GIGA)
@@ -114,7 +114,7 @@ void setup()
 
   device.onCommand("WIDTHS", onWidths);
 
-  device.addSignal(F("Uptime"), &Uptime);
+  device.addSignal(F("Uptime"), &uptime);
 
   // ---- Bare, no modifiers --------------------------------------------------------------------
   device.addEvent(F("Bare"), F("first,second"));
@@ -168,6 +168,6 @@ void setup()
 
 void loop()
 {
-  Uptime = millis() / 1000UL;
+  uptime = millis() / 1000UL;
   device.tick();
 }

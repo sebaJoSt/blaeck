@@ -20,8 +20,8 @@
 
 Blaeck device;
 
-unsigned long Uptime = 0;
-bool HasOptionalHardware = true;
+unsigned long uptime = 0;
+bool hasOptionalHardware = true;
 
 int checks = 0;
 int failures = 0;
@@ -85,7 +85,7 @@ void setup()
   device.withHWVersion(HARNESS_BOARD);
   device.withFWVersion(F("1.0"));
 
-  device.addSignal(F("Uptime"), &Uptime);
+  device.addSignal(F("Uptime"), &uptime);
 
   // Plain, and the event the driver sends most of its events to.
   device.addEvent(F("Activity"), F("idle,resumed,stopped"));
@@ -180,7 +180,7 @@ void RunLocalChecks()
 
   // Appending is how a board declares a type it only has when the hardware is fitted.
   bool appended = false;
-  if (HasOptionalHardware)
+  if (hasOptionalHardware)
     appended = device.addEventType(F("Faults"), F("overheat"));
   Check(F("addEventType appends to a declared event"), appended);
 
@@ -204,6 +204,6 @@ void RunLocalChecks()
 
 void loop()
 {
-  Uptime = millis() / 1000UL;
+  uptime = millis() / 1000UL;
   device.tick();
 }
