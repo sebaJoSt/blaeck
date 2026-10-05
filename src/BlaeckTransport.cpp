@@ -338,7 +338,6 @@ void Blaeck::_builtinCommandReceived()
   // Released before anything is printed, so neither host receives the lines as Terminal text.
   if (previous != NO_HOST)
     _releaseConnection(previous);
-  _resetReportingBaselines();
   if (_debugStream != nullptr)
   {
     _debugStream->print(F("Client #"));

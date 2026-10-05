@@ -38,8 +38,8 @@ signal is included when the host's interval is due.
 With these default policies, no data is sent until a host activates interval reporting:
 
 ```
-<BLAECK.ACTIVATE,1000>      one reading per second
-<BLAECK.DEACTIVATE>         stop interval reporting
+<BLAECK.INTERVAL_START,1000>   one reading per second
+<BLAECK.INTERVAL_STOP>         stop interval reporting
 ```
 
 Loggbok sends these for you. You can also type them into the serial monitor; the replies
@@ -60,7 +60,8 @@ That is worth doing to show the interval on a sensor, or to remember it across a
 ## Sending when something happens
 
 Explicit writes bypass the signal's automatic policies and change thresholds. They work
-without ACTIVATE but still honor pause/resume writes.
+without INTERVAL_START, but nothing goes out while data is stopped
+(see [Starting and stopping what the board sends](#starting-and-stopping-what-the-board-sends)).
 
 `writeAll()` sends every signal now:
 
@@ -139,11 +140,11 @@ device.addSignal(F("Temperature"), &temperature)
 | `writeAtInterval(BLAECK_ON_CHANGE, delta)` | Send if it differs enough from the last sent value |
 | `writeAtInterval(BLAECK_OFF)` | Do not include it |
 
-Every `ACTIVATE` makes an initial interval report immediately due. It includes all
+Every `INTERVAL_START` makes an initial interval report immediately due. It includes all
 interval-enabled signals, without change filtering, even if they were sent before.
-This also applies when `ACTIVATE` changes the interval while already active. Later
-intervals apply the policies above normally. If writes are paused, the initial report
-waits until they resume.
+This also applies when `INTERVAL_START` changes the interval while already running. Later
+intervals apply the policies above normally. If data is stopped, the initial report
+waits until `DATA_START`.
 
 The initial report updates each included signal's shared baseline and rate-limit clock
 normally. It does not reset or force signals with `writeAtInterval(BLAECK_OFF)`; their
@@ -162,8 +163,8 @@ device.addSignal(F("Temperature"), &temperature)
 ```
 
 `writeOnChange(delta, minIntervalMs)` checks the current value on every `tick()`. The threshold is required; the minimum interval defaults to 100 ms.
-It is a rate limit since the last report, not a debounce timer. It works without ACTIVATE,
-and DEACTIVATE does not stop it. Pause/resume writes still governs all data reporting.
+It is a rate limit since the last report, not a debounce timer. It works without
+INTERVAL_START, and INTERVAL_STOP does not stop it. DATA_STOP does.
 
 Use `writeOnChange(BLAECK_ANY_CHANGE)` to report any difference from the last sent value,
 still subject to the minimum interval. Numeric zero remains equivalent; it does not turn
@@ -217,7 +218,8 @@ debug stream and `hasRejections()` / `printRejections()`. A failed policy change
 previous policy intact; a text-buffer allocation failure sends no partial data frame.
 
 The first eligible report sends an initial value without applying its threshold or rate
-limit. Baselines are not persisted across restart, and a new TCP host session refreshes them.
+limit. Baselines are not persisted across restart. `DATA_START` clears them too, so a host
+that starts logging gets every on-change value at the next `tick()`, changed or not.
 Initialize registered variables before servicing reporting. A locally accepted frame advances
 the baseline; a short transport write invalidates affected baselines so they can be retried.
 This is not an acknowledgment that the host received or stored the data.
@@ -248,6 +250,42 @@ The function runs when a host interval is due, even if filtering leaves nothing 
 It also runs for explicit or host-requested `writeAll()`. It does not run for single-signal
 `write()` or the every-tick immediate change check; refresh those variables in your sketch.
 It runs in normal `loop()` context, not an interrupt.
+
+## Starting and stopping what the board sends
+
+A host controls what the board sends on its own, in two parts, and the interval:
+
+```
+<BLAECK.DATA_START>          send data frames; every on-change value is sent again
+<BLAECK.DATA_STOP>           stop the interval, then send no data frames
+<BLAECK.ENTITIES_START>      send property changes and events
+<BLAECK.ENTITIES_STOP>       send no property changes or events
+```
+
+While data is stopped, the board sends no data frames (`tick()`, `write()`, `writeAll()`).
+While entities are stopped, it sends no property changes or events; changed properties go out
+after `ENTITIES_START`, events are lost. Device notices and catalog updates are not affected.
+Answers to a command always go out: its acknowledgement, the device list, the data for
+`WRITE_DATA`, the new value of a property the host sets, and whatever the sketch writes while
+handling it.
+
+A host that is about to close the connection sends both stops and waits until the board is
+quiet, so the port isn't closed in the middle of a frame.
+
+After a restart both are on, so a plain serial monitor sees data without asking.
+
+The sketch can follow these commands with callbacks:
+
+```cpp
+device.onDataStart([]() { digitalWrite(LED_BUILTIN, HIGH); });
+device.onDataStop([]() { digitalWrite(LED_BUILTIN, LOW); });
+device.onIntervalStart([](uint32_t intervalMs) { /* ... */ });
+device.onIntervalStop([]() { /* ... */ });
+```
+
+Each runs on every matching command, even if nothing changes, and after the
+acknowledgement. `DATA_STOP` calls `onIntervalStop` first if the interval was running,
+then `onDataStop`; what that callback writes still goes out. None runs at restart.
 
 ## Timestamps
 

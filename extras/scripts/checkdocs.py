@@ -120,7 +120,7 @@ KNOWN_ELSEWHERE = {
 }
 
 # A call, not an English parenthetical: no space before the paren. "a float (32-bit)"
-# and "in ms (ACTIVATE ignored)" are prose and would otherwise be read as calls.
+# and "in ms (INTERVAL_START ignored)" are prose and would otherwise be read as calls.
 CALL = re.compile(r"\b([a-zA-Z_]\w*)\([^)\n]*\)")
 
 SENTENCE = re.compile(r"(?<=[.!?])\s+")

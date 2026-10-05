@@ -158,7 +158,7 @@ class Driver:
         return frames
 
     def reset(self, buffered):
-        self.expect("deactivate", None, "SYNC", builtin="DEACTIVATE")
+        self.expect("interval stop", None, "SYNC", builtin="INTERVAL_STOP")
         self.expect("reset", None, "RESET", int(buffered))
 
     def set(self, index, value):
@@ -171,9 +171,9 @@ class Driver:
 def run(driver, buffered):
     print(f"\n--- {'buffered' if buffered else 'direct'} writes ---")
     driver.reset(buffered)
-    driver.expect("initial values without ACTIVATE", {2: 0, 3: 0, 4: False, 5: "", 6: 0, 7: 0, 8: 0})
+    driver.expect("initial values without INTERVAL_START", {2: 0, 3: 0, 4: False, 5: "", 6: 0, 7: 0, 8: 0})
     driver.expect("equal values suppressed", None)
-    driver.expect("activate does not poll", None, "SYNC", builtin="ACTIVATE,0")
+    driver.expect("interval start does not poll", None, "SYNC", builtin="INTERVAL_START,0")
     driver.expect("initial interval includes previously sent combined value", {0: 0, 1: 0, 3: 0}, interval=True)
     driver.set(1, 0.25)
     driver.expect("below interval threshold", {0: 0}, interval=True)
@@ -186,7 +186,7 @@ def run(driver, buffered):
     driver.set(2, 1)
     driver.set(3, 1)
     driver.expect("both paths merge without duplicates", {0: 0, 2: 1, 3: 1}, interval=True)
-    driver.expect("DEACTIVATE stops only intervals", None, "SYNC", builtin="DEACTIVATE")
+    driver.expect("INTERVAL_STOP stops only intervals", None, "SYNC", builtin="INTERVAL_STOP")
     driver.wait(1100)
     driver.set(2, 2)
     driver.expect("immediate remains active", {2: 2})
@@ -203,11 +203,14 @@ def run(driver, buffered):
     driver.wait(1100)
     driver.expect("changed since explicit write", {2: 11})
 
-    driver.expect("pause", None, "SYNC", builtin="PAUSE_WRITES,FOREVER")
+    driver.expect("data stop", None, "SYNC", builtin="DATA_STOP")
     driver.set(4, 1)
-    driver.expect("paused change not consumed", None)
-    driver.expect("resume", None, "SYNC", builtin="RESUME_WRITES")
-    driver.expect("boolean ignores numeric threshold", {4: True})
+    driver.expect("stopped change not sent", None)
+    driver.expect("data start", None, "SYNC", builtin="DATA_START")
+    driver.expect("data start resends every on-change value",
+                  {2: 11, 3: 1, 4: True, 5: "", 6: 0, 7: 0, 8: 0})
+    driver.set(4, 0)
+    driver.expect("boolean ignores numeric threshold", {4: False})
     driver.expect("boolean equal suppressed", None)
     driver.expect("grow text", None, "TEXT", 270, "a")
     driver.expect("exact 255-byte text snapshot", {5: "a" * 255})
@@ -229,8 +232,8 @@ def run(driver, buffered):
         driver.expect("stable floating-point representation", None)
 
     driver.expect("enable callback", None, "CALLBACK", 1)
-    driver.expect("activate long interval", None, "SYNC", builtin="ACTIVATE,1000")
-    driver.expect("reactivation refreshes all interval values", {0: 0, 1: 0.5, 3: 1}, interval=True)
+    driver.expect("start long interval", None, "SYNC", builtin="INTERVAL_START,1000")
+    driver.expect("restarting the interval refreshes all interval values", {0: 0, 1: 0.5, 3: 1}, interval=True)
     anchor = driver.millis
     assert driver.callbacks == 1
     driver.expect("no callback between intervals", None)
@@ -243,11 +246,11 @@ def run(driver, buffered):
     driver.expect("explicit write does not move interval cadence", {0: 0, 3: 10.5}, interval=True)
     assert 1000 <= (driver.millis - anchor) % (1 << 32) < 1600, "Host too slow for cadence precondition"
     assert driver.callbacks == 2
-    all_values = {0: 0, 1: 0.5, 2: 11, 3: 10.5, 4: True, 5: "", 6: 2147483646, 7: 0, 8: 0}
+    all_values = {0: 0, 1: 0.5, 2: 11, 3: 10.5, 4: False, 5: "", 6: 2147483646, 7: 0, 8: 0}
     frames = driver.expect("requested snapshot includes OFF signals", all_values, "SYNC", builtin="WRITE_DATA", requested=True)
     assert frames[0]["flags"] & 2 and driver.callbacks == 3
     driver.expect("full snapshot refreshed all baselines", None)
-    driver.expect("disable interval", None, "SYNC", builtin="DEACTIVATE")
+    driver.expect("disable interval", None, "SYNC", builtin="INTERVAL_STOP")
     driver.expect("immediate-only check does not call callback", None)
     assert driver.callbacks == 3
 

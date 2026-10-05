@@ -33,25 +33,6 @@
 //   PlatformIO:   build_flags = -DBLAECK_COMMAND_MAX_CHARS_DEFAULT=128
 //   Arduino IDE:  a config header in the sketch folder is not found without extra setup.
 //                 detail/BlaeckDefaults.h loads it, and docs/configuration.md lists the ways.
-// Paused writes
-// -------------
-// BLAECK.PAUSE_WRITES,<ms> holds back every frame for that long, so a host can disconnect
-// while the board is quiet. On native-USB boards such as the Giga R1, closing the port
-// mid-transmission kills the USB endpoint until the board is reset.
-//
-// The pause ends on its own; BLAECK.RESUME_WRITES ends it early. No duration, or 0, means
-// the default, and longer requests are capped at the maximum, so a host that disappears
-// cannot silence a board for long.
-//
-// BLAECK.PAUSE_WRITES,FOREVER has no cap and lasts until RESUME_WRITES or a reset.
-#ifndef BLAECK_PAUSE_WRITES_DEFAULT_MS
-  #define BLAECK_PAUSE_WRITES_DEFAULT_MS 1000UL
-#endif
-
-#ifndef BLAECK_PAUSE_WRITES_MAX_MS
-  #define BLAECK_PAUSE_WRITES_MAX_MS 10000UL
-#endif
-
 #ifndef BLAECK_COMMAND_MAX_CHARS_DEFAULT
   // Command buffer bytes, including the terminator. 128 fits a 32-byte text value even
   // when percent-encoded. There are two fixed buffers plus one per allocated TCP slot,
@@ -85,13 +66,12 @@ static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
 #define BLAECK_BUILTIN_WRITE_DATA "BLAECK.WRITE_DATA"
 #define BLAECK_BUILTIN_GET_DEVICES "BLAECK.GET_DEVICES"
 #define BLAECK_BUILTIN_WRITE_ENTITIES "BLAECK.WRITE_ENTITIES"
-#define BLAECK_BUILTIN_ACTIVATE "BLAECK.ACTIVATE"
-#define BLAECK_BUILTIN_DEACTIVATE "BLAECK.DEACTIVATE"
-#define BLAECK_BUILTIN_PAUSE_WRITES "BLAECK.PAUSE_WRITES"
-#define BLAECK_BUILTIN_RESUME_WRITES "BLAECK.RESUME_WRITES"
-
-// The PAUSE_WRITES argument that means no time limit. Matched in capitals only.
-#define BLAECK_PAUSE_WRITES_FOREVER "FOREVER"
+#define BLAECK_BUILTIN_INTERVAL_START "BLAECK.INTERVAL_START"
+#define BLAECK_BUILTIN_INTERVAL_STOP "BLAECK.INTERVAL_STOP"
+#define BLAECK_BUILTIN_DATA_START "BLAECK.DATA_START"
+#define BLAECK_BUILTIN_DATA_STOP "BLAECK.DATA_STOP"
+#define BLAECK_BUILTIN_ENTITIES_START "BLAECK.ENTITIES_START"
+#define BLAECK_BUILTIN_ENTITIES_STOP "BLAECK.ENTITIES_STOP"
 
 // Sent as the device name when the sketch sets none.
 #define BLAECK_DEVICE_NAME_UNNAMED "Unnamed"
@@ -100,10 +80,12 @@ static_assert(BLAECK_COMMAND_MAX_CHARS_DEFAULT >= 1 &&
   X(BLAECK_BUILTIN_WRITE_DATA)          \
   X(BLAECK_BUILTIN_GET_DEVICES)         \
   X(BLAECK_BUILTIN_WRITE_ENTITIES)      \
-  X(BLAECK_BUILTIN_ACTIVATE)            \
-  X(BLAECK_BUILTIN_DEACTIVATE)          \
-  X(BLAECK_BUILTIN_PAUSE_WRITES)        \
-  X(BLAECK_BUILTIN_RESUME_WRITES)
+  X(BLAECK_BUILTIN_INTERVAL_START)      \
+  X(BLAECK_BUILTIN_INTERVAL_STOP)       \
+  X(BLAECK_BUILTIN_DATA_START)          \
+  X(BLAECK_BUILTIN_DATA_STOP)           \
+  X(BLAECK_BUILTIN_ENTITIES_START)      \
+  X(BLAECK_BUILTIN_ENTITIES_STOP)
 
 
 #ifndef BLAECK_USB_PACKET_BYTES
@@ -854,7 +836,7 @@ public:
     BLAECK_ALWAYS is the default. BLAECK_ON_CHANGE compares against the last sent
     value when the interval is due. BLAECK_OFF excludes this signal from interval
     reports. This replaces the interval policy, independently of writeOnChange().
-    Every ACTIVATE makes an initial interval report due: all interval-enabled
+    Every INTERVAL_START makes an initial interval report due: all interval-enabled
     signals are included, without change filtering, even when already active.
     Explicit writes bypass both policies and update their shared baseline.
 
@@ -2314,7 +2296,7 @@ public:
 
     First it runs any command that has arrived: the built-in BLAECK.* commands, an
     input's new value, a button or the sketch's handlers. Then it sends the signals
-    whose reporting is due - on the host's interval once it has sent ACTIVATE, and
+    whose reporting is due - on the host's interval once it has sent INTERVAL_START, and
     signals with writeOnChange() as they change - and the inputs and sensors that
     changed. Nothing is sent when nothing is due.
 
@@ -2338,7 +2320,7 @@ public:
   /*!
     @brief   Returns the data interval in milliseconds, as the host set it.
 
-    Only the host sets it, with BLAECK.ACTIVATE.
+    Only the host sets it, with BLAECK.INTERVAL_START.
 
     @return  The interval. Only meaningful while isTimedDataActive() is true.
 
@@ -2351,7 +2333,8 @@ public:
   /*!
     @brief   Reports whether the host has switched timed data on.
 
-    @return  True after BLAECK.ACTIVATE, until BLAECK.DEACTIVATE.
+    @return  True after BLAECK.INTERVAL_START, until BLAECK.INTERVAL_STOP or
+             BLAECK.DATA_STOP.
 
     @code
       if (!device.isTimedDataActive())
@@ -2585,6 +2568,60 @@ public:
   void onBeforeWrite(void (*callback)());
 
   /*!
+    @brief   Sets a function to call when the host sends BLAECK.DATA_START.
+
+    The host sends it when it starts receiving data, such as when logging starts. By then
+    the board sends data again and every writeOnChange() signal is due to send its current
+    value, so a write() here, of an Explicit signal for example, goes out too. It is not
+    called after a restart; setup() runs then.
+
+    @param   callback  The function, or nullptr to remove it.
+
+    @code
+      device.onDataStart([]() { device.write("Mode", mode); });
+    @endcode
+  */
+  void onDataStart(void (*callback)());
+
+  /*!
+    @brief   Sets a function to call when the host sends BLAECK.DATA_STOP.
+
+    Runs before the board stops sending data on its own, so a last write() still goes
+    out. A host that crashes or loses the link never sends it, so don't use it to make
+    anything safe.
+
+    @param   callback  The function, or nullptr to remove it.
+
+    @code
+      device.onDataStop([]() { device.Terminal.println(F("stopped")); });
+    @endcode
+  */
+  void onDataStop(void (*callback)());
+
+  /*!
+    @brief   Sets a function to call when the host sends BLAECK.INTERVAL_START.
+
+    @param   callback  Receives the interval in milliseconds; nullptr removes it.
+
+    @code
+      device.onIntervalStart([](uint32_t ms) { sensor.setAveraging(ms); });
+    @endcode
+  */
+  void onIntervalStart(void (*callback)(uint32_t intervalMs));
+
+  /*!
+    @brief   Sets a function to call when the interval stops: on BLAECK.INTERVAL_STOP, and
+             on BLAECK.DATA_STOP while the interval runs.
+
+    @param   callback  The function, or nullptr to remove it.
+
+    @code
+      device.onIntervalStop(stopSampling);
+    @endcode
+  */
+  void onIntervalStop(void (*callback)());
+
+  /*!
     @brief   Sets whether and how data is timestamped.
 
     BLAECK_NO_TIMESTAMP, the default, sends none and the host uses arrival time.
@@ -2811,7 +2848,7 @@ protected:
   // Handles an incoming command, if one has arrived; sends no data.
   void read();
   // Sends the signals and properties whose reporting is due. The first interval after every
-  // ACTIVATE includes every interval signal without change filtering.
+  // INTERVAL_START includes every interval signal without change filtering.
   void writeIfDue(unsigned long long timestamp = BLAECK_NOW);
 
   void _setBufferedWritesDefault(bool enabled);
@@ -3088,47 +3125,23 @@ protected:
       _bufAllocate();
     return _frameBuf != nullptr;
   }
-  bool _writesPaused = false;
-  bool _writesPausedForever = false;
-  unsigned long _writesPausedUntil = 0;
+  // Set by DATA_STOP, cleared by DATA_START. Answers to commands go out either way.
+  bool _dataStopped = false;
+  // Set by ENTITIES_STOP, cleared by ENTITIES_START. Answers to commands go out either way.
+  bool _entitiesStopped = false;
+  // Set while a command is handled, so whatever it causes goes out even when stopped.
+  bool _answering = false;
 
-  // Checked once per frame, when it opens, so a pause never cuts a frame in half.
-  bool _mayWriteFrame()
-  {
-    if (!_transportReady())
-      return false;
+  // Checked once per frame, when it opens.
+  bool _mayWriteFrame() { return _transportReady(); }
 
-    if (_writesPausedForever)
-      return false;
+  // For data frames the board sends on its own. Held back after DATA_STOP, unless a command
+  // caused them.
+  bool _mayWriteData() { return (!_dataStopped || _answering) && _mayWriteFrame(); }
 
-    if (_writesPaused)
-    {
-      // Signed difference, so this survives the millis() rollover.
-      if ((long)(millis() - _writesPausedUntil) < 0)
-        return false;
-
-      _writesPaused = false;
-    }
-
-    return true;
-  }
-
-  void _setWritesPaused(unsigned long ms)
-  {
-    if (ms == 0)
-      ms = BLAECK_PAUSE_WRITES_DEFAULT_MS;
-    if (ms > BLAECK_PAUSE_WRITES_MAX_MS)
-      ms = BLAECK_PAUSE_WRITES_MAX_MS;
-
-    _writesPaused = true;
-    _writesPausedUntil = millis() + ms;
-  }
-
-  void _setWritesPausedForever()
-  {
-    _writesPausedForever = true;
-    _writesPaused = false;
-  }
+  // For property changes and events the board sends on its own. Held back after ENTITIES_STOP,
+  // unless a command caused them. Device notices and catalogs are not affected.
+  bool _mayWriteEntityFrame() { return (!_entitiesStopped || _answering) && _mayWriteFrame(); }
 
   // The board's name, or "Unnamed" when none or an empty one is set.
   BlaeckString _deviceName() const
@@ -3137,12 +3150,6 @@ protected:
     return (name == nullptr || name.read(0) == 0)
                ? BlaeckString(BLAECK_DEVICE_NAME_UNNAMED)
                : name;
-  }
-
-  void _clearWritesPaused()
-  {
-    _writesPaused = false;
-    _writesPausedForever = false;
   }
 
   bool _bufEnsure(size_t addLen);
@@ -3172,7 +3179,7 @@ protected:
   // Set between the start and the end marker, where <, \, CR and LF are escaped.
   bool _frameEscaped = false;
 
-  // Starts a frame. False if no frame may be written (no host yet, or writes paused).
+  // Starts a frame. False if no frame may be written (no host yet).
   bool _frameOpen(byte msgKey, unsigned long msgId);
   // False if buffering failed or the transport did not accept every byte.
   bool _frameClose();
@@ -3420,6 +3427,10 @@ protected:
   void writeEntitiesFrame(unsigned long messageID);
 
   void (*_beforeWriteCallback)() = nullptr;
+  void (*_dataStartCallback)() = nullptr;
+  void (*_dataStopCallback)() = nullptr;
+  void (*_intervalStartCallback)(uint32_t intervalMs) = nullptr;
+  void (*_intervalStopCallback)() = nullptr;
 
   BlaeckTimestampMode _timestampMode = BLAECK_NO_TIMESTAMP;
   unsigned long long (*_timestampCallback)() = nullptr;

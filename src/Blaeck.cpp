@@ -1113,6 +1113,7 @@ void Blaeck::read()
 
   if (_receiveCommand())
   {
+    _answering = true;
     // Parsed once, for both the built-ins and the registered handlers.
     _parseCommandTokens(_receiver.chars);
     // Before the truncation check, so even a cut-off built-in counts.
@@ -1155,7 +1156,7 @@ void Blaeck::read()
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
         this->writeEntities(msg_id);
       }
-      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_ACTIVATE)))
+      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_INTERVAL_START)))
       {
         // strtoul, because atoi is 16-bit on AVR.
         unsigned long timedInterval_ms = 0;
@@ -1163,33 +1164,46 @@ void Blaeck::read()
           timedInterval_ms = strtoul(_parsedParamPtrs[0], nullptr, 10);
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
         this->_setTimedDataState(true, timedInterval_ms);
+        if (_intervalStartCallback != nullptr)
+          _intervalStartCallback((uint32_t)_timedInterval_ms);
       }
-      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_DEACTIVATE)))
+      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_INTERVAL_STOP)))
       {
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
         this->_setTimedDataState(false, _timedInterval_ms);
+        if (_intervalStopCallback != nullptr)
+          _intervalStopCallback();
       }
-      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_PAUSE_WRITES)))
+      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_DATA_START)))
       {
-        // Check for the word first; strtoul would read it as 0, the default duration.
-        bool forever = _parsedParamCount > 0 && _parsedParamPtrs[0] != nullptr &&
-                       equalsFlash(_parsedParamPtrs[0], F(BLAECK_PAUSE_WRITES_FOREVER));
-
-        unsigned long pause_ms = 0;
-        if (!forever && _parsedParamCount > 0 && _parsedParamPtrs[0] != nullptr)
-          pause_ms = strtoul(_parsedParamPtrs[0], nullptr, 10);
-        // Acknowledge before pausing, or the ack itself would be held back.
+        // Every writeOnChange() signal sends its current value at the next tick.
+        _dataStopped = false;
+        _resetReportingBaselines();
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
-
-        if (forever)
-          this->_setWritesPausedForever();
-        else
-          this->_setWritesPaused(pause_ms);
+        if (_dataStartCallback != nullptr)
+          _dataStartCallback();
       }
-      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_RESUME_WRITES)))
+      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_DATA_STOP)))
       {
-        _clearWritesPaused();
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
+        const bool intervalWasRunning = _timedActivated;
+        this->_setTimedDataState(false, _timedInterval_ms);
+        if (intervalWasRunning && _intervalStopCallback != nullptr)
+          _intervalStopCallback();
+        // Still answering, so what the callback writes goes out.
+        if (_dataStopCallback != nullptr)
+          _dataStopCallback();
+        _dataStopped = true;
+      }
+      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_ENTITIES_START)))
+      {
+        _entitiesStopped = false;
+        _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
+      }
+      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_ENTITIES_STOP)))
+      {
+        _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
+        _entitiesStopped = true;
       }
       else
       {
@@ -1202,11 +1216,32 @@ void Blaeck::read()
 
   // Send any catalog a handler changed.
   _flushCatalogs();
+  _answering = false;
 }
 
 void Blaeck::onBeforeWrite(void (*callback)())
 {
   _beforeWriteCallback = callback;
+}
+
+void Blaeck::onDataStart(void (*callback)())
+{
+  _dataStartCallback = callback;
+}
+
+void Blaeck::onDataStop(void (*callback)())
+{
+  _dataStopCallback = callback;
+}
+
+void Blaeck::onIntervalStart(void (*callback)(uint32_t intervalMs))
+{
+  _intervalStartCallback = callback;
+}
+
+void Blaeck::onIntervalStop(void (*callback)())
+{
+  _intervalStopCallback = callback;
 }
 
 Blaeck &Blaeck::withName(BlaeckString name)
@@ -2398,7 +2433,7 @@ void Blaeck::_writeEvent(byte deviceId, const char *channelName, BlaeckString ev
 {
   // Layout: Event (0x85) in the protocol spec. The event's index counts the events of the
   // entity list, which lists them in table order.
-  if (!_mayWriteFrame())
+  if (!_mayWriteEntityFrame())
     return;
 
   // Send changed catalogs first. An event sent against an old list can't be corrected later.
@@ -2617,8 +2652,12 @@ void Blaeck::writeIfDue(unsigned long long timestamp)
     if (_signalIndex != 0 && _beforeWriteCallback != nullptr)
       _beforeWriteCallback();
   }
-  if (!_mayWriteFrame())
+  // Property changes don't depend on DATA_STOP; only data waits.
+  if (!_mayWriteData())
+  {
+    _writeChangedProperties();
     return;
+  }
   if (intervalDue)
     _timedFirstTime = false;
 
@@ -2897,7 +2936,7 @@ void Blaeck::writeDevicesFrame(unsigned long msg_id)
 
 void Blaeck::writeDataFrame(unsigned long msg_id, int signalIndex_start, int signalIndex_end, bool selectedOnly, unsigned long long timestamp, bool intervalReport)
 {
-  if (!_mayWriteFrame())
+  if (!_mayWriteData())
     return;
 
   // Clamp the range.
@@ -3892,7 +3931,7 @@ bool Blaeck::_writePropertyFrame(uint16_t index)
   (void)index;
   return false;
 #endif
-  if (!_mayWriteFrame() || index >= _propertyCount)
+  if (!_mayWriteEntityFrame() || index >= _propertyCount)
     return false;
   // A host must know the property before a value of it arrives.
   _flushCatalogs();

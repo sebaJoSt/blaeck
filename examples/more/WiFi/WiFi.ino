@@ -13,8 +13,8 @@
     board's address.
 
     Connect Loggbok, or another Blaeck host, to that address on port 23. It asks for
-    the data with <BLAECK.ACTIVATE,1000> (one frame a second) and stops it with
-    <BLAECK.DEACTIVATE>.
+    the data with <BLAECK.DATA_START> and <BLAECK.INTERVAL_START,1000> (one frame
+    a second), and stops it with <BLAECK.DATA_STOP>.
 
     To watch what the device does, connect a telnet client such as PuTTY to the same
     address and port. It shows connections, the commands that arrive, and anything the

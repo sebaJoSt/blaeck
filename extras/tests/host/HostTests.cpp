@@ -22,6 +22,12 @@ class TestBlaeck : public Blaeck
 public:
   using Blaeck::read;
   using Blaeck::writeIfDue;
+  // Points a text signal elsewhere without writing it, so the baseline stays as it was.
+  void retargetText(int index, const void *value, bool inFlash)
+  {
+    Signals[index].Address = const_cast<void *>(value);
+    Signals[index].TextInFlash = inFlash;
+  }
 };
 
 static_assert(!std::is_polymorphic<Blaeck>::value, "Blaeck needs no virtual transport hooks");
@@ -1082,26 +1088,19 @@ static void flashSignalText(bool buffered)
     expectData(stream, {-1}, {});
 
     signal.writeAtInterval(BLAECK_ON_CHANGE, BLAECK_ANY_CHANGE);
-    command(device, stream, "<BLAECK.ACTIVATE,1000>");
+    command(device, stream, "<BLAECK.INTERVAL_START,1000>");
     device.writeIfDue();
     expectText("", 99);
-    command(device, stream, "<BLAECK.PAUSE_WRITES,FOREVER>");
-    device.write(F("Status"), F("Paused"));
-    expectData(stream, {-1}, {});
-    command(device, stream, "<BLAECK.RESUME_WRITES>");
+    device.retargetText(0, F("Paused"), true);
     hostMillis() = 1000;
     device.writeIfDue();
     expectText("Paused", 99);
-    command(device, stream, "<BLAECK.PAUSE_WRITES,FOREVER>");
     strcpy(ram, "Paused");
-    device.write(F("Status"), ram);
-    command(device, stream, "<BLAECK.RESUME_WRITES>");
+    device.retargetText(0, ram, false);
     hostMillis() = 2000;
     device.writeIfDue();
     expectData(stream, {-1}, {}); // Equal RAM text matches the previous flash snapshot.
-    command(device, stream, "<BLAECK.PAUSE_WRITES,FOREVER>");
-    device.write(F("Status"), F("Paused"));
-    command(device, stream, "<BLAECK.RESUME_WRITES>");
+    device.retargetText(0, F("Paused"), true);
     hostMillis() = 3000;
     device.writeIfDue();
     expectData(stream, {-1}, {}); // Equal flash text does not compare pointer addresses.
@@ -1419,12 +1418,11 @@ static void beginOnlyOnce()
     };
     receive("<BLAECK.GET_DEVICES>");
     device.read(); // Send the boot notice before testing that it is not repeated.
-    receive("<BLAECK.ACTIVATE,1000>");
+    receive("<BLAECK.INTERVAL_START,1000>");
     device.writeIfDue();
     auto frames = takeData(io.output, {4, 4});
     assert(frames.size() == 1 && frames[0].ids == std::vector<int>({0, 1}));
-    receive("<BLAECK.PAUSE_WRITES,FOREVER>");
-    receive("<BLAECK.RESUME_");
+    receive("<BLAECK.GET_");
     io.output.clear();
 
     if (ended)
@@ -1455,7 +1453,8 @@ static void beginOnlyOnce()
     }
 
     assert(io.open);
-    receive("WRITES>"); // The original receiver's partial command survived.
+    receive("DEVICES>"); // The original receiver's partial command survived.
+    assert(unescaped(io.output).find(std::string("<BLAECK:") + char(0xA5)) != std::string::npos);
     device.writeIfDue();
     assert(otherStream.data.output.empty());
     assert(takeData(io.output, {4, 4}).empty()); // No baseline reset.
@@ -1672,7 +1671,7 @@ static void subDevices(bool buffered)
   stream.data.output.clear();
 
   const std::vector<int> widths = {4, 4, 4, 4};
-  command(device, stream, "<BLAECK.ACTIVATE,0>");
+  command(device, stream, "<BLAECK.INTERVAL_START,0>");
   stream.data.output.clear();
   device.writeIfDue();
   // Numbered in device list order: the board's BoardValue 0 and Orphan 1, the pump's Flow 2 and
@@ -1744,7 +1743,7 @@ static void subDevices(bool buffered)
   stream.data.output.clear();
 
   // After a gap, a changed-only signal is sent again even if its value did not change.
-  command(device, stream, "<BLAECK.DEACTIVATE>");
+  command(device, stream, "<BLAECK.INTERVAL_STOP>");
   stream.data.output.clear();
   TestBlaeck changes;
   FakeStream changesStream;
@@ -1888,7 +1887,7 @@ static void defaultTimestamps()
   assert(frames.size() == 1 && frames[0].timestamp == 42);
 
   // tick() passes its timestamp to the due interval report.
-  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  command(device, stream, "<BLAECK.INTERVAL_START,1000>");
   stream.data.output.clear();
   device.tick(99ULL);
   frames = takeData(stream.data.output, widths);
@@ -2796,7 +2795,7 @@ static void reportingPolicies(bool buffered)
   expectData(stream, widths, {2, 3}); // no activation; first values bypass rate limit
   device.tick();
   expectData(stream, widths, {});
-  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  command(device, stream, "<BLAECK.INTERVAL_START,1000>");
   device.writeIfDue();
   expectData(stream, widths, {0, 1, 3});
   hostMillis() = 99;
@@ -2817,20 +2816,20 @@ static void reportingPolicies(bool buffered)
   expectData(stream, widths, {0, 1, 2, 3}); // one frame, no duplicate combined signal
   filtered = 22;
   filtered = 20.5f; // excursion between snapshots is not remembered
-  command(device, stream, "<BLAECK.DEACTIVATE>");
+  command(device, stream, "<BLAECK.INTERVAL_STOP>");
   change = 23;
   hostMillis() = 2100;
   device.writeIfDue();
   expectData(stream, widths, {2});
-  command(device, stream, "<BLAECK.PAUSE_WRITES,FOREVER>");
+  command(device, stream, "<BLAECK.DATA_STOP>");
   stream.data.output.clear();
   change = 24;
   hostMillis() = 4000;
   device.tick();
   expectData(stream, widths, {});
-  command(device, stream, "<BLAECK.RESUME_WRITES>");
+  command(device, stream, "<BLAECK.DATA_START>");
   device.writeIfDue();
-  expectData(stream, widths, {2});
+  expectData(stream, widths, {2, 3}); // reset baselines: every writeOnChange() signal sends
   command(device, stream, "<BLAECK.WRITE_DATA>");
   expectData(stream, widths, {0, 1, 2, 3});
   change = 25;
@@ -2869,7 +2868,7 @@ static void reportingToggle(bool buffered)
     number.writeAtInterval(mode, 0.5).writeOnChange(0);
     boolean.writeAtInterval(mode, BLAECK_ANY_CHANGE).writeOnChange(BLAECK_ANY_CHANGE);
     string.writeAtInterval(mode, BLAECK_ANY_CHANGE).writeOnChange(BLAECK_ANY_CHANGE);
-    command(device, stream, "<BLAECK.ACTIVATE,1000>");
+    command(device, stream, "<BLAECK.INTERVAL_START,1000>");
     device.writeIfDue();
     expectData(stream, widths, {0, 1, 2});
     assert(device.reporting(2)->text != nullptr);
@@ -2921,7 +2920,7 @@ static void reportingToggle(bool buffered)
     else
       expectData(stream, widths, {});
 
-    command(device, stream, "<BLAECK.DEACTIVATE>");
+    command(device, stream, "<BLAECK.INTERVAL_STOP>");
     device.write("Number", 3.0f);
     expectData(stream, widths, {0});
     device.writeAll();
@@ -3049,7 +3048,7 @@ static void reportingActivationSnapshot(bool buffered)
   };
   filtered = combined = 0.25f;
   hostMillis() = 10;
-  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  command(device, stream, "<BLAECK.INTERVAL_START,1000>");
   device.writeIfDue();
   expectInitial(); // bypass thresholds and the combined signal's rate limit
   device.writeIfDue();
@@ -3078,34 +3077,39 @@ static void reportingActivationSnapshot(bool buffered)
   device.writeIfDue();
   expectData(stream, widths, {0, 1}); // normal interval filtering uses the initial value
 
-  command(device, stream, "<BLAECK.DEACTIVATE>");
+  command(device, stream, "<BLAECK.INTERVAL_STOP>");
   hostMillis() = 2050;
-  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  command(device, stream, "<BLAECK.INTERVAL_START,1000>");
   device.writeIfDue();
   expectInitial();
   hostMillis() = 2060;
-  command(device, stream, "<BLAECK.ACTIVATE,500>");
+  command(device, stream, "<BLAECK.INTERVAL_START,500>");
   device.writeIfDue();
   expectInitial(); // changing an active interval also establishes initial values
   hostMillis() = 2560;
   device.writeIfDue();
   expectData(stream, widths, {0});
-  command(device, stream, "<BLAECK.ACTIVATE,0>");
+  command(device, stream, "<BLAECK.INTERVAL_START,0>");
   device.writeIfDue();
   expectInitial();
   device.writeIfDue();
   expectData(stream, widths, {0}); // zero interval does not keep forcing filtered signals
 
-  command(device, stream, "<BLAECK.PAUSE_WRITES,FOREVER>");
-  command(device, stream, "<BLAECK.ACTIVATE,500>");
+  command(device, stream, "<BLAECK.DATA_STOP>");
+  command(device, stream, "<BLAECK.INTERVAL_START,500>");
   device.writeIfDue();
   expectData(stream, widths, {});
   hostMillis() = 3000;
   device.writeIfDue();
   expectData(stream, widths, {});
-  command(device, stream, "<BLAECK.RESUME_WRITES>");
+  command(device, stream, "<BLAECK.DATA_START>");
   device.writeIfDue();
-  expectInitial(); // a paused pass must not consume the initial report
+  {
+    // A stopped pass must not consume the initial report; the reset adds the OnChange signal.
+    const auto frames = takeData(stream.data.output, widths);
+    assert(frames.size() == 1 && frames[0].flags == 0x04);
+    assert(frames[0].ids == std::vector<int>({0, 1, 2, 3, 5, 6}));
+  }
   device.writeIfDue();
   expectData(stream, widths, {});
 }
@@ -3118,7 +3122,7 @@ static void sharedBaselineAndClock()
   device.begin(stream);
   float value = 10;
   device.addSignal(F("V"), &value).writeAtInterval(BLAECK_ON_CHANGE, 0.5).writeOnChange(1);
-  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  command(device, stream, "<BLAECK.INTERVAL_START,1000>");
   device.writeIfDue();
   expectData(stream, {4}, {0});
   value = 10.5f;
@@ -3150,7 +3154,7 @@ static void sharedBaselineAndClock()
   hostMillis() = UINT32_MAX - 50;
   device.write("V", 30.0f);
   expectData(stream, {4}, {0});
-  command(device, stream, "<BLAECK.ACTIVATE,100>");
+  command(device, stream, "<BLAECK.INTERVAL_START,100>");
   device.writeIfDue();
   expectData(stream, {4}, {0});
   value = 32;
@@ -3267,7 +3271,7 @@ static void reportingCallbacksAndTimestamps()
   device.writeIfDue();
   expectData(stream, {4}, {0});
   assert(beforeWriteCalls == 0);
-  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  command(device, stream, "<BLAECK.INTERVAL_START,1000>");
   device.writeIfDue();
   expectData(stream, {4}, {0}); // initial interval merges with the callback's immediate change
   assert(beforeWriteCalls == 1);
@@ -3360,8 +3364,7 @@ static void reportingAllocationAndReconnect()
   server.pending.push_back(&replacement);
   replacement.input = "<BLAECK.GET_DEVICES>";
   tcp.tick();
-  frames = takeData(replacement.output, {4});
-  assert(frames.size() == 1); // reconnect receives unchanged initial value
+  assert(takeData(replacement.output, {4}).empty()); // a new host alone does not resend unchanged values
 }
 
 static void reportingReconfiguration()
@@ -3375,7 +3378,7 @@ static void reportingReconfiguration()
   signal.writeAtInterval(BLAECK_ON_CHANGE);
   device.writeIfDue();
   expectData(stream, {4}, {});
-  command(device, stream, "<BLAECK.ACTIVATE,0>");
+  command(device, stream, "<BLAECK.INTERVAL_START,0>");
   device.writeIfDue();
   expectData(stream, {4}, {0});
   device.writeIfDue();
@@ -3383,7 +3386,7 @@ static void reportingReconfiguration()
   signal.writeAtInterval(BLAECK_ALWAYS);
   device.writeIfDue();
   expectData(stream, {4}, {0});
-  device.writeIfDue(); // ACTIVATE,0 still means every pass, not disabled
+  device.writeIfDue(); // INTERVAL_START,0 still means every pass, not disabled
   expectData(stream, {4}, {0});
   signal.writeAtInterval(BLAECK_OFF);
   device.writeIfDue();
@@ -3544,7 +3547,7 @@ static void reportingCallbackWriteClock()
   device.writeIfDue();
   expectData(stream, {4}, {0});
   device.onBeforeWrite(writeDuringRefresh);
-  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  command(device, stream, "<BLAECK.INTERVAL_START,1000>");
   hostMillis() = 1000;
   device.writeIfDue();
   expectData(stream, {4}, {0}); // only the explicit write inside the refresh callback
@@ -3580,7 +3583,7 @@ static void reportingFrameClassification(bool buffered)
   expectFlags(0);
   command(device, stream, "<#42:BLAECK.WRITE_DATA>");
   expectFlags(0x02);
-  command(device, stream, "<BLAECK.ACTIVATE,1000>");
+  command(device, stream, "<BLAECK.INTERVAL_START,1000>");
   device.writeIfDue();
   expectFlags(0x04); // initial interval bypasses the previously requested baseline
   value = 1.5f;
@@ -3610,7 +3613,7 @@ static void reportingFrameClassification(bool buffered)
   hostMillis() = 4000;
   device.writeIfDue();
   expectFlags(0x04);
-  command(device, stream, "<BLAECK.DEACTIVATE>");
+  command(device, stream, "<BLAECK.INTERVAL_STOP>");
   value = 14;
   device.writeIfDue();
   expectFlags(0);
@@ -3620,10 +3623,148 @@ static void reportingFrameClassification(bool buffered)
   first.begin(firstStream);
   first.setBufferedWrites(buffered);
   first.addSignal(F("V"), &value);
-  command(first, firstStream, "<BLAECK.ACTIVATE,1000>");
+  command(first, firstStream, "<BLAECK.INTERVAL_START,1000>");
   first.writeIfDue();
   const auto initial = takeData(firstStream.data.output, {4});
   assert(initial.size() == 1 && initial[0].flags == 0x05);
+}
+
+static std::string streamLog;
+static TestBlaeck *streamDevice = nullptr;
+
+static void dataAndEntitiesCommands(bool buffered)
+{
+  hostMillis() = 0;
+  streamLog.clear();
+  FakeStream stream;
+  TestBlaeck device;
+  streamDevice = &device;
+  device.begin(stream);
+  device.setBufferedWrites(buffered);
+  float periodic = 1, change = 2;
+  device.addSignal(F("Interval"), &periodic);
+  device.addSignal(F("OnChange"), &change).writeAtInterval(BLAECK_OFF).writeOnChange(1);
+#if BLAECK_ENABLE_IOT
+  float sensorValue = 0;
+  device.addSensor(F("Level"), &sensorValue);
+  bool heater = false;
+  device.addSwitch(F("Heater"), &heater);
+  device.addEvent(F("Action"), F("start"));
+#endif
+  device.onDataStart([]() { streamLog += "SS;"; });
+  device.onDataStop([]()
+  {
+    streamLog += "SP;";
+    streamDevice->writeAll(); // still answering, so this goes out
+  });
+  device.onIntervalStart([](uint32_t intervalMs) { streamLog += "IS" + std::to_string(intervalMs) + ";"; });
+  device.onIntervalStop([]() { streamLog += "IP;"; });
+  const std::vector<int> widths{4, 4};
+  const auto acked = [&]()
+  {
+    const bool found = unescaped(stream.data.output).find(std::string("<BLAECK:") + char(0xA5)) != std::string::npos;
+    return found;
+  };
+
+  // A restarted board streams on its own, and no callback runs.
+  device.writeIfDue();
+  auto frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && frames[0].ids == std::vector<int>({1}) && frames[0].flags == 0x01);
+  assert(streamLog.empty());
+
+  command(device, stream, "<BLAECK.INTERVAL_START,1000>");
+  assert(acked() && streamLog == "IS1000;");
+  stream.data.output.clear();
+  device.writeIfDue();
+  expectData(stream, widths, {0});
+
+  // DATA_STOP stops the interval first, then blocks the board's own frames.
+  streamLog.clear();
+  command(device, stream, "<BLAECK.DATA_STOP>");
+  assert(acked() && streamLog == "IP;SP;");
+  frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && frames[0].ids == std::vector<int>({0, 1}));
+  assert(!device.isTimedDataActive());
+
+  change = 3;
+  hostMillis() = 2000;
+  device.writeIfDue();
+  device.write("OnChange", 4.0f);
+  device.writeAll();
+  assert(stream.data.output.empty());
+
+#if BLAECK_ENABLE_IOT
+  // Only data waits: property changes and events still go out.
+  const auto sent = [&](int type)
+  {
+    return unescaped(stream.data.output).find(std::string("<BLAECK:") + char(type)) != std::string::npos;
+  };
+  sensorValue = 5;
+  device.writeIfDue();
+  assert(sent(0x95) && !sent(0xD3));
+  stream.data.output.clear();
+  device.writeEvent("Action", "start");
+  assert(sent(0x85));
+  stream.data.output.clear();
+
+  // ENTITIES_STOP holds property changes back and drops events, until ENTITIES_START.
+  command(device, stream, "<BLAECK.ENTITIES_STOP>");
+  assert(acked());
+  stream.data.output.clear();
+  sensorValue = 6;
+  hostMillis() = 4000;
+  device.writeIfDue();
+  device.writeEvent("Action", "start");
+  assert(stream.data.output.empty());
+  // A set is answered with the new value even so.
+  command(device, stream, "<Heater,1>");
+  assert(acked() && sent(0x95) && heater);
+  stream.data.output.clear();
+  command(device, stream, "<BLAECK.ENTITIES_START>");
+  assert(acked());
+  stream.data.output.clear();
+  device.writeIfDue();
+  assert(sent(0x95) && !sent(0x85) && !sent(0xD3));
+  stream.data.output.clear();
+#endif
+
+  // Answers still go out.
+  command(device, stream, "<BLAECK.GET_DEVICES>");
+  assert(acked());
+  stream.data.output.clear();
+  command(device, stream, "<BLAECK.WRITE_DATA>");
+  frames = takeData(stream.data.output, widths);
+  assert(frames.size() == 1 && frames[0].ids == std::vector<int>({0, 1}) && frames[0].flags == 0x02);
+
+  // Callbacks run on every command; onIntervalStop from DATA_STOP only if the interval ran.
+  streamLog.clear();
+  command(device, stream, "<BLAECK.DATA_STOP>");
+  assert(streamLog == "SP;");
+  command(device, stream, "<BLAECK.INTERVAL_STOP>");
+  assert(streamLog == "SP;IP;");
+  stream.data.output.clear();
+
+  // DATA_START resends the unchanged on-change value.
+  streamLog.clear();
+  command(device, stream, "<BLAECK.DATA_START>");
+  assert(acked() && streamLog == "SS;");
+  stream.data.output.clear();
+  device.writeIfDue();
+  expectData(stream, widths, {1});
+  device.writeIfDue();
+  expectData(stream, widths, {});
+  command(device, stream, "<BLAECK.DATA_START>");
+  assert(streamLog == "SS;SS;");
+  stream.data.output.clear();
+  device.writeIfDue();
+  expectData(stream, widths, {1});
+
+  command(device, stream, "<BLAECK.INTERVAL_START,500>");
+  assert(streamLog == "SS;SS;IS500;");
+  stream.data.output.clear();
+  device.writeIfDue();
+  expectData(stream, widths, {0});
+  streamDevice = nullptr;
 }
 
 int main()
@@ -3721,5 +3862,7 @@ int main()
   reportingCallbackWriteClock();
   reportingFrameClassification(false);
   reportingFrameClassification(true);
+  dataAndEntitiesCommands(false);
+  dataAndEntitiesCommands(true);
   std::cout << "PASS: protocol/transport and signal policies, shared baselines, clocks, strings, failures and reconnect\n";
 }
