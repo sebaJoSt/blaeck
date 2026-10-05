@@ -8,11 +8,11 @@
     OnChange            as soon as it changes by at least 0.01; needs no interval.
     Explicit            write() sends every value.
 
-  The value is a 12-second sine wave around 1.8 V, in a 24-second pattern:
+  The value is a 12-second sine wave around 1.8 V, in a 36-second pattern:
     0-8 s    amplitude 0.8, with two short spikes at 5 and 6 s, peaking near 5 V
     8-12 s   fades out
-    12-18 s  flat, flickering by one 10-bit ADC step (5 V / 1024, about 0.005)
-    18-24 s  fades back in
+    12-30 s  flat, flickering by one 10-bit ADC step (5 V / 1024, about 0.005)
+    30-36 s  fades back in
 
   Try this:
     Set the host's logging interval to 2000 ms, or send <BLAECK.ACTIVATE,2000>.
@@ -95,10 +95,10 @@ void UpdateSignals()
     return;
   lastUpdate = now;
 
-  const unsigned long phaseMs = now % 24000UL;
+  const unsigned long phaseMs = now % 36000UL;
   float amplitude = 0.8f;
-  if (phaseMs >= 18000UL)
-    amplitude = 0.4f * (1.0f - cos(PI * ((phaseMs - 18000UL) / 6000.0f)));
+  if (phaseMs >= 30000UL)
+    amplitude = 0.4f * (1.0f - cos(PI * ((phaseMs - 30000UL) / 6000.0f)));
   else if (phaseMs >= 12000UL)
     amplitude = 0.0f;
   else if (phaseMs >= 8000UL)
