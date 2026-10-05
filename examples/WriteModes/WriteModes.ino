@@ -15,12 +15,12 @@
     30-36 s  fades back in
 
   Try this:
-    Set the host's logging interval to 2000 ms, or send <BLAECK.ACTIVATE,2000>.
+    Set the host's logging interval to 2000 ms, or send <BLAECK.INTERVAL_START,2000>.
     Interval and OnChangeAtInterval only check every 2 s, so they can miss the
     spikes; OnChange and Explicit catch them.
     While flat, the flicker stays below 0.01: OnChangeAtInterval and OnChange
     go quiet, while Interval and Explicit keep sending.
-    Send <BLAECK.DEACTIVATE>: only Interval and OnChangeAtInterval stop.
+    Send <BLAECK.INTERVAL_STOP>: only Interval and OnChangeAtInterval stop.
 
   These are binary data frames, not readable text in a serial monitor.
 
@@ -48,10 +48,10 @@ NetworkSetup::Server server(23);
 Blaeck device;
 
 // Signals retain pointers to these variables, so keep them alive for the device's lifetime.
-float Interval = 0.0f;
-float OnChangeAtInterval = 0.0f;
-float OnChange = 0.0f;
-float Explicit = 0.0f;
+float interval = 0.0f;
+float onChangeAtInterval = 0.0f;
+float onChange = 0.0f;
+float explicitValue = 0.0f;
 
 void setup()
 {
@@ -69,12 +69,12 @@ void setup()
   device.withName(HOST_NAME);
   device.withFWVersion(F("1.0"));
 
-  device.addSignal(F("Interval"), &Interval);
-  device.addSignal(F("OnChangeAtInterval"), &OnChangeAtInterval)
+  device.addSignal(F("Interval"), &interval);
+  device.addSignal(F("OnChangeAtInterval"), &onChangeAtInterval)
       .writeAtInterval(BLAECK_ON_CHANGE, 0.01f);
-  device.addSignal(F("OnChange"), &OnChange)
+  device.addSignal(F("OnChange"), &onChange)
       .writeAtInterval(BLAECK_OFF).writeOnChange(0.01f, 0);
-  device.addSignal(F("Explicit"), &Explicit).writeAtInterval(BLAECK_OFF);
+  device.addSignal(F("Explicit"), &explicitValue).writeAtInterval(BLAECK_OFF);
 }
 
 void loop()
@@ -117,6 +117,6 @@ void UpdateSignals()
     value += 1.45f * (1.0f - cos(TWO_PI * spikePhase));
   }
 
-  Interval = OnChangeAtInterval = OnChange = value;
+  interval = onChangeAtInterval = onChange = value;
   device.write("Explicit", value);
 }

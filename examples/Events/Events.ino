@@ -43,8 +43,8 @@ Blaeck device;
 
 // Signals retain pointers to these variables, so keep them alive for the device's lifetime.
 // These provide values to log and let the event count be compared with what arrived.
-unsigned long Uptime = 0;
-unsigned long EventCount = 0;
+unsigned long uptime = 0;
+unsigned long eventCount = 0;
 
 void setup()
 {
@@ -62,8 +62,8 @@ void setup()
   device.withName(HOST_NAME);
   device.withFWVersion(F("1.0"));
 
-  device.addSignal(F("Uptime"), &Uptime);
-  device.addSignal(F("EventCount"), &EventCount);
+  device.addSignal(F("Uptime"), &uptime);
+  device.addSignal(F("EventCount"), &eventCount);
 
   // A doorbell must be able to report "ring". Home Assistant warns about a doorbell without it
   // today and stops accepting one in 2027.4.
@@ -101,12 +101,12 @@ void setup()
   device.printRejections(&Serial);
 
   device.writeEvent(F("System"), F("started"));
-  EventCount++;
+  eventCount++;
 }
 
 void loop()
 {
-  Uptime = millis() / 1000;
+  uptime = millis() / 1000;
   device.tick();
 #if USE_TCP
   networkLoop();
@@ -149,7 +149,7 @@ void FireEvents()
   // device.writeEvent(F("Motion"), F("motion_maybe"));
 
   if (sentEvent)
-    EventCount++;
+    eventCount++;
 
   step = (step + 1) % 9;
 }

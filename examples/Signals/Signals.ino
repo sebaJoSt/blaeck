@@ -20,8 +20,8 @@
   Leave USE_TCP at 0 for Serial, or set it to 1 for TCP. Connect Loggbok to the
   serial port at 115200 baud, or to the printed network address on TCP port 23.
 
-  In Serial mode, a serial monitor can send <BLAECK.ACTIVATE,1000> to request one binary
-  data frame per second, and <BLAECK.DEACTIVATE> to stop. The frames are not readable text.
+  In Serial mode, a serial monitor can send <BLAECK.INTERVAL_START,1000> to request one
+  binary data frame per second, and <BLAECK.INTERVAL_STOP> to stop. The frames are not readable text.
 
   Author: Sebastian Strobl, https://github.com/sebaJoSt/blaeck
 */
@@ -43,12 +43,12 @@ NetworkSetup::Server server(23);
 Blaeck device;
 
 // Signals retain pointers to these variables, so keep them alive for the device's lifetime.
-float Temperature = 21.5f;
-bool DoorOpen = false;
-char Mode[16] = "warming";
-unsigned long Uptime = 0;
+float temperature = 21.5f;
+bool doorOpen = false;
+char mode[16] = "warming";
+unsigned long uptime = 0;
 constexpr byte SINE_COUNT = 5;
-float Sine[SINE_COUNT];
+float sine[SINE_COUNT];
 
 void setup()
 {
@@ -67,15 +67,15 @@ void setup()
   device.withFWVersion(F("1.0"));
 
   // The name is the column name, so a unit that belongs in the log goes into it.
-  device.addSignal(F("Temperature [C]"), &Temperature);
-  device.addSignal(F("DoorOpen"), &DoorOpen);
+  device.addSignal(F("Temperature [C]"), &temperature);
+  device.addSignal(F("DoorOpen"), &doorOpen);
   // Text takes the buffer itself, not &Mode.
-  device.addSignal(F("Mode"), Mode);
-  device.addSignal(F("Uptime"), &Uptime);
+  device.addSignal(F("Mode"), mode);
+  device.addSignal(F("Uptime"), &uptime);
 
   // The suffix gives each array element a name without building or copying a string.
   for (byte i = 0; i < SINE_COUNT; i++)
-    device.addSignal(F("Sine_"), &Sine[i]).withNameSuffix(i + 1);
+    device.addSignal(F("Sine_"), &sine[i]).withNameSuffix(i + 1);
 
   device.printRejections(&Serial);
 }
@@ -93,17 +93,17 @@ void UpdateSignals()
 {
   static unsigned long lastUpdate = 0;
   const unsigned long now = millis();
-  Uptime = now / 1000;
+  uptime = now / 1000;
 
   const float phase = now * 0.00005f;
   for (byte i = 0; i < SINE_COUNT; i++)
-    Sine[i] = sin(phase + i * (TWO_PI / SINE_COUNT));
+    sine[i] = sin(phase + i * (TWO_PI / SINE_COUNT));
 
   if (now - lastUpdate < 1000UL)
     return;
   lastUpdate = now;
 
-  DoorOpen = (Uptime / 10) % 2 != 0;
-  Temperature += ((DoorOpen ? 18.0f : 22.0f) - Temperature) * 0.25f;
-  strcpy(Mode, DoorOpen ? "cooling" : "warming");
+  doorOpen = (uptime / 10) % 2 != 0;
+  temperature += ((doorOpen ? 18.0f : 22.0f) - temperature) * 0.25f;
+  strcpy(mode, doorOpen ? "cooling" : "warming");
 }
