@@ -2636,8 +2636,10 @@ public:
     @warning Set it in setup(). Changing it later restarts the count, so timestamps
              before and after don't line up.
 
-    @note    BLAECK_MICROS only notices a rollover when data is sent, so it needs
-             data at least every 71 minutes. Otherwise use BLAECK_UNIX.
+    @note    BLAECK_MICROS notices a rollover only when the clock is read. tick() and
+             writeIfDue() read it on every call, so a running loop() is enough; a sketch
+             that passes its own timestamp to them instead needs data at least every
+             71 minutes, or BLAECK_UNIX.
 
     @code
       device.setTimestampMode(BLAECK_MICROS);

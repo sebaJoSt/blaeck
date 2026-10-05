@@ -111,6 +111,10 @@ void setup()
   device.withName(HOST_NAME);
   device.withFWVersion(F("1.0"));
 
+  // The device's clock stamps each row, so a 20 ms interval logs rows exactly 20 ms apart
+  // rather than as they happened to reach the host.
+  device.setTimestampMode(BLAECK_MICROS);
+
   // Logged: a column each.
   device.addSignal(F("Output [V]"), &output);
   device.addSignal(F("Frequency"), &frequency);
