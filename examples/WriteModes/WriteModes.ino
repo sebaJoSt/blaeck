@@ -89,10 +89,13 @@ void loop()
 
 void UpdateSignals()
 {
+  // The first call updates at once, so nothing goes out as 0 right after a reset.
+  static bool updated = false;
   static unsigned long lastUpdate = 0;
   const unsigned long now = millis();
-  if (now - lastUpdate < 100UL)
+  if (updated && now - lastUpdate < 100UL)
     return;
+  updated = true;
   lastUpdate = now;
 
   const unsigned long phaseMs = now % 36000UL;
