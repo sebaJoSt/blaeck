@@ -1,50 +1,26 @@
 /*
   WriteModes.ino
 
-  Five signals get the same value every 100 ms: a smooth 12-second sine wave
-  with a maximum amplitude of 0.8. Its amplitude follows a 24-second pattern:
-    0-8 s: full amplitude, with rounded spikes at 5.0-5.6 and 6.0-6.6 s.
-    8-12 s: smoothly fade to zero.
-    12-18 s: stay exactly flat, with no spikes.
-    18-24 s: smoothly grow back to full amplitude.
-  Each spike adds up to 4. The wave and spikes join smoothly between sections
-  and across the pattern's repeat.
-  Only the reporting policy differs:
+  Four signals get the same value every 100 ms; only how they report it differs:
 
-    Interval                     the default: every host interval, even if unchanged.
-    OnChangeAtInterval           at the host interval, only after a change of at least 0.05.
-    OnChange                     checked every tick, after a change of at least 0.1,
-                                 at most every 100 ms.
-    OnChangeAndOnChangeAtInterval changes of at least 0.05 at intervals, or 0.1 promptly.
-    Explicit                     write() sends each deliberate measurement, without filtering.
+    Interval            every host interval, changed or not (the default).
+    OnChangeAtInterval  at the host interval, if it changed by at least 0.01.
+    OnChange            as soon as it changes by at least 0.01; needs no interval.
+    Explicit            write() sends every value.
+
+  The value is a 12-second sine wave around 1.8 V, in a 24-second pattern:
+    0-8 s    amplitude 0.8, with two short spikes at 5 and 6 s, peaking near 5 V
+    8-12 s   fades out
+    12-18 s  flat, flickering by one 10-bit ADC step (5 V / 1024, about 0.005)
+    18-24 s  fades back in
 
   Try this:
     Set the host's logging interval to 2000 ms, or send <BLAECK.ACTIVATE,2000>.
-    The full pattern takes 24 seconds:
-      Interval samples the underlying wave, but can miss the spikes.
-      OnChangeAtInterval samples the wave, skipping interval changes below 0.05.
-      OnChange follows the wave and spikes whenever a change reaches 0.1.
-      OnChangeAndOnChangeAtInterval also reports changes from 0.05 at interval times.
-      Explicit shows the complete wave and rounded spike shapes.
-    The separate and combined modes use matching thresholds for a fair comparison.
-    During the full-amplitude wave, Interval and OnChangeAtInterval can look alike.
-    As the wave fades, change-filtered signals send fewer values. Once flat and
-    any qualifying transition has been reported, all three stop sending.
-    Interval still sends every 2 seconds; Explicit still sends every 100 ms.
-    Look for blank change-filtered columns in those rows: fewer signal values
-    are stored, but Explicit keeps creating rows. A plotted line alone can hide this.
-    OnChange and the combined signal can look similar with these fine thresholds;
-    their report times can differ because interval reports update the shared baseline.
-    A 2-second interval cannot sample both short spikes one second apart; it may
-    miss both. Compare reported points, not just the lines drawn between them.
-    Some points overlap because all signals share the same source.
-    Interval and OnChangeAtInterval use that interval. OnChange does not need ACTIVATE.
-    OnChangeAndOnChangeAtInterval uses both paths, with one shared last-sent value.
-    Every ACTIVATE first reports all three interval-enabled signals without filtering.
-    Later interval reports apply their normal policies and thresholds.
-    Send <BLAECK.DEACTIVATE>: only interval reporting stops. OnChange,
-    OnChangeAndOnChangeAtInterval's immediate path, and the explicit write() calls keep working.
-    Automatic reporting compares current values, not a queue of intermediate samples.
+    Interval and OnChangeAtInterval only check every 2 s, so they can miss the
+    spikes; OnChange and Explicit catch them.
+    While flat, the flicker stays below 0.01: OnChangeAtInterval and OnChange
+    go quiet, while Interval and Explicit keep sending.
+    Send <BLAECK.DEACTIVATE>: only Interval and OnChangeAtInterval stop.
 
   These are binary data frames, not readable text in a serial monitor.
 
@@ -75,7 +51,6 @@ Blaeck device;
 float Interval = 0.0f;
 float OnChangeAtInterval = 0.0f;
 float OnChange = 0.0f;
-float OnChangeAndOnChangeAtInterval = 0.0f;
 float Explicit = 0.0f;
 
 void setup()
@@ -96,11 +71,9 @@ void setup()
 
   device.addSignal(F("Interval"), &Interval);
   device.addSignal(F("OnChangeAtInterval"), &OnChangeAtInterval)
-      .writeAtInterval(BLAECK_ON_CHANGE, 0.05f);
+      .writeAtInterval(BLAECK_ON_CHANGE, 0.01f);
   device.addSignal(F("OnChange"), &OnChange)
-      .writeAtInterval(BLAECK_OFF).writeOnChange(0.1f);
-  device.addSignal(F("OnChangeAndOnChangeAtInterval"), &OnChangeAndOnChangeAtInterval)
-      .writeAtInterval(BLAECK_ON_CHANGE, 0.05f).writeOnChange(0.1f);
+      .writeAtInterval(BLAECK_OFF).writeOnChange(0.01f, 0);
   device.addSignal(F("Explicit"), &Explicit).writeAtInterval(BLAECK_OFF);
 }
 
@@ -131,14 +104,19 @@ void UpdateSignals()
   else if (phaseMs >= 8000UL)
     amplitude = 0.4f * (1.0f + cos(PI * ((phaseMs - 8000UL) / 4000.0f)));
 
-  float value = amplitude * sin((phaseMs % 12000UL) * (TWO_PI / 12000.0f));
+  // While flat, flicker by one step of a 10-bit ADC at 5 V.
+  const float adcStep = 5.0f / 1024.0f;
+  const float jitter = amplitude == 0.0f ? random(2) * adcStep : 0.0f;
+
+  const float offset = 1.8f;
+  float value = offset + amplitude * sin((phaseMs % 12000UL) * (TWO_PI / 12000.0f)) + jitter;
   if ((phaseMs >= 5000UL && phaseMs < 5600UL) ||
       (phaseMs >= 6000UL && phaseMs < 6600UL))
   {
     const float spikePhase = (phaseMs % 1000UL) / 600.0f;
-    value += 2.0f * (1.0f - cos(TWO_PI * spikePhase));
+    value += 1.45f * (1.0f - cos(TWO_PI * spikePhase));
   }
 
-  Interval = OnChangeAtInterval = OnChange = OnChangeAndOnChangeAtInterval = value;
+  Interval = OnChangeAtInterval = OnChange = value;
   device.write("Explicit", value);
 }

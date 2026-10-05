@@ -226,7 +226,8 @@ Both change modes sample current values, not a queue. A value that changes and r
 checks may never be reported. Use explicit `write()` calls when every measurement or edge
 matters. If no signals qualify at an interval, no data frame is sent.
 
-The [WriteModes example](../examples/WriteModes) demonstrates all these choices side by side.
+The [WriteModes example](../examples/WriteModes) compares interval, on-change and explicit
+reporting side by side.
 
 ## Reading the sensors at the right moment
 
