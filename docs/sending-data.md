@@ -35,9 +35,10 @@ void loop()
 `device.tick()` reads incoming commands and services automatic reporting. By default, every
 signal is included when the host's interval is due.
 
-With these default policies, no data is sent until a host activates interval reporting:
+With these default policies, no data is sent until a host starts data and the interval:
 
 ```
+<BLAECK.DATA_START>            send data frames
 <BLAECK.INTERVAL_START,1000>   one reading per second
 <BLAECK.INTERVAL_STOP>         stop interval reporting
 ```
@@ -272,7 +273,9 @@ handling it.
 A host that is about to close the connection sends both stops and waits until the board is
 quiet, so the port isn't closed in the middle of a frame.
 
-After a restart both are on, so a plain serial monitor sees data without asking.
+After a restart both are stopped, so a board nobody listens to stays quiet. Loggbok starts data
+when logging starts, and entities while its MQTT bridge runs. In a serial monitor, send
+`<BLAECK.DATA_START>` and `<BLAECK.ENTITIES_START>` first.
 
 The sketch can follow these commands with callbacks:
 

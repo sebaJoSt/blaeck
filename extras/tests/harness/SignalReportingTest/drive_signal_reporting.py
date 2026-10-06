@@ -158,6 +158,8 @@ class Driver:
         return frames
 
     def reset(self, buffered):
+        # A board starts with data stopped; DATA_START also clears the baselines RESET resets.
+        self.expect("data start", None, "SYNC", builtin="DATA_START")
         self.expect("interval stop", None, "SYNC", builtin="INTERVAL_STOP")
         self.expect("reset", None, "RESET", int(buffered))
 

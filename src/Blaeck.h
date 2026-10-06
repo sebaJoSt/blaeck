@@ -3127,10 +3127,12 @@ protected:
       _bufAllocate();
     return _frameBuf != nullptr;
   }
-  // Set by DATA_STOP, cleared by DATA_START. Answers to commands go out either way.
-  bool _dataStopped = false;
-  // Set by ENTITIES_STOP, cleared by ENTITIES_START. Answers to commands go out either way.
-  bool _entitiesStopped = false;
+  // Set at start and by DATA_STOP, cleared by DATA_START, so a board nobody listens to stays
+  // quiet. Answers to commands go out either way.
+  bool _dataStopped = true;
+  // Set at start and by ENTITIES_STOP, cleared by ENTITIES_START. Answers to commands go out
+  // either way.
+  bool _entitiesStopped = true;
   // Set while a command is handled, so whatever it causes goes out even when stopped.
   bool _answering = false;
 

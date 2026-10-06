@@ -117,8 +117,9 @@ Three calls do the work:
 - `tick()` reads incoming commands and sends the values when they are due. Call it in every
   `loop()`.
 
-The host decides how often data is sent. It sends `<BLAECK.INTERVAL_START,1000>` to get one
-frame per second, and `<BLAECK.INTERVAL_STOP>` to stop interval-driven data.
+The host decides how often data is sent. It sends `<BLAECK.DATA_START>` and
+`<BLAECK.INTERVAL_START,1000>` to get one frame per second, and `<BLAECK.INTERVAL_STOP>` to stop
+interval-driven data.
 The data frames are binary, not readable text in a terminal.
 
 TCP sketches need the networking library for their board; see [networking](docs/network.md) for supported server requirements
@@ -181,6 +182,7 @@ ones:
 | `BlaeckTCP.begin(clients, &Serial, 2, port)` | Start the server yourself, then `device.begin(server).withClients(clients)`. Add `.withDebugStream(&Serial)` for debug output |
 | `update()`, `markSignalUpdated()`, `writeUpdatedData()`, `timedWrite…()` | `write()` sends a value at once; `writeAtInterval()` and `writeOnChange()` choose when each signal is sent. See [Sending data](docs/sending-data.md) |
 | `setIntervalMs()` | Removed. The host sets the interval with `BLAECK.INTERVAL_START` |
+| Writes go out at once | Nothing goes out until the host sends `BLAECK.DATA_START` (data) or `BLAECK.ENTITIES_START` (controls, sensors and events) |
 | `deleteSignals()` | `clearAllSignals()` |
 | `setCommandCallback()` | `onCommand()` or `onAnyCommand()` |
 | Names as `String` | `const char *` or `F()`; add `.c_str()` to a `String` |

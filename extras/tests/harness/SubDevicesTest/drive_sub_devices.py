@@ -181,6 +181,9 @@ def run(port):
         print("NOTE no restart notice seen (the board did not reset on open); continuing")
     # The sketch polls its pump every second on its own; the checks below decide when it is asked.
     link.send("<SIM_AUTO,0>", done("SIM_AUTO"))
+    # A board starts with data and entities stopped.
+    link.send("<BLAECK.DATA_START>", ack_for(0))
+    link.send("<BLAECK.ENTITIES_START>", ack_for(0))
     time.sleep(0.5)
     port.reset_input_buffer()
     link.buffer.clear()

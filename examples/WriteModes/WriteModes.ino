@@ -15,7 +15,8 @@
     30-36 s  fades back in
 
   Try this:
-    Set the host's logging interval to 2000 ms, or send <BLAECK.INTERVAL_START,2000>.
+    Set the host's logging interval to 2000 ms, or send <BLAECK.DATA_START> and
+    <BLAECK.INTERVAL_START,2000>.
     Interval and OnChangeAtInterval only check every 2 s, so they can miss the
     spikes; OnChange and Explicit catch them.
     While flat, the flicker stays below 0.01: OnChangeAtInterval and OnChange

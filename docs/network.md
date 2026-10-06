@@ -169,7 +169,7 @@ A host that reconnects starts as a terminal again, and receives nothing until it
 `BLAECK.` command. Loggbok does that as soon as it reconnects, so data continues, and the
 device's interval, data and entities state are unchanged. If the board restarted while the connection was
 down, the first host that connects afterwards learns of it once, from the device list it asks
-for or from a restart notice. Devices from `addDevice()` that went missing, came back or
+for or from a restart notice, and starts data and entities again. Devices from `addDevice()` that went missing, came back or
 restarted meanwhile are reported the same way.
 
 The functions given to `onConnect()` and `onDisconnect()` receive the connection's slot,

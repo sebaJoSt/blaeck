@@ -186,6 +186,10 @@ with serial.Serial(PORT, 115200, timeout=0.2) as s:
             print(" ", line)
     else:
         print("  (no reset on this board, so no startup checks)")
+    # A board starts with data and entities stopped.
+    for start in (b"<BLAECK.DATA_START>", b"<BLAECK.ENTITIES_START>"):
+        s.write(start); s.flush()
+        read_for(s, 0.3)
     s.reset_input_buffer()
     s.write(b"<WIDTHS>"); s.flush()
     for line in text_of(read_for(s, 1.0)):

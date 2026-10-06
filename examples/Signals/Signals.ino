@@ -20,8 +20,9 @@
   Leave USE_TCP at 0 for Serial, or set it to 1 for TCP. Connect Loggbok to the
   serial port at 115200 baud, or to the printed network address on TCP port 23.
 
-  In Serial mode, a serial monitor can send <BLAECK.INTERVAL_START,1000> to request one
-  binary data frame per second, and <BLAECK.INTERVAL_STOP> to stop. The frames are not readable text.
+  In Serial mode, a serial monitor can send <BLAECK.DATA_START> and
+  <BLAECK.INTERVAL_START,1000> to request one binary data frame per second, and
+  <BLAECK.INTERVAL_STOP> to stop. The frames are not readable text.
 
   Author: Sebastian Strobl, https://github.com/sebaJoSt/blaeck
 */

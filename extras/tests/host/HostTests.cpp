@@ -20,6 +20,13 @@
 class TestBlaeck : public Blaeck
 {
 public:
+  // Most tests check what goes out, so they start where DATA_START and ENTITIES_START leave a
+  // board. false keeps the board as it starts: both stopped.
+  explicit TestBlaeck(bool started = true)
+  {
+    _dataStopped = !started;
+    _entitiesStopped = !started;
+  }
   using Blaeck::read;
   using Blaeck::writeIfDue;
   // Points a text signal elsewhere without writing it, so the baseline stays as it was.
@@ -3637,7 +3644,7 @@ static void dataAndEntitiesCommands(bool buffered)
   hostMillis() = 0;
   streamLog.clear();
   FakeStream stream;
-  TestBlaeck device;
+  TestBlaeck device(false);
   streamDevice = &device;
   device.begin(stream);
   device.setBufferedWrites(buffered);
@@ -3666,11 +3673,23 @@ static void dataAndEntitiesCommands(bool buffered)
     return found;
   };
 
-  // A restarted board streams on its own, and no callback runs.
+  // A board starts with data and entities stopped: nothing goes out on its own, and no
+  // callback runs.
+  device.writeIfDue();
+  device.writeAll();
+#if BLAECK_ENABLE_IOT
+  device.writeEvent("Action", "start");
+#endif
+  assert(stream.data.output.empty() && streamLog.empty());
+
+  command(device, stream, "<BLAECK.DATA_START>");
+  command(device, stream, "<BLAECK.ENTITIES_START>");
+  assert(acked() && streamLog == "SS;");
+  streamLog.clear();
+  stream.data.output.clear();
   device.writeIfDue();
   auto frames = takeData(stream.data.output, widths);
   assert(frames.size() == 1 && frames[0].ids == std::vector<int>({1}) && frames[0].flags == 0x01);
-  assert(streamLog.empty());
 
   command(device, stream, "<BLAECK.INTERVAL_START,1000>");
   assert(acked() && streamLog == "IS1000;");
