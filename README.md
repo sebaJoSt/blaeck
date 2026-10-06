@@ -131,7 +131,7 @@ and the optional TelnetStream setup.
 | [Signals](docs/signals.md) | Registering values to log, and naming them |
 | [Entities](docs/entities.md) | Controls, sensors and events, as Home Assistant shows them |
 | [Commands](docs/commands.md) | Handling commands, and a function that sees every command |
-| [Devices](docs/devices.md) | Showing a second board, or a part of this one, as its own device |
+| [Sub-devices](docs/sub-devices.md) | Showing a second board, or a part of this one, as its own device |
 | [Sending data](docs/sending-data.md) | Intervals, sending it yourself, timestamps, buffered writes |
 | [Configuration](docs/configuration.md) | Tables, memory and compile-time settings |
 | [Networking](docs/network.md) | Servers, client limits, terminal output and transport errors |
