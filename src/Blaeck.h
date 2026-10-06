@@ -1297,7 +1297,7 @@ public:
 
     @code
       device.addNumberInput(F("Setpoint"), &setpoint).withRange(5.0f, 30.0f, 0.5f);
-      device.addNumberInput(F("Count"), &count).withRange(0, 4000000000, 1);
+      device.addNumberInput(F("Build"), &buildNumber).withRange(0, 4000000000, 1);
     @endcode
   */
   template <typename A, typename B, typename C>
@@ -2372,7 +2372,10 @@ public:
         return true;
       }
 
-      device.onAnyCommand(handleAnyCommand);
+      void setup()
+      {
+        device.onAnyCommand(handleAnyCommand);
+      }
     @endcode
   */
   void onAnyCommand(BlaeckAnyCommandHandler handler);
@@ -2400,7 +2403,7 @@ public:
 
     @code
       device.clearAllControls();
-      device.addSwitch(F("Heater"), &heaterOn);
+      device.addSwitch(F("Enabled"), &enabled);
     @endcode
   */
   void clearAllControls();
@@ -2414,7 +2417,7 @@ public:
 
     @code
       device.clearAllSensors();
-      device.addSensor(F("Pressure"), &pressure);
+      device.addSensor(F("Temperature"), &temperature);
     @endcode
   */
   void clearAllSensors();
@@ -2604,7 +2607,7 @@ public:
     @param   callback  Receives the interval in milliseconds; nullptr removes it.
 
     @code
-      device.onIntervalStart([](uint32_t ms) { sensor.setAveraging(ms); });
+      device.onIntervalStart([](uint32_t ms) { device.Terminal.println(ms); });
     @endcode
   */
   void onIntervalStart(void (*callback)(uint32_t intervalMs));
@@ -2616,7 +2619,7 @@ public:
     @param   callback  The function, or nullptr to remove it.
 
     @code
-      device.onIntervalStop(stopSampling);
+      device.onIntervalStop([]() { device.Terminal.println(F("interval stopped")); });
     @endcode
   */
   void onIntervalStop(void (*callback)());
