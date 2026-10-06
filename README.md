@@ -19,8 +19,6 @@ Loggbok reads the board, logs the signals and passes the entities to Home Assist
 Loggbok is internal and not publicly released. The protocol is documented, so any program can
 read a board, and a serial monitor or TCP terminal can send commands.
 
-**Version 7.0.0 is in development and has not been released.**
-
 ## A first sketch
 
 These two sketches send the same simulated temperature and pressure readings.
