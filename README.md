@@ -6,27 +6,18 @@
 
 ---
 
-blaeck is an Arduino library. It sends any value your sketch holds - sensor readings,
-calculated results, text - over Serial or TCP as binary data, using the
-[blaeck protocol](https://sebajost.github.io/blaeck-protocol/).
+blaeck is an Arduino library. It sends the values a sketch holds over Serial or TCP,
+using the [blaeck protocol](https://sebajost.github.io/blaeck-protocol/).
 
-It is the first part of a chain:
+With blaeck, a sketch can:
 
-1. **Your Arduino sketch** uses blaeck to register each variable it sends as a *signal* -
-   a temperature, a counter, a switch position. You can also register the commands the board
-   accepts and the events it fires.
-2. **Loggbok**, a data logging tool, reads the signals over Serial or TCP and stores
-   them in a database. It is also an MQTT bridge: it publishes the signals and commands to a
-   broker.
-3. **Home Assistant** subscribes to that broker and creates one entity for each: a sensor for
-   a signal, a slider or button for a command.
+- **Log signals:** values such as a temperature or a counter.
+- **Show up in Home Assistant:** with controls, sensors and events.
+- **Take commands:** text such as `<SwitchLED,1>`.
 
-Because your sketch declares what it has, the host can discover its signals and controls.
-A signal with a unit arrives in Home Assistant as a sensor with that unit. The connection,
-MQTT broker and Home Assistant integration still need to be configured.
-
-Loggbok is an internal tool and is not publicly released. The protocol is documented, so you
-can write your own host. You can also send commands from a serial monitor or TCP terminal.
+Loggbok reads the board, logs the signals and passes the entities to Home Assistant over MQTT.
+Loggbok is internal and not publicly released. The protocol is documented, so any program can
+read a board, and a serial monitor or TCP terminal can send commands.
 
 **Version 7.0.0 is in development and has not been released.**
 
