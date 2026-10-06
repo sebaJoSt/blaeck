@@ -7,7 +7,7 @@
 
   A signal is a name and a type, nothing more: it becomes a column in the log. How a
   dashboard shows a value - unit, icon, precision - belongs to a sensor on the same variable;
-  see the Properties example.
+  see the Sensors example.
     Temperature [C]  a float, with its unit in the column name
     DoorOpen         a bool, logged as 0 or 1
     Mode             text

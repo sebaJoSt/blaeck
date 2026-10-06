@@ -1,24 +1,19 @@
 # Commands
 
-A command is something sent to your sketch from outside that isn't a value: run a calibration,
-print a report, press a button. You write a function, register it under a name, and Blaeck
-calls it when that name arrives.
-
-For a value a host sets - a setpoint, a switch, a mode - use an input instead: Blaeck checks
-and stores the value, and the host sees it back. See [Properties](properties.md).
+A command is a name with parameters, sent to the sketch: run a calibration, print a report.
+Commands are not entities, so Home Assistant shows no control for them. Controls are described
+in [Entities](entities.md).
 
 ## Handling a command
 
-This is a command as it arrives on the serial port:
+A command arrives on the serial port as:
 
 ```
 <Print,Hello,3>
 ```
 
-Angle brackets around it, the name first, then the parameters, separated by commas. You can
-type one into the serial monitor yourself.
-
-You write a function that runs when it arrives, and register it in `setup()`:
+Angle brackets enclose it, the name comes first, and commas separate the parameters. The serial
+monitor sends one as typed.
 
 ```cpp
 #include <Blaeck.h>
@@ -38,7 +33,7 @@ void setup()
   Serial.begin(115200);
   device.begin(Serial);
 
-  device.onCommand("Print", onPrint);
+  device.onCommand("Print", onPrint);   // <Print,Hello,3>
 }
 
 void loop()
@@ -47,63 +42,30 @@ void loop()
 }
 ```
 
-- The handler is a plain function, written outside `setup()` and `loop()`. `params` holds the
-  parameters as text, and `paramCount` says how many arrived. A host may percent-encode a
-  parameter (`%2C` for a comma); it arrives decoded.
-- `device.tick()` in `loop()` is what reads the serial port and calls the handler.
-- Nothing is checked: the handler decides what the parameters mean, and what to do with ones
-  that don't fit.
-
-A plain command is not listed anywhere, so a host can send it but offers no control for it.
-The name travels on the wire, so it may hold only letters, digits, `_`, `-` and `.`:
-`SET_RANGE`, not `Set range`. It may not start with `BLAECK.`.
-
-## Buttons
-
-A button is a press a host offers as a control. It carries no value, so its function takes no
-parameters, and parameters sent with a press are ignored:
-
-```cpp
-void onStatus()
-{
-  reportStatus();
-}
-
-device.addButton("STATUS", onStatus)
-    .withDisplayName(F("Request status"))
-    .diagnostic();
-```
-
-| Call | What it does |
-|---|---|
-| `withDisplayName(F("Request status"))` | Label shown instead of the name. The wire keeps using the name |
-| `withIcon(F("mdi:tune"))` | A [Material Design Icons](https://pictogrammers.com/library/mdi/) name |
-| `withDeviceClass(F("restart"))` | `restart`, `identify` or `update`; changes the icon and wording |
-| `config()` | Files it as a setting |
-| `diagnostic()` | Files it as something about the board rather than what it does |
-| `disabledByDefault()` | Registered, but switched off until someone enables it |
-
-A host presses it by sending its name, `<STATUS>`. Parameters sent with a press are ignored.
-For a press with fixed arguments, pass a lambda:
-
-```cpp
-device.addButton("ACTIVATE_ALL", []() { activateRange(1, 40); })
-    .withDisplayName(F("Activate all"));
-```
-
-Ordinary configuration strings are copied; their buffers can be reused after the call.
+- `params` holds the parameters as text, `paramCount` their number. A percent-encoded
+  parameter (`%2C` for a comma) arrives decoded.
+- `tick()` reads the serial port and calls the handler.
+- Parameters are not checked; the handler decides what they mean.
 
 ## Every command
 
-`onAnyCommand()` registers one function that sees every command, the built-in `BLAECK.` ones,
-a host's values for inputs and refused commands included - for logging, or for forwarding
-commands elsewhere. It returns whether it took the command: a command nothing else has is then
-acknowledged as accepted. A function that only logs returns `false`, so a mistyped name is
+`onAnyCommand()` sets one function that sees every command: the built-in `BLAECK.` ones, values
+for controls, button presses and refused commands. It runs after the command's own
+handler. A board has one such function; a second call replaces the first.
+
+The return value tells whether the function took the command. A command nothing else knows is
+then acknowledged as accepted. A function that only logs returns `false`, so a mistyped name is
 still answered as unknown.
 
+One function does all the work, here logging every command to `Serial1` and forwarding the
+`PUMP_` family to `Serial2`:
+
 ```cpp
-bool forwardPump(const char *command, const char *const *params, byte count)
+bool handleAnyCommand(const char *command, const char *const *params, byte count)
 {
+  Serial1.print(F("Command: "));
+  Serial1.println(command);
+
   if (strncmp(command, "PUMP_", 5) != 0)
     return false;
   Serial2.print(command);
@@ -116,15 +78,14 @@ bool forwardPump(const char *command, const char *const *params, byte count)
   return true;
 }
 
-device.onAnyCommand(forwardPump);
+device.onAnyCommand(handleAnyCommand);   // <PUMP_SPEED,75> goes out on Serial2 as PUMP_SPEED,75
 ```
 
 ## Names
 
-A command name belongs to one input, sensor, button or command on the whole board. A second one
-is refused. A host sends the name, so it may hold only letters, digits, `_`, `-` and `.`; a
-label with spaces or other characters goes in `withDisplayName()`. Registering a plain command or button again under its own name replaces its
-function.
+A command name belongs to one control, sensor or command on the whole board; a second one
+is refused. Names hold only letters, digits, `_`, `-` and `.` (`SET_RANGE`, not `Set range`) and
+can't start with `BLAECK.`. A command registered again under its own name gets the new function.
 
 ## When a command is rejected
 

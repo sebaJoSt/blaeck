@@ -2351,14 +2351,14 @@ public:
     @brief   Registers a handler that runs for every command.
 
     It runs after any matching handler, for built-ins and refused commands too, for logging or
-    forwarding. It returns whether it took the command: a command nothing else has is then
-    acknowledged as accepted. A handler that only logs returns false, so a typo is still
-    answered as unknown.
+    forwarding. A board has one; a second call replaces it. It returns whether it took the
+    command: a command nothing else has is then acknowledged as accepted. A handler that only
+    logs returns false, so a typo is still answered as unknown.
 
     @param   handler  Called for every command; returns true if it took one.
 
     @code
-      bool forward(const char *command, const char *const *params, byte count)
+      bool handleAnyCommand(const char *command, const char *const *params, byte count)
       {
         if (strncmp(command, "PUMP_", 5) != 0)
           return false;
@@ -2372,7 +2372,7 @@ public:
         return true;
       }
 
-      device.onAnyCommand(forward);
+      device.onAnyCommand(handleAnyCommand);
     @endcode
   */
   void onAnyCommand(BlaeckAnyCommandHandler handler);

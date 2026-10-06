@@ -28,14 +28,14 @@ error is retained. `end()` closes the transport; it does not reset the instance 
 another `begin()`.
 
 RAM is the only limit. On AVR, with the default settings, a signal costs 10 bytes, an event type
-6, an event 13, a device 10, a property about 40 and a command or button 66 - the largest there is.
-Every eight entries of a
-table share about 4 bytes of bookkeeping, and the last group of eight may hold up to seven
-unused slots. Each configuration string passed as ordinary RAM text is copied, at about its
-length plus 7 bytes (a reference count, the terminator and the heap's own header); an `F()`
-string costs nothing extra. A Mega's 8 kB is gone at a few hundred of anything, where an ESP32
-has room for thousands. A property's presentation - unit, label, icon, device class - takes
-about 20 bytes more, only once it has one.
+6, an event 13, a device 10, a sensor or a control with a value about 40, and a command or
+button 66 - the largest there is. Every eight entries of a table share about 4 bytes of
+bookkeeping, and the last group of eight may hold up to seven unused slots. Each configuration
+string passed as ordinary RAM text is copied, at about its length plus 7 bytes (a reference
+count, the terminator and the heap's own header); an `F()` string costs nothing extra. A Mega's
+8 kB is gone at a few hundred of anything, where an ESP32 has room for thousands. The
+presentation of a sensor or control - unit, label, icon, device class - takes about 20 bytes
+more, only once it has one.
 
 Entries are added in `setup()`, and a table never moves or frees what it holds, so the heap
 doesn't fragment. `clearAllSignals()` and the other clear calls keep the space and reuse it.
@@ -106,8 +106,8 @@ so a name built at runtime can come from a local buffer.
 
 ## Compile-time settings
 
-The rest are `#define`s. `BLAECK_ENABLE_IOT` set to 0 drops the IoT part - inputs, sensors,
-buttons and events - and reclaims the flash and SRAM it would have cost. The entity list then
+The rest are `#define`s. `BLAECK_ENABLE_IOT` set to 0 drops the IoT part - controls,
+sensors and events - and reclaims the flash and SRAM it would have cost. The entity list then
 goes out empty; signals and plain commands work as before. Your sketch needs no `#ifdef`
 around it: the calls still compile and simply store nothing, so the same sketch builds
 either way.

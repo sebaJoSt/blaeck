@@ -72,25 +72,6 @@ for (int i = 0; i < 8; i++)
 }
 ```
 
-## Showing a signal on a dashboard
-
-A signal is a name and a type: it becomes a column in the log, and that is all. There is no
-unit, icon or label on a signal. If a unit belongs in the log, put it in the name:
-`Temperature [C]`.
-
-To show the same value on a dashboard, add a sensor on the same variable. The sensor carries
-the unit, device class and precision, and is sent when the value changes:
-
-```cpp
-device.addSignal(F("Temperature [C]"), &temperature);
-device.addSensor(F("Temperature"), &temperature)
-    .withUnit(F("\xC2\xB0" "C"))
-    .withDeviceClass(F("temperature"))
-    .withDisplayPrecision(1);
-```
-
-See [Properties](properties.md).
-
 ## When a signal does not fit
 
 The signal table grows as signals are added, so the only limit is RAM. When the board runs out,

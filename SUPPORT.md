@@ -3,7 +3,7 @@
 Before opening an issue:
 
 1. Check the [README](README.md) and the guide for
-   [signals](docs/signals.md), [commands](docs/commands.md),
+   [signals](docs/signals.md), [entities](docs/entities.md), [commands](docs/commands.md),
    [configuration](docs/configuration.md) or [networking](docs/network.md).
 2. For frame layouts, check the
    [protocol documentation](https://sebajost.github.io/blaeck-protocol/).

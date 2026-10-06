@@ -140,9 +140,8 @@ and the optional TelnetStream setup.
 | Guide | What it covers |
 |---|---|
 | [Signals](docs/signals.md) | Registering values to log, and naming them |
-| [Commands](docs/commands.md) | Reacting to commands, and declaring them as controls |
-| [Properties](docs/properties.md) | Inputs a host sets and sensors it shows, displayed but not logged |
-| [Events](docs/events.md) | Reporting that something happened |
+| [Entities](docs/entities.md) | Controls, sensors and events, as Home Assistant shows them |
+| [Commands](docs/commands.md) | Handling commands, and a function that sees every command |
 | [Devices](docs/devices.md) | Showing a second board, or a part of this one, as its own device |
 | [Sending data](docs/sending-data.md) | Intervals, sending it yourself, timestamps, buffered writes |
 | [Configuration](docs/configuration.md) | Tables, memory and compile-time settings |
@@ -158,15 +157,16 @@ ready-made Ethernet setup for Mega/GIGA shields and ESP32-PoE/WT32-ETH01 boards.
 Leave `USE_TCP` at `0` for Serial or set it to `1` for TCP and configure the included tab.
 Using `NetworkSetup.h` is optional. You can use your own networking libraries and setup instead.
 
-Start with **Basic**, then **Signals** and **Commands**. Follow with **Properties** and
-**Events**, then **WaveformGenerator** to see the pieces working together.
+Start with **Basic**, then **Signals** and **Commands**. Follow with **Controls**, **Sensors**
+and **Events**, then **WaveformGenerator** to see the pieces working together.
 
 | Example | What it teaches |
 |---|---|
 | [Basic](examples/Basic) | The smallest sketch that logs two values |
 | [Signals](examples/Signals) | Numeric, boolean and text signals, and numbered arrays |
-| [Commands](examples/Commands) | Plain commands and buttons |
-| [Properties](examples/Properties) | Inputs a host sets and sensors it shows, without logging them |
+| [Commands](examples/Commands) | Plain commands, and a function that sees every command |
+| [Controls](examples/Controls) | A number, text, switch, select and buttons |
+| [Sensors](examples/Sensors) | A number, bool, function, index and text sensor |
 | [Events](examples/Events) | Declaring and reporting occurrences |
 | [WaveformGenerator](examples/WaveformGenerator) | A complete, controllable waveform dashboard |
 | [WriteModes](examples/WriteModes) | Interval, on-change, and explicit signal writes |
