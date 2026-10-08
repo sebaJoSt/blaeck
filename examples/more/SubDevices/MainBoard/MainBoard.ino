@@ -11,7 +11,7 @@
 
   The circuit:
     - This board: an Arduino Mega, or another board with a second hardware serial port.
-    - Its TX1 (pin 18 on a Mega) to PumpBoard's RX, its RX1 (pin 19) to PumpBoard's TX,
+    - Its TX1 (pin 18 on a Mega) to PumpBoard's link RX, its RX1 (pin 19) to PumpBoard's link TX,
       and GND to GND. See PumpBoard.ino for the other side.
     - Connect only boards with the same logic level: 5 V to 5 V, 3.3 V to 3.3 V.
 
@@ -55,6 +55,19 @@ uint32_t readLE(const byte *bytes, byte count)
   return value;
 }
 
+// Waits for the start of a reply, skipping anything before it. Not Stream::find: on AVR it
+// compares each byte read with a signed char, so a marker above 0x7F never matches.
+bool waitForMarker(unsigned long timeoutMs)
+{
+  const unsigned long start = millis();
+  while (millis() - start < timeoutMs)
+  {
+    if (pumpLink.available() > 0 && pumpLink.read() == READING_MARKER)
+      return true;
+  }
+  return false;
+}
+
 // Asks PumpBoard for a reading. False if it did not answer in time or the reply was garbled.
 // restarted is set when the pump's uptime went backwards since the last reading.
 bool requestReading(bool &restarted)
@@ -65,7 +78,7 @@ bool requestReading(bool &restarted)
 
   byte reply[10];
   pumpLink.setTimeout(50);
-  if (!pumpLink.find((char)READING_MARKER) || pumpLink.readBytes(reply, sizeof(reply)) != sizeof(reply))
+  if (!waitForMarker(50) || pumpLink.readBytes(reply, sizeof(reply)) != sizeof(reply))
     return false;
 
   byte checksum = 0;

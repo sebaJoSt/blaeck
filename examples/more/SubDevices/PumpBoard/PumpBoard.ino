@@ -5,10 +5,11 @@
   serial link, and MainBoard reports its values as the device "Pump controller".
 
   The circuit:
-    - This board's TX to MainBoard's RX1 (pin 19 on a Mega), its RX to MainBoard's TX1
-      (pin 18), and GND to GND.
-    - An Uno or classic Nano uses pins 2 (RX) and 3 (TX) instead, because its hardware
-      serial port is taken by USB.
+    - This board's link TX to MainBoard's RX1 (pin 19 on a Mega), its link RX to MainBoard's
+      TX1 (pin 18), and GND to GND.
+    - The link pins on this board: Serial1 where the board has one, so TX1 (pin 18) and RX1
+      (pin 19) on a Mega. An Uno or classic Nano has none and uses pins 2 (RX) and 3 (TX).
+      Never pins 0 and 1: they carry USB.
     - Connect only boards with the same logic level: 5 V to 5 V, 3.3 V to 3.3 V.
     - Optional: a pump driver or an LED on PUMP_PIN, driven by the speed MainBoard sends.
 
