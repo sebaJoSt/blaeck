@@ -35,12 +35,12 @@ Blaeck device;
 BlaeckDeviceRef pump;
 
 float boardTemperature;
+float boardHumidity = 50.0f;
 float pumpFlow;
 float pumpPressure;
 // Set by a host through the PumpSpeed input, and by every reading with the speed the pump
 // actually runs at.
 byte pumpSpeed;
-char link[12] = "";
 
 unsigned long lastPumpUptime = 0;
 byte missedReplies = 0;
@@ -97,14 +97,14 @@ bool requestReading(bool &restarted)
   return true;
 }
 
-// Sends the pump's input and link state even if they look unchanged: while the pump was
-// missing, the host heard nothing of them. The signals need nothing, since they are read from
-// their variables for every data frame.
+// Sends the pump's properties even if they look unchanged: while the pump was missing, the host
+// heard nothing of them. The signals need nothing, since they are read from their variables for
+// every data frame.
 void reportPumpState()
 {
-  strcpy(link, "ok");
   pump.writeProperty(F("PumpSpeed"));
-  pump.writeProperty(F("Link"));
+  pump.writeProperty(F("Flow"));
+  pump.writeProperty(F("Pressure"));
 }
 
 void pollPump()
@@ -120,8 +120,8 @@ void pollPump()
       pump.writeRestarted();
       pump.writeEvent(F("Alarms"), F("restarted"));
     }
-    // After a gap or a restart the host's view may be out of date, so send both. A new speed
-    // alone needs nothing: tick() sends it.
+    // After a gap or a restart the host's view may be out of date, so send it all again. A new
+    // value alone needs nothing: tick() sends it.
     if (cameBack || restarted)
     {
       reportPumpState();
@@ -133,12 +133,22 @@ void pollPump()
   if (missedReplies < MISSES_BEFORE_MISSING)
     missedReplies++;
   if (missedReplies == MISSES_BEFORE_MISSING && !pump.isMissing())
-  {
-    // Sent at once: a missing device's properties are left out of tick()'s checks.
-    strcpy(link, "no answer");
-    pump.writeProperty(F("Link"));
     pump.markMissing();
-  }
+}
+
+// No sensors needed: watering raises the humidity, and cools the air a little as it evaporates.
+void simulateClimate()
+{
+  static unsigned long lastUpdate = 0;
+  if (millis() - lastUpdate < 1000)
+    return;
+  lastUpdate = millis();
+
+  const float watering = pumpFlow / 12.0f; // 0 with the pump off, 1 at full speed
+  static float cooling = 0.0f;
+  cooling += (watering - cooling) * 0.05f;
+  boardHumidity += (50.0f + 35.0f * watering - boardHumidity) * 0.05f;
+  boardTemperature = 21.0f + sin(millis() / 60000.0f) - cooling;
 }
 
 // blaeck has already checked the range and stored the speed; forwarding it is up to the sketch.
@@ -159,26 +169,37 @@ void setup()
   device.withFWVersion(F("1.0"));
 
   pump = device.addDevice(F("Pump controller"))
-             .withHWVersion(F("Arduino Uno"))
+             .withHWVersion(F("Arduino Mega 2560"))
              .withFWVersion(F("1.0"));
 
   device.addSignal(F("Temperature"), &boardTemperature);
+  device.addSignal(F("Humidity"), &boardHumidity);
+  // Sensors too, so Home Assistant shows the board as a device of its own. Signals never reach
+  // it, and a parent with nothing there is left out, its sub-devices shown on their own.
+  device.addSensor(F("Temperature"), &boardTemperature)
+      .withDeviceClass(F("temperature"))
+      .withUnit(F("\xC2\xB0" "C"))
+      .writeOnChange(0.1, 1000);
+  device.addSensor(F("Humidity"), &boardHumidity)
+      .withDeviceClass(F("humidity"))
+      .withUnit(F("%"))
+      .writeOnChange(0.5, 1000);
 
   // The pump's entries, registered through its handle. A host shows them under
   // "Pump controller", so their names need no "Pump" of their own.
   pump.addSignal(F("Flow"), &pumpFlow);
   pump.addSignal(F("Pressure"), &pumpPressure);
+  pump.addSensor(F("Flow"), &pumpFlow).withUnit(F("L/min"));
+  pump.addSensor(F("Pressure"), &pumpPressure).withUnit(F("bar"));
   pump.addNumberInput(F("PumpSpeed"), &pumpSpeed, onPumpSpeed)
       .withRange(0.0f, 100.0f, 1.0f)
       .withUnit(F("%"));
-  pump.addSensor(F("Link"), link, sizeof(link));
   pump.addEvent(F("Alarms"), F("restarted"));
 }
 
 void loop()
 {
-  // No sensor needed: a slowly varying value stands in for this board's own reading.
-  boardTemperature = 21.0f + sin(millis() / 60000.0f);
+  simulateClimate();
 
   static unsigned long lastPoll = 0;
   if (millis() - lastPoll >= POLL_INTERVAL_MS)

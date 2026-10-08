@@ -35,7 +35,7 @@ byte pumpSpeed = 0; // 0-100 %
 
 // No sensors needed: flow and pressure follow the speed. Read real sensors here instead.
 float readFlow() { return pumpSpeed * 0.12f; }
-float readPressure() { return 1.0f + pumpSpeed * 0.015f; }
+float readPressure() { return pumpSpeed * 0.025f; }
 
 void writeLE(uint32_t value, byte count, byte &checksum)
 {
