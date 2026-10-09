@@ -2431,21 +2431,6 @@ public:
   */
   static char *toText(float value, byte decimals, char *out, byte outSize);
 
-  /*!
-    @brief   Copies an F() string into a RAM buffer.
-
-    @param   flash    The F() literal.
-    @param   out      The buffer. The copy is cut to fit and always terminated.
-    @param   outSize  Size of the buffer, including the terminator.
-    @return  How many characters were copied.
-
-    @code
-      char name[16];
-      device.copyFlashName(F("Temperature"), name, sizeof(name));
-    @endcode
-  */
-  static byte copyFlashName(const __FlashStringHelper *flash, char *out, byte outSize);
-
   // Stores a channel name: an F() name as its pointer, a RAM name as a heap copy. Frees
   // what the slot held before.
   static bool _setChannelName(const char *&slot, bool &inFlash, const char *ram, const __FlashStringHelper *flash);
@@ -3480,6 +3465,9 @@ protected:
   friend class BlaeckDeviceBase;
 
 private:
+  // Copies an F() string into out, cut to fit and always terminated; returns the length.
+  static byte copyFlashName(const __FlashStringHelper *flash, char *out, byte outSize);
+
   struct Connection
   {
     Receiver receiver;
