@@ -2887,11 +2887,6 @@ void Blaeck::writeRestarted(unsigned long msg_id)
   }
 }
 
-void Blaeck::writeDevices()
-{
-  this->writeDevices(0);
-}
-
 void Blaeck::writeDevices(unsigned long msg_id)
 {
   this->writeDevicesFrame(msg_id);
@@ -4046,11 +4041,6 @@ void Blaeck::_writePropertyByName(byte deviceId, BlaeckString name)
     return;
   }
   _writePropertyFrame((uint16_t)index);
-}
-
-void Blaeck::writeEntities()
-{
-  writeEntities(0);
 }
 
 void Blaeck::writeEntities(unsigned long msg_id)

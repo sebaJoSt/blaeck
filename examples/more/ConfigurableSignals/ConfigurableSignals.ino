@@ -159,6 +159,5 @@ void UpdateLoggingSignals()
       device.addSignal(F("Sine_"), &sine[i].value).withNameSuffix(i);
     }
   }
-  // The host learns of the new signals only from a new device list.
-  device.writeDevices();
+  // A host that is logging stops at the next data frame; its next run asks for the new list.
 }

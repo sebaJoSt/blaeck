@@ -2155,14 +2155,13 @@ public:
 
     The table keeps its memory for the new ones. The rejection counts are reset too.
 
-    @warning Call writeDevices() once the new signals are added. Until then a host
-             files values under the old names. A host that is logging stops when the
-             signals change: its columns no longer describe the data.
+    @warning A host learns of the new signals from the next device list it asks for.
+             A host that is logging stops when the signals change: the schema hash of
+             the next data frame no longer matches its columns.
 
     @code
       device.clearAllSignals();
       device.addSignal(F("Temperature"), &Temperature);
-      device.writeDevices();
     @endcode
   */
   void clearAllSignals();
@@ -2199,22 +2198,6 @@ public:
   // ----- Devices -----
 
   /*!
-    @brief   Sends the device's name, versions and signals, then each device from addDevice().
-
-    Each entry also says whether the device is marked missing and whether a restart has
-    not been reported yet. A host needs the signals to read the data. The device sends
-    this when a host sends <BLAECK.GET_DEVICES>.
-
-    @warning Call it after adding, removing or renaming a signal while running, or a host
-             files values under the wrong names.
-
-    @code
-      device.writeDevices();
-    @endcode
-  */
-  void writeDevices();
-
-  /*!
     @brief   Adds a device that a host shows below this one, such as a second board.
 
     blaeck only reports the device. The sketch talks to it, over I2C, UART or anything
@@ -2238,22 +2221,6 @@ public:
     @endcode
   */
   BlaeckDeviceRef addDevice(BlaeckString name);
-
-  // ----- Entities -----
-
-  /*!
-    @brief   Sends the entity list: every input, sensor, event and button, with each
-             property's current value.
-
-    The device also sends it at startup, after the list changes, and when a host
-    sends <BLAECK.WRITE_ENTITIES>, so a sketch rarely needs to call it. With
-    BLAECK_ENABLE_IOT=0 the list goes out empty.
-
-    @code
-      device.writeEntities();
-    @endcode
-  */
-  void writeEntities();
 
   // ----- Events -----
   // With BLAECK_ENABLE_IOT=0 these compile but do nothing.
