@@ -2548,6 +2548,37 @@ public:
   void onIntervalStop(void (*callback)());
 
   /*!
+    @brief   Sets a function to call when the host sends BLAECK.ENTITIES_START.
+
+    Loggbok sends it while its MQTT bridge runs, so it tells a sketch that Home Assistant
+    is listening. By then property values and events go out again; changed values that
+    waited are sent on the next tick(). Events raised while entities were stopped were
+    lost, so this is the place to raise again what is still true. A restart does not
+    call it.
+
+    @param   callback  The function, or nullptr to remove it.
+
+    @code
+      device.onEntitiesStart([]() { if (tooHot) device.writeEvent(F("Alarms"), F("Overheat")); });
+    @endcode
+  */
+  void onEntitiesStart(void (*callback)());
+
+  /*!
+    @brief   Sets a function to call when the host sends BLAECK.ENTITIES_STOP.
+
+    Runs before the board stops sending property values and events on its own, so a last
+    writeEvent() still goes out. A host that crashes or loses the link never sends it.
+
+    @param   callback  The function, or nullptr to remove it.
+
+    @code
+      device.onEntitiesStop([]() { digitalWrite(LED_BUILTIN, LOW); });
+    @endcode
+  */
+  void onEntitiesStop(void (*callback)());
+
+  /*!
     @brief   Sets whether and how data is timestamped.
 
     BLAECK_NO_TIMESTAMP, the default, sends none and the host uses arrival time.
@@ -3347,6 +3378,8 @@ protected:
   void (*_beforeWriteCallback)() = nullptr;
   void (*_dataStartCallback)() = nullptr;
   void (*_dataStopCallback)() = nullptr;
+  void (*_entitiesStartCallback)() = nullptr;
+  void (*_entitiesStopCallback)() = nullptr;
   void (*_intervalStartCallback)(uint32_t intervalMs) = nullptr;
   void (*_intervalStopCallback)() = nullptr;
 

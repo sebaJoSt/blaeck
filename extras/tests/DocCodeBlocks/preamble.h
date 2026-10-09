@@ -62,6 +62,7 @@ float temperature = 20.0f;
 float energy = 0.0f;
 bool enabled = true;
 bool doorOpen = false;
+bool tooHot = false;
 byte mode = 0;
 byte stateIndex = 0;
 char label[33] = "lab-heater";

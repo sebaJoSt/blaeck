@@ -1199,10 +1199,15 @@ void Blaeck::read()
       {
         _entitiesStopped = false;
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
+        if (_entitiesStartCallback != nullptr)
+          _entitiesStartCallback();
       }
       else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_ENTITIES_STOP)))
       {
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
+        // Still answering, so what the callback writes goes out.
+        if (_entitiesStopCallback != nullptr)
+          _entitiesStopCallback();
         _entitiesStopped = true;
       }
       else
@@ -1232,6 +1237,16 @@ void Blaeck::onDataStart(void (*callback)())
 void Blaeck::onDataStop(void (*callback)())
 {
   _dataStopCallback = callback;
+}
+
+void Blaeck::onEntitiesStart(void (*callback)())
+{
+  _entitiesStartCallback = callback;
+}
+
+void Blaeck::onEntitiesStop(void (*callback)())
+{
+  _entitiesStopCallback = callback;
 }
 
 void Blaeck::onIntervalStart(void (*callback)(uint32_t intervalMs))

@@ -287,6 +287,8 @@ device.onDataStart([]() { digitalWrite(LED_BUILTIN, HIGH); });
 device.onDataStop([]() { digitalWrite(LED_BUILTIN, LOW); });
 device.onIntervalStart([](uint32_t intervalMs) { /* ... */ });
 device.onIntervalStop([]() { /* ... */ });
+device.onEntitiesStart([]() { /* Home Assistant is listening */ });
+device.onEntitiesStop([]() { /* ... */ });
 ```
 
 Each runs on every matching command, even if nothing changes, and after the

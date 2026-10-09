@@ -3668,6 +3668,14 @@ static void dataAndEntitiesCommands(bool buffered)
   });
   device.onIntervalStart([](uint32_t intervalMs) { streamLog += "IS" + std::to_string(intervalMs) + ";"; });
   device.onIntervalStop([]() { streamLog += "IP;"; });
+  device.onEntitiesStart([]() { streamLog += "ES;"; });
+  device.onEntitiesStop([]()
+  {
+    streamLog += "EP;";
+#if BLAECK_ENABLE_IOT
+    streamDevice->writeEvent("Action", "start"); // still answering, so this goes out
+#endif
+  });
   const std::vector<int> widths{4, 4};
   const auto acked = [&]()
   {
@@ -3686,7 +3694,7 @@ static void dataAndEntitiesCommands(bool buffered)
 
   command(device, stream, "<BLAECK.DATA_START>");
   command(device, stream, "<BLAECK.ENTITIES_START>");
-  assert(acked() && streamLog == "SS;");
+  assert(acked() && streamLog == "SS;ES;");
   streamLog.clear();
   stream.data.output.clear();
   device.writeIfDue();
@@ -3729,8 +3737,9 @@ static void dataAndEntitiesCommands(bool buffered)
   stream.data.output.clear();
 
   // ENTITIES_STOP holds property changes back and drops events, until ENTITIES_START.
+  streamLog.clear();
   command(device, stream, "<BLAECK.ENTITIES_STOP>");
-  assert(acked());
+  assert(acked() && streamLog == "EP;" && sent(0x85));
   stream.data.output.clear();
   sensorValue = 6;
   hostMillis() = 4000;
@@ -3742,7 +3751,7 @@ static void dataAndEntitiesCommands(bool buffered)
   assert(acked() && sent(0x95) && heater);
   stream.data.output.clear();
   command(device, stream, "<BLAECK.ENTITIES_START>");
-  assert(acked());
+  assert(acked() && streamLog == "EP;ES;");
   stream.data.output.clear();
   device.writeIfDue();
   assert(sent(0x95) && !sent(0x85) && !sent(0xD3));
