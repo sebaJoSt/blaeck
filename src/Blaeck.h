@@ -2281,34 +2281,6 @@ public:
   */
   void tick(unsigned long long timestamp = BLAECK_NOW);
 
-  // ----- Timed Data -----
-
-  /*!
-    @brief   Returns the data interval in milliseconds, as the host set it.
-
-    Only the host sets it, with BLAECK.INTERVAL_START.
-
-    @return  The interval. Only meaningful while isTimedDataActive() is true.
-
-    @code
-      if (device.isTimedDataActive())
-        Serial.println(device.getIntervalMs());
-    @endcode
-  */
-  unsigned long getIntervalMs() const { return _timedInterval_ms; }
-  /*!
-    @brief   Reports whether the host has switched timed data on.
-
-    @return  True after BLAECK.INTERVAL_START, until BLAECK.INTERVAL_STOP or
-             BLAECK.DATA_STOP.
-
-    @code
-      if (!device.isTimedDataActive())
-        Serial.println(F("nobody has asked for data yet"));
-    @endcode
-  */
-  bool isTimedDataActive() const { return _timedActivated; }
-
 
 
   // ----- Command callback  -----

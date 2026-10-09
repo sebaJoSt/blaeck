@@ -29,6 +29,8 @@ public:
   }
   using Blaeck::read;
   using Blaeck::writeIfDue;
+  bool intervalActive() const { return _timedActivated; }
+  unsigned long intervalMs() const { return _timedInterval_ms; }
   // Points a text signal elsewhere without writing it, so the baseline stays as it was.
   void retargetText(int index, const void *value, bool inFlash)
   {
@@ -1445,7 +1447,7 @@ static void beginOnlyOnce()
     assert(debug.text.find("only once per instance") != std::string::npos);
     assert(ignoredDebug.text.empty() && !device.hasRejections());
     assert(device.SignalCount == 2 && device.findSignalIndex("OnChange") == 1);
-    assert(device.isTimedDataActive() && device.getIntervalMs() == 1000);
+    assert(device.intervalActive() && device.intervalMs() == 1000);
     assert(device.isBufferedWrites() == buffered);
     device.writeIfDue();
     assert(io.output.empty());
@@ -3703,7 +3705,7 @@ static void dataAndEntitiesCommands(bool buffered)
   assert(acked() && streamLog == "IP;SP;");
   frames = takeData(stream.data.output, widths);
   assert(frames.size() == 1 && frames[0].ids == std::vector<int>({0, 1}));
-  assert(!device.isTimedDataActive());
+  assert(!device.intervalActive());
 
   change = 3;
   hostMillis() = 2000;

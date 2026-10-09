@@ -49,14 +49,17 @@ carry binary data rather than readable values.
 `tick()` is the only call `loop()` needs: it runs the commands that arrived, then sends what
 is due. To stamp the data frames with a time of your own, pass it: `device.tick(timestamp)`.
 
-Your sketch cannot set the interval, but it can read what the host asked for:
+Your sketch cannot set the interval, but it learns what the host asked for:
 
 ```cpp
-if (device.isTimedDataActive())
-  Serial.println(device.getIntervalMs());
+uint32_t intervalMs = 0;
+device.onIntervalStart([](uint32_t ms) { intervalMs = ms; });
+device.onIntervalStop([]() { intervalMs = 0; });
+device.addSensor(F("Interval"), &intervalMs);
 ```
 
-That is worth doing to show the interval on a sensor, or to remember it across a power cut.
+That is worth doing to show the interval on a sensor, or to remember it across a power cut:
+save it in `onIntervalStart`.
 
 ## Sending when something happens
 
