@@ -215,8 +215,7 @@ enum BlaeckTimestampMode
 {
   BLAECK_NO_TIMESTAMP = 0,
   BLAECK_MICROS = 1,
-  BLAECK_UNIX = 2,
-  BLAECK_RTC = BLAECK_UNIX // Deprecated alias
+  BLAECK_UNIX = 2
 };
 
 // paramCount is 0 for a command sent without parameters.
@@ -2602,18 +2601,6 @@ public:
     @endcode
   */
   void setTimestampMode(BlaeckTimestampMode mode, unsigned long long (*clock)() = nullptr);
-
-  /*!
-    @brief   Returns the timestamp mode.
-
-    @return  The mode as set, even if BLAECK_UNIX has no clock yet.
-
-    @code
-      if (device.getTimestampMode() == BLAECK_NO_TIMESTAMP)
-        Serial.println(F("data carries no time"));
-    @endcode
-  */
-  BlaeckTimestampMode getTimestampMode() const { return _timestampMode; }
 
   /*!
     @brief   Reports whether timestamps will be real.
