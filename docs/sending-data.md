@@ -262,13 +262,13 @@ A host controls what the board sends on its own, in two parts, and the interval:
 ```
 <BLAECK.DATA_START>          send data frames; every on-change value is sent again
 <BLAECK.DATA_STOP>           stop the interval, then send no data frames
-<BLAECK.ENTITIES_START>      send property changes and events
+<BLAECK.ENTITIES_START>      send property changes and events; every property is sent again
 <BLAECK.ENTITIES_STOP>       send no property changes or events
 ```
 
 While data is stopped, the board sends no data frames (`tick()`, `write()`, `writeAll()`).
-While entities are stopped, it sends no property changes or events; changed properties go out
-after `ENTITIES_START`, events are lost. Device notices and catalog updates are not affected.
+While entities are stopped, it sends no property changes or events; `ENTITIES_START` sends every
+property's current value, changed or not, and events raised meanwhile are lost. Device notices and catalog updates are not affected.
 Answers to a command always go out: its acknowledgement, the device list, the data for
 `WRITE_DATA`, the new value of a property the host sets, and whatever the sketch writes while
 handling it.

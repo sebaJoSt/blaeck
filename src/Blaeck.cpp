@@ -681,6 +681,17 @@ void Blaeck::_resetReportingBaselines()
       Signals[i].Reporting->valid = false;
 }
 
+// Every property counts as changed on the next tick(), so a host that starts entities learns
+// all their values, as DATA_START does for signals.
+void Blaeck::_resetPropertyBaselines()
+{
+#if BLAECK_ENABLE_IOT
+  for (uint16_t i = 0; i < _propertyCount; ++i)
+    if (_properties[i].reporting != nullptr)
+      _properties[i].reporting->valid = false;
+#endif
+}
+
 static size_t _signalValueSize(dataType type)
 {
   switch (type)
@@ -1198,6 +1209,7 @@ void Blaeck::read()
       else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_ENTITIES_START)))
       {
         _entitiesStopped = false;
+        _resetPropertyBaselines();
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
         if (_entitiesStartCallback != nullptr)
           _entitiesStartCallback();

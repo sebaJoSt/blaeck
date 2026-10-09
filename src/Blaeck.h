@@ -2551,8 +2551,8 @@ public:
     @brief   Sets a function to call when the host sends BLAECK.ENTITIES_START.
 
     Loggbok sends it while its MQTT bridge runs, so it tells a sketch that Home Assistant
-    is listening. By then property values and events go out again; changed values that
-    waited are sent on the next tick(). Events raised while entities were stopped were
+    is listening. By then property values and events go out again, and every property
+    sends its current value on the next tick(), changed or not. Events raised while entities were stopped were
     lost, so this is the place to raise again what is still true. A restart does not
     call it.
 
@@ -2873,6 +2873,7 @@ protected:
   ReportingState *_ensureReporting(int16_t index);
   void _reportSignalPolicyError(const __FlashStringHelper *message);
   void _resetReportingBaselines();
+  void _resetPropertyBaselines();
   bool _prepareTextSnapshot(ReportingState &reporting, size_t length);
   bool _prepareSignalSnapshot(Signal &signal);
   void _captureSignalSnapshot(Signal &signal);

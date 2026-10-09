@@ -3756,6 +3756,23 @@ static void dataAndEntitiesCommands(bool buffered)
   device.writeIfDue();
   assert(sent(0x95) && !sent(0x85) && !sent(0xD3));
   stream.data.output.clear();
+
+  // ENTITIES_START sends every property again, changed or not, as DATA_START does for signals.
+  const auto count = [&](int type)
+  {
+    const std::string out = unescaped(stream.data.output), key = std::string("<BLAECK:") + char(type);
+    int n = 0;
+    for (size_t at = out.find(key); at != std::string::npos; at = out.find(key, at + 1))
+      n++;
+    return n;
+  };
+  device.writeIfDue();
+  assert(count(0x95) == 0);
+  command(device, stream, "<BLAECK.ENTITIES_START>");
+  stream.data.output.clear();
+  device.writeIfDue();
+  assert(count(0x95) == 2 && !sent(0xD3));
+  stream.data.output.clear();
 #endif
 
   // Answers still go out.
