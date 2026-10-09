@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 GOLDEN = ROOT / "extras" / "tests" / "golden"
 HOST = ROOT / "extras" / "tests" / "host"
 
-C_TYPES = {"bool": "bool", "int": "long long", "float": "double"}
+C_TYPES = {"bool": "bool", "int": "long long", "float": "double", "index": "byte"}
 TEXT_SIZE = 256
 
 STATE_CLASSES = {
@@ -127,6 +127,10 @@ def c_value(type_: str, value) -> str:
         return f"{value}LL"
     if type_ == "float":
         return repr(float(value))
+    if type_ == "index":
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 255:
+            raise ValueError(f"an index is a whole number from 0 to 255, not {value!r}")
+        return str(value)
     raise ValueError(f"no literal for type {type_!r}")
 
 
@@ -139,6 +143,7 @@ class Program:
         self.setup: list[str] = []
         self.steps: list[str] = []
         self.signals: dict[str, str] = {}      # name -> C variable, board and sub-devices alike
+        self.signal_types: dict[str, str] = {}
         self.properties: dict[str, str] = {}
         self.devices: dict[str, str] = {}      # sub-device name -> handle variable
         self.var_count = 0
@@ -177,6 +182,7 @@ class Program:
                 call += f".writeOnChange({0.0 if delta == 'any' else float(delta)!r}, {s.get('min_interval_ms', 100)}UL)"
         self.setup.append(call + ";")
         self.signals[s["name"]] = var
+        self.signal_types[s["name"]] = type_
 
     def presentation(self, item: dict, number: bool) -> str:
         chain = ""
@@ -207,8 +213,25 @@ class Program:
             if kind != "sensor":
                 raise ValueError("only a sensor shows a signal's value")
             var = self.signals[p["signal"]]
-            call = f"{owner}.addSensor({name}, &{var})"
-            number = True
+            type_ = self.signal_types[p["signal"]]
+            if type_ == "str":
+                call = f"{owner}.addSensor({name}, (const char *){var}, {TEXT_SIZE})"
+            else:
+                call = f"{owner}.addSensor({name}, &{var})"
+            number = type_ in ("int", "float")
+        elif kind == "sensor" and "options" in p:
+            # An enum sensor: its index, a byte as blaeckpy sends it.
+            var = self.variable("index", p.get("value", 0))
+            call = f"{owner}.addSensor({name}, &{var}, {c_string(','.join(p['options']))})"
+            number = False
+        elif kind == "sensor" and p["type"] in ("bool", "str"):
+            # A text sensor has no buffer in blaeckpy, so it declares the most a text holds.
+            var = self.variable(p["type"], p.get("value", "" if p["type"] == "str" else False))
+            if p["type"] == "str":
+                call = f"{owner}.addSensor({name}, (const char *){var}, {TEXT_SIZE})"
+            else:
+                call = f"{owner}.addSensor({name}, &{var})"
+            number = False
         elif kind in ("number_input", "sensor"):
             type_ = p["type"]
             if type_ not in ("int", "float"):
@@ -224,6 +247,11 @@ class Program:
                 call += f".withRange({', '.join(limits)})"
             if "mode" in p:
                 call += f".withMode({NUMBER_MODES[p['mode']]})"
+        elif kind == "select":
+            # The selected option's index, a byte as blaeckpy sends it.
+            var = self.variable("index", p.get("value", 0))
+            call = f"{owner}.addSelect({name}, &{var}, {c_string(','.join(p['options']))})"
+            number = False
         elif kind == "switch":
             var = self.variable("bool", p.get("value", False))
             call = f"{owner}.addSwitch({name}, &{var})"

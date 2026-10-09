@@ -26,7 +26,7 @@ Scenarios use only what blaeckpy can declare: values are `bool`, `int` (a `long 
   "signals": [{"name": "Temperature", "type": "float", "value": 21.5,
                "write_at_interval": "always | off | {\"on_change\": 0.5}",
                "write_on_change": "0.5 | any | off", "min_interval_ms": 100}],
-  "properties": [{"kind": "number_input | sensor | switch | text_input", "name": "...", "...": "..."}],
+  "properties": [{"kind": "number_input | sensor | select | switch | text_input", "name": "...", "...": "..."}],
   "events": [{"name": "Alarms", "types": ["Overheat"]}],
   "buttons": [{"name": "Reboot"}],
   "commands": ["MOTOR"],
@@ -35,8 +35,11 @@ Scenarios use only what blaeckpy can declare: values are `bool`, `int` (a `long 
 }
 ```
 
-Properties: a `number_input` or `sensor` has `type` (`int` or `float`) and `value`, or, for a
-sensor, `signal` to show a signal's value. Number inputs take `min`, `max`, `step` and `mode`
+Properties: a `number_input` has `type` (`int` or `float`) and `value`. A `sensor` has `type`
+(`int`, `float`, `bool` or `str`) and `value`, or `signal` to show a signal's value, or `options`
+and `value` (the index) for an enum sensor. A `select` has `options` and `value` (the index). The
+index of a select or enum sensor is a byte, as blaeckpy sends it; a text sensor declares the most
+a text holds, 255 bytes, as blaeckpy's do. Number inputs take `min`, `max`, `step` and `mode`
 (`auto`, `box`, `slider`); a `text_input` takes `max_length` and `mode` (`plain`, `password`). Every
 property, event and button takes `display_name`, `icon`, `device_class`, `category` (`config`,
 `diagnostic`) and `disabled_by_default`; numbers also `unit`, `state_class`, `display_precision`,
