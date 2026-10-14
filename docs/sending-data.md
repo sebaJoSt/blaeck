@@ -268,7 +268,8 @@ A host controls what the board sends on its own, in two parts, and the interval:
 
 While data is stopped, the board sends no data frames (`tick()`, `write()`, `writeAll()`).
 While entities are stopped, it sends no property changes or events; `ENTITIES_START` sends every
-property's current value, changed or not, and events raised meanwhile are lost. Device notices and catalog updates are not affected.
+property's current value, changed or not, and events raised meanwhile are lost. Device notices
+and catalog updates are not affected.
 Answers to a command always go out: its acknowledgement, the device list, the data for
 `WRITE_DATA`, the new value of a property the host sets, and whatever the sketch writes while
 handling it.

@@ -2552,9 +2552,9 @@ public:
 
     Loggbok sends it while its MQTT bridge runs, so it tells a sketch that Home Assistant
     is listening. By then property values and events go out again, and every property
-    sends its current value on the next tick(), changed or not. Events raised while entities were stopped were
-    lost, so this is the place to raise again what is still true. A restart does not
-    call it.
+    sends its current value on the next tick(), changed or not. Events raised while
+    entities were stopped were lost, so this is the place to raise again what is still
+    true. A restart does not call it.
 
     @param   callback  The function, or nullptr to remove it.
 
