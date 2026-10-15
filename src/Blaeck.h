@@ -1547,8 +1547,9 @@ public:
   /*!
     @brief   Adds text a host can set, stored in a buffer.
 
-    A host's text is decoded and copied into the buffer, terminator included. Longer
-    text than the buffer holds is refused; an empty value clears it.
+    A host's text is decoded, stripped of spaces at its start and end, and copied into
+    the buffer, terminator included. Longer text than the buffer holds is refused; an
+    empty value clears it.
 
     @param   name      The name a host shows and sets the value by.
     @param   buffer    The buffer, a global.
