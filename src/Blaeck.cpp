@@ -1587,6 +1587,70 @@ BlaeckButtonRef BlaeckDeviceBase::addButton(const char *name, BlaeckButtonFuncti
   return BlaeckButtonRef(_core, (int16_t)_registerCommand(name, nullptr, press));
 }
 
+void Blaeck::_trimExtent(BlaeckString s, unsigned int &start, unsigned int &len)
+{
+  while (len > 0 && _isTrimChar(s.read(start)))
+  {
+    start++;
+    len--;
+  }
+  while (len > 0 && _isTrimChar(s.read(start + len - 1)))
+    len--;
+}
+
+bool Blaeck::_csvNextField(BlaeckString csv, unsigned int &from, unsigned int &start, unsigned int &len)
+{
+  unsigned int end = from;
+  byte c;
+  while ((c = csv.read(end)) != 0 && c != ',')
+    end++;
+  start = from;
+  len = end - from;
+  _trimExtent(csv, start, len);
+  from = end + 1;
+  return c == ',';
+}
+
+bool Blaeck::_csvFieldExtent(BlaeckString csv, unsigned int field, unsigned int &start, unsigned int &len)
+{
+  start = 0;
+  len = 0;
+  if (csv == nullptr)
+    return false;
+  unsigned int from = 0;
+  for (unsigned int f = 0;; f++)
+  {
+    const bool more = _csvNextField(csv, from, start, len);
+    if (f == field)
+      return true;
+    if (!more)
+    {
+      start = 0;
+      len = 0;
+      return false;
+    }
+  }
+}
+
+void Blaeck::_emitCsvTrimmed0(BlaeckString csv)
+{
+  if (csv != nullptr)
+  {
+    unsigned int from = 0;
+    unsigned int start, len;
+    bool more;
+    do
+    {
+      more = _csvNextField(csv, from, start, len);
+      for (unsigned int i = 0; i < len; i++)
+        _emitByte(csv.read(start + i));
+      if (more)
+        _emitByte(',');
+    } while (more);
+  }
+  _emitByte(0);
+}
+
 uint16_t Blaeck::_flashCsvOptionCount(BlaeckString csv)
 {
   if (csv == nullptr)
@@ -1647,75 +1711,50 @@ bool Blaeck::getSelectOptionNameAt(BlaeckString name, byte index, char *out, byt
   if (property < 0 || _properties[property].kind != BLAECK_VALUE_ENUM)
     return false;
 
-  // Skip `index` commas, then copy up to the next one.
+  // The option's name, trimmed. A shortened name would match no option, so fail instead.
+  unsigned int start, len;
   BlaeckString p = _properties[property].options;
-  byte seen = 0;
-  unsigned int at = 0;
-  while (seen < index)
-  {
-    byte c = p.read(at);
-    if (c == 0)
-      return false; // fewer options than the index asked for
-    if (c == ',')
-      seen++;
-    at++;
-  }
-
-  byte len = 0;
-  byte c;
-  while ((c = p.read(at + len)) != 0 && c != ',')
-  {
-    // A shortened name would match no option, so fail instead.
-    if ((unsigned int)len + 1 >= outSize)
-    {
-      out[0] = '\0';
-      return false;
-    }
-    out[len] = (char)c;
-    len++;
-  }
+  if (!_csvFieldExtent(p, index, start, len) || len == 0 || len + 1 > outSize)
+    return false;
+  for (unsigned int i = 0; i < len; i++)
+    out[i] = (char)p.read(start + i);
   out[len] = '\0';
-  return len > 0;
+  return true;
 }
 
 long Blaeck::_flashCsvIndexOf(BlaeckString csv, const char *value)
 {
-  if (csv == nullptr || value == nullptr || value[0] == '\0')
+  if (csv == nullptr || value == nullptr)
     return -1;
 
-  size_t at = 0;
-  long index = 0;
-  const char *v = value;
-  bool matching = true; // current token still matches value so far
+  // Outer spaces don't count on either side.
+  while (_isTrimChar((byte)*value))
+    value++;
+  size_t valueLen = strlen(value);
+  while (valueLen > 0 && _isTrimChar((byte)value[valueLen - 1]))
+    valueLen--;
+  if (valueLen == 0)
+    return -1;
 
-  byte c;
-  while (true)
+  unsigned int from = 0;
+  unsigned int start, len;
+  long index = 0;
+  bool more;
+  do
   {
-    c = csv.read(at++);
-    if (c == ',' || c == '\0')
+    more = _csvNextField(csv, from, start, len);
+    if (len == valueLen)
     {
-      // End of a token: match if value was fully consumed too.
-      if (matching && *v == '\0')
+      // Case-sensitive, so options differing only in case stay distinct.
+      unsigned int i = 0;
+      while (i < len && (char)csv.read(start + i) == value[i])
+        i++;
+      if (i == len)
         return index;
-      if (c == '\0')
-        return -1;
-      // Advance to next token
-      index++;
-      v = value;
-      matching = true;
     }
-    else
-    {
-      if (matching)
-      {
-        // Case-sensitive, so options differing only in case stay distinct.
-        if (*v == '\0' || (char)c != *v)
-          matching = false;
-        else
-          v++;
-      }
-    }
-  }
+    index++;
+  } while (more);
+  return -1;
 }
 
 bool Blaeck::_receiveByte(Receiver &r, char rc)
@@ -2322,25 +2361,11 @@ void Blaeck::_eventTypeExtent(const EventTypeEntry &e, unsigned int &start, unsi
   {
     while (p.read(len) != 0)
       len++;
+    _trimExtent(p, start, len);
     return;
   }
 
-  // Skip `field` commas, then measure to the next comma or the end.
-  byte seen = 0;
-  unsigned int i = 0;
-  while (seen < e.field)
-  {
-    byte c = p.read(i);
-    if (c == 0)
-      return; // fewer fields than expected: empty extent
-    if (c == ',')
-      seen++;
-    i++;
-  }
-  start = i;
-  byte c;
-  while ((c = p.read(start + len)) != 0 && c != ',')
-    len++;
+  _csvFieldExtent(p, e.field, start, len);
 }
 
 void Blaeck::_emitEventType0(const EventTypeEntry &e)
@@ -2360,17 +2385,23 @@ bool Blaeck::_eventTypeEquals(const EventTypeEntry &e, BlaeckString eventType)
 
   unsigned int start, len;
   _eventTypeExtent(e, start, len);
+  if (len == 0)
+    return false;
 
   BlaeckString a = e.text;
   BlaeckString b = eventType;
+  unsigned int bStart = 0, bLen = 0;
+  while (b.read(bLen) != 0)
+    bLen++;
+  _trimExtent(b, bStart, bLen);
+  if (bLen != len)
+    return false;
   for (unsigned int i = 0; i < len; i++)
   {
-    byte bc = b.read(i);
-    if (bc == 0 || a.read(start + i) != bc)
+    if (a.read(start + i) != b.read(bStart + i))
       return false;
   }
-  // Equal only if eventType ends where the field does.
-  return b.read(len) == 0;
+  return true;
 }
 
 bool Blaeck::_addEventType(byte deviceId, const char *channelName, BlaeckString eventType)
@@ -4194,7 +4225,7 @@ void Blaeck::writeEntitiesFrame(unsigned long msg_id)
       else
         _emitBytes(value, _signalValueSize(p.type));
       if (p.kind == BLAECK_VALUE_ENUM)
-        _emitFlashStr0(p.options);
+        _emitCsvTrimmed0(p.options);
       // A text holds at most 255 bytes; a text from a function has no buffer to be smaller.
       if (p.kind == BLAECK_VALUE_TEXT)
         _emitByte(p.textSize > 0 ? (byte)(p.textSize - 1) : (byte)255);

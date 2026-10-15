@@ -81,7 +81,8 @@ device.addSelect(F("Mode"), &mode, F("Off,Heat,Auto"));   // <Mode,Heat> or <Mod
 | `addSelect()` | any integer type | an option's name, or its position counted from 0 |
 
 The acknowledgement tells whether a value was taken. A select stores the position;
-`getSelectOptionNameAt()` gives the option's name for it.
+`getSelectOptionNameAt()` gives the option's name for it. Spaces around the commas don't count:
+`F("Off, Heat")` is the same list as `F("Off,Heat")`.
 
 An optional function runs when the user sets the value:
 
@@ -193,6 +194,7 @@ void loop()
 ```
 
 - `addEvent()` takes a name and every type the event reports, as one comma-separated list.
+  Spaces around the commas don't count.
 - `writeEvent()` reports one type. Events are fire and forget, and never logged.
 - `tooHot` makes each crossing fire once.
 

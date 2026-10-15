@@ -2490,7 +2490,8 @@ public:
   /*!
     @brief   Returns the position of an option in a select's list.
 
-    Case-sensitive. Works for addSelect() and for addSensor() with options.
+    Case-sensitive; spaces around optionName are ignored. Works for addSelect() and for
+    addSensor() with options.
 
     @param   name        The select's or sensor's name.
     @param   optionName  The option to look for.
@@ -2958,6 +2959,19 @@ protected:
   // True if any field is empty or only spaces. Such a list is refused, because dropping the
   // field would shift every later field's index.
   static bool _flashCsvHasBlankField(BlaeckString csv);
+
+  // Options and event types ignore spaces, tabs, CR and LF at their start and end, so
+  // "On, Off" means "On,Off". The same set _flashCsvHasBlankField() treats as blank.
+  static bool _isTrimChar(byte c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
+  // Shrinks start and len to leave out the outer trim characters.
+  static void _trimExtent(BlaeckString s, unsigned int &start, unsigned int &len);
+  // Reads the field starting at `from`, trimmed, and moves `from` to the next field.
+  // False when this was the last field.
+  static bool _csvNextField(BlaeckString csv, unsigned int &from, unsigned int &start, unsigned int &len);
+  // Field `field` of a comma-separated string, trimmed. False if there are fewer fields.
+  static bool _csvFieldExtent(BlaeckString csv, unsigned int field, unsigned int &start, unsigned int &len);
+  // Emits each field trimmed, joined by commas, with a terminator.
+  void _emitCsvTrimmed0(BlaeckString csv);
 #if BLAECK_ENABLE_IOT
   // Index of an added event, or -1 when the name was never added.
   int _findEventChannel(byte deviceId, const char *channelName) const;
@@ -3351,9 +3365,9 @@ protected:
   typedef blaeck_detail::EventTypeEntry EventTypeEntry;
   static const byte WHOLE_STRING = blaeck_detail::WHOLE_STRING;
 
-  // Where the entry's name starts in its stored string, and its length.
+  // Where the entry's name starts in its stored string, and its length, trimmed.
   static void _eventTypeExtent(const EventTypeEntry &e, unsigned int &start, unsigned int &len);
-  // Compares the entry's name with eventType.
+  // Compares the entry's name with eventType, both trimmed.
   static bool _eventTypeEquals(const EventTypeEntry &e, BlaeckString eventType);
   // Emits the entry's name with a terminator.
   void _emitEventType0(const EventTypeEntry &e);

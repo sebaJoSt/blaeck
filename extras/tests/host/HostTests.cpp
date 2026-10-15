@@ -2749,6 +2749,71 @@ static void commandValues()
   assert(ackReason(stream, 21) == BLAECK_ACK_UNKNOWN);
 }
 
+// Spaces around commas don't count: "On, Off" means "On,Off" for options and event types alike,
+// on the wire, in matching, and for the names a sketch reads back.
+static void trimmedOptionsAndEventTypes()
+{
+  FakeStream stream;
+  ConfigurationProbe device;
+  device.begin(stream);
+  byte mode = 0, state = 0;
+  device.addSelect("Mode", &mode, F(" Off , Heat mode,\tAuto "));
+  device.addSensor("State", &state, "Idle, Busy");
+  device.addEvent(F("Door"), F("opened, closed"));
+  assert(device.addEventType("Door", " jammed "));
+  assert(!device.hasRejections());
+  command(device, stream, "<BLAECK.GET_DEVICES>");
+
+  stream.data.output.clear();
+  device.sendEntities();
+  const std::string &entities = stream.data.output;
+  assert(entities.find(std::string("Off,Heat mode,Auto") + '\0') != std::string::npos);
+  assert(entities.find(std::string("Idle,Busy") + '\0') != std::string::npos);
+  for (const char *type : {"opened", "closed", "jammed"})
+    assert(entities.find(std::string(type) + '\0') != std::string::npos);
+  assert(entities.find(" Off") == std::string::npos && entities.find(" closed") == std::string::npos &&
+         entities.find(" jammed") == std::string::npos);
+
+  char option[12];
+  assert(device.getSelectOptionNameAt("Mode", 0, option, sizeof(option)) && strcmp(option, "Off") == 0);
+  assert(device.getSelectOptionNameAt("Mode", 1, option, sizeof(option)) && strcmp(option, "Heat mode") == 0);
+  assert(device.getSelectOptionNameAt("Mode", 2, option, sizeof(option)) && strcmp(option, "Auto") == 0);
+  assert(!device.getSelectOptionNameAt("Mode", 3, option, sizeof(option)) && option[0] == '\0');
+  // "Heat mode" needs 10 bytes; 9 is too small, and the name is never cut short.
+  assert(!device.getSelectOptionNameAt("Mode", 1, option, 9) && option[0] == '\0');
+  assert(device.getSelectOptionNameAt("Mode", 1, option, 10));
+  assert(device.getSelectOptionIndexOf("Mode", "Auto") == 2);
+  assert(device.getSelectOptionIndexOf("Mode", " Heat mode ") == 1);
+  assert(device.getSelectOptionIndexOf("Mode", "Heat") == -1);
+  assert(device.getSelectOptionIndexOf("Mode", "  ") == -1);
+  assert(device.getSelectOptionIndexOf("State", "Busy") == 1);
+
+  stream.data.output.clear();
+  command(device, stream, "<#1:Mode,Heat%20mode>");
+  assert(ackReason(stream, 1) == BLAECK_ACK_OK && mode == 1);
+  command(device, stream, "<#2:Mode,%20Auto>");
+  assert(ackReason(stream, 2) == BLAECK_ACK_OK && mode == 2);
+  command(device, stream, "<#3:Mode,Heatmode>");
+  assert(ackReason(stream, 3) == BLAECK_ACK_BAD_SELECT && mode == 2);
+
+  // The same type, written with or without spaces, is a duplicate.
+  assert(!device.addEventType("Door", "closed"));
+  assert(!device.addEventType(F("Door"), F("jammed ")));
+  stream.data.output.clear();
+  device.writeEvent("Door", "closed");
+  const std::string closed = stream.data.output;
+  assert(!closed.empty());
+  stream.data.output.clear();
+  device.writeEvent(F("Door"), F(" closed "));
+  assert(stream.data.output == closed);
+  stream.data.output.clear();
+  device.writeEvent("Door", "jammed");
+  assert(!stream.data.output.empty() && stream.data.output != closed);
+  stream.data.output.clear();
+  device.writeEvent("Door", "clos");
+  assert(stream.data.output.empty());
+}
+
 // Clearing controls or sensors keeps the rest, numbered without gaps: a 0x95 names a property by
 // its position, so a kept sensor has to move down with everything it owns.
 static void clearsAndIdentity()
@@ -3968,6 +4033,7 @@ int main()
     subDevices(true);
     deviceCommands();
     commandValues();
+    trimmedOptionsAndEventTypes();
     properties();
     rangeAtTheVariablesWidth();
     aWholeRangeIsKeptWhole();
