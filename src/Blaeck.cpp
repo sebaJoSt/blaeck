@@ -1641,14 +1641,72 @@ void Blaeck::_emitCsvTrimmed0(BlaeckString csv)
     bool more;
     do
     {
+      // Still encoded: a host splits on the commas, then decodes each option.
       more = _csvNextField(csv, from, start, len);
-      for (unsigned int i = 0; i < len; i++)
-        _emitByte(csv.read(start + i));
+      unsigned int end = start + len;
+      _fieldContent(csv, start, end);
+      for (unsigned int i = start; i < end; i++)
+        _emitByte(csv.read(i));
       if (more)
         _emitByte(',');
     } while (more);
   }
   _emitByte(0);
+}
+
+static int _hexValue(byte c)
+{
+  if (c >= '0' && c <= '9')
+    return c - '0';
+  if (c >= 'a' && c <= 'f')
+    return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F')
+    return c - 'A' + 10;
+  return -1;
+}
+
+byte Blaeck::_decodeAt(BlaeckString s, unsigned int &at, unsigned int end)
+{
+  const byte c = s.read(at);
+  if (c == '%' && at + 2 < end)
+  {
+    const int hi = _hexValue(s.read(at + 1));
+    const int lo = _hexValue(s.read(at + 2));
+    const byte value = (byte)((hi << 4) | lo);
+    if (hi >= 0 && lo >= 0 && value != 0)
+    {
+      at += 3;
+      return value;
+    }
+  }
+  at++;
+  return c;
+}
+
+unsigned int Blaeck::_fieldContent(BlaeckString s, unsigned int &start, unsigned int &end)
+{
+  // Leading: drop whole characters, encoded or not, while they decode to a trim character.
+  while (start < end)
+  {
+    unsigned int next = start;
+    if (!_isTrimChar(_decodeAt(s, next, end)))
+      break;
+    start = next;
+  }
+  // Trailing: decode forward, remembering where the last other character ended.
+  unsigned int at = start, contentEnd = start, count = 0, content = 0;
+  while (at < end)
+  {
+    const byte c = _decodeAt(s, at, end);
+    count++;
+    if (!_isTrimChar(c))
+    {
+      content = count;
+      contentEnd = at;
+    }
+  }
+  end = contentEnd;
+  return content;
 }
 
 uint16_t Blaeck::_flashCsvOptionCount(BlaeckString csv)
@@ -1668,29 +1726,22 @@ uint16_t Blaeck::_flashCsvOptionCount(BlaeckString csv)
   return any ? count : 0;
 }
 
-// True for a field that is empty or only spaces, which a host couldn't show or offer.
+// True for a field that is empty or only spaces once decoded, which a host couldn't show or offer.
 bool Blaeck::_flashCsvHasBlankField(BlaeckString csv)
 {
   if (csv == nullptr)
     return true;
-  size_t at = 0;
-  bool fieldHasContent = false;
-  byte c;
-  while ((c = csv.read(at++)) != 0)
+  unsigned int from = 0;
+  unsigned int start, len;
+  bool more;
+  do
   {
-    if (c == ',')
-    {
-      if (!fieldHasContent)
-        return true;
-      fieldHasContent = false;
-    }
-    else if (c != ' ' && c != '\t' && c != '\r' && c != '\n')
-    {
-      fieldHasContent = true;
-    }
-  }
-  // The last field, and an empty string.
-  return !fieldHasContent;
+    more = _csvNextField(csv, from, start, len);
+    unsigned int end = start + len;
+    if (_fieldContent(csv, start, end) == 0)
+      return true;
+  } while (more);
+  return false;
 }
 
 long Blaeck::getSelectOptionIndexOf(BlaeckString name, const char *optionName) const
@@ -1711,14 +1762,18 @@ bool Blaeck::getSelectOptionNameAt(BlaeckString name, byte index, char *out, byt
   if (property < 0 || _properties[property].kind != BLAECK_VALUE_ENUM)
     return false;
 
-  // The option's name, trimmed. A shortened name would match no option, so fail instead.
+  // The option's name, decoded. A shortened name would match no option, so fail instead.
   unsigned int start, len;
   BlaeckString p = _properties[property].options;
-  if (!_csvFieldExtent(p, index, start, len) || len == 0 || len + 1 > outSize)
+  if (!_csvFieldExtent(p, index, start, len))
     return false;
-  for (unsigned int i = 0; i < len; i++)
-    out[i] = (char)p.read(start + i);
-  out[len] = '\0';
+  unsigned int end = start + len;
+  const unsigned int nameLen = _fieldContent(p, start, end);
+  if (nameLen == 0 || nameLen + 1 > outSize)
+    return false;
+  for (unsigned int i = 0; i < nameLen; i++)
+    out[i] = (char)_decodeAt(p, start, end);
+  out[nameLen] = '\0';
   return true;
 }
 
@@ -1743,13 +1798,14 @@ long Blaeck::_flashCsvIndexOf(BlaeckString csv, const char *value)
   do
   {
     more = _csvNextField(csv, from, start, len);
-    if (len == valueLen)
+    unsigned int end = start + len;
+    if (_fieldContent(csv, start, end) == valueLen)
     {
-      // Case-sensitive, so options differing only in case stay distinct.
+      // Decoded, then case-sensitive, so options differing only in case stay distinct.
       unsigned int i = 0;
-      while (i < len && (char)csv.read(start + i) == value[i])
+      while (i < valueLen && (char)_decodeAt(csv, start, end) == value[i])
         i++;
-      if (i == len)
+      if (i == valueLen)
         return index;
     }
     index++;
@@ -2365,32 +2421,44 @@ void Blaeck::_addEventTypesCsv(uint16_t channelIndex, const detail::StoredString
   }
 }
 
-void Blaeck::_eventTypeExtent(const EventTypeEntry &e, unsigned int &start, unsigned int &len)
+unsigned int Blaeck::_eventTypeExtent(const EventTypeEntry &e, unsigned int &start, unsigned int &end)
 {
   start = 0;
-  len = 0;
+  end = 0;
   if (e.text == nullptr)
-    return;
+    return 0;
 
   BlaeckString p = e.text;
+  unsigned int len = 0;
   if (e.field == WHOLE_STRING)
   {
     while (p.read(len) != 0)
       len++;
     _trimExtent(p, start, len);
-    return;
+    end = start + len;
+    return len;
   }
 
-  _csvFieldExtent(p, e.field, start, len);
+  if (!_csvFieldExtent(p, e.field, start, len))
+    return 0;
+  end = start + len;
+  return _fieldContent(p, start, end);
+}
+
+byte Blaeck::_eventTypeByte(const EventTypeEntry &e, unsigned int &at, unsigned int end)
+{
+  BlaeckString p = e.text;
+  if (e.field == WHOLE_STRING)
+    return p.read(at++);
+  return _decodeAt(p, at, end);
 }
 
 void Blaeck::_emitEventType0(const EventTypeEntry &e)
 {
-  unsigned int start, len;
-  _eventTypeExtent(e, start, len);
-  BlaeckString p = e.text;
+  unsigned int at, end;
+  const unsigned int len = _eventTypeExtent(e, at, end);
   for (unsigned int i = 0; i < len; i++)
-    _emitByte(p.read(start + i));
+    _emitByte(_eventTypeByte(e, at, end));
   _emitByte(0);
 }
 
@@ -2399,12 +2467,12 @@ bool Blaeck::_eventTypeEquals(const EventTypeEntry &e, BlaeckString eventType)
   if (e.text == nullptr || eventType == nullptr)
     return false;
 
-  unsigned int start, len;
-  _eventTypeExtent(e, start, len);
+  unsigned int at, end;
+  const unsigned int len = _eventTypeExtent(e, at, end);
   if (len == 0)
     return false;
 
-  BlaeckString a = e.text;
+  // eventType is plain text, as a sketch writes it in writeEvent() and addEventType().
   BlaeckString b = eventType;
   unsigned int bStart = 0, bLen = 0;
   while (b.read(bLen) != 0)
@@ -2414,7 +2482,7 @@ bool Blaeck::_eventTypeEquals(const EventTypeEntry &e, BlaeckString eventType)
     return false;
   for (unsigned int i = 0; i < len; i++)
   {
-    if (a.read(start + i) != b.read(bStart + i))
+    if (_eventTypeByte(e, at, end) != b.read(bStart + i))
       return false;
   }
   return true;

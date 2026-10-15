@@ -1588,7 +1588,8 @@ public:
 
     @param   name      The name a host shows and sets the value by.
     @param   index     The variable, a global of any integer type.
-    @param   options   The options, comma-separated. At least one, none blank.
+    @param   options   The options, comma-separated. At least one, none blank. Write a
+                       comma inside an option as %2C, a percent sign as %25.
     @param   onChange  Optional. Runs after a host has set the value.
     @return  A handle for the presentation.
 
@@ -1666,7 +1667,8 @@ public:
 
     @param   name     The name a host shows.
     @param   index    An integer variable, or a function returning one.
-    @param   options  The options, comma-separated. At least one, none blank.
+    @param   options  The options, comma-separated. At least one, none blank. Write a
+                      comma inside an option as %2C, a percent sign as %25.
     @return  A handle for the presentation.
 
     @code
@@ -1741,7 +1743,8 @@ public:
 
     @param   channelName  The name a host shows, unique among this device's events. RAM
                           text is copied; an F() literal stays in flash.
-    @param   eventTypes   What the event can report, comma-separated.
+    @param   eventTypes   What the event can report, comma-separated. Write a comma
+                          inside a type as %2C, a percent sign as %25.
     @return  A handle for describing how a host shows the event.
 
     @warning An event with no types, or with a blank one, is refused.
@@ -2973,8 +2976,15 @@ protected:
   static bool _csvNextField(BlaeckString csv, unsigned int &from, unsigned int &start, unsigned int &len);
   // Field `field` of a comma-separated string, trimmed. False if there are fewer fields.
   static bool _csvFieldExtent(BlaeckString csv, unsigned int field, unsigned int &start, unsigned int &len);
-  // Emits each field trimmed, joined by commas, with a terminator.
+  // Emits each field trimmed, still encoded, joined by commas, with a terminator.
   void _emitCsvTrimmed0(BlaeckString csv);
+  // Inside a list's field, %XX stands for one byte, so an option can hold a comma (%2C) or a
+  // percent sign (%25). Decodes the byte at `at`, an escape only if it ends before `end` and isn't
+  // %00, and moves `at` past it.
+  static byte _decodeAt(BlaeckString s, unsigned int &at, unsigned int end);
+  // Narrows [start, end) to the field's content: without the characters that decode to a trim
+  // character at either end. Returns its decoded length.
+  static unsigned int _fieldContent(BlaeckString s, unsigned int &start, unsigned int &end);
 #if BLAECK_ENABLE_IOT
   // Index of an added event, or -1 when the name was never added.
   int _findEventChannel(byte deviceId, const char *channelName) const;
@@ -3368,8 +3378,11 @@ protected:
   typedef blaeck_detail::EventTypeEntry EventTypeEntry;
   static const byte WHOLE_STRING = blaeck_detail::WHOLE_STRING;
 
-  // Where the entry's name starts in its stored string, and its length, trimmed.
-  static void _eventTypeExtent(const EventTypeEntry &e, unsigned int &start, unsigned int &len);
+  // The entry's name: where it starts and ends in its stored string, trimmed, and its length.
+  // A field of an addEvent() list is percent-decoded; a type from addEventType() is plain.
+  static unsigned int _eventTypeExtent(const EventTypeEntry &e, unsigned int &start, unsigned int &end);
+  // Reads the next byte of the entry's name, decoded where it is a list field.
+  static byte _eventTypeByte(const EventTypeEntry &e, unsigned int &at, unsigned int end);
   // Compares the entry's name with eventType, both trimmed.
   static bool _eventTypeEquals(const EventTypeEntry &e, BlaeckString eventType);
   // Emits the entry's name with a terminator.

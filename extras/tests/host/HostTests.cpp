@@ -2823,6 +2823,61 @@ static void trimmedOptionsAndEventTypes()
   assert(stream.data.output.empty());
 }
 
+// Inside an options or addEvent() list, %XX is one byte, so an option can hold a comma. Options go
+// out still encoded, for the host to split and then decode; everything a sketch reads or passes is
+// plain text, and event types go out decoded, one string each.
+static void percentEncodedLists()
+{
+  FakeStream stream;
+  ConfigurationProbe device;
+  device.begin(stream);
+  byte mode = 0, state = 0;
+  device.addSelect("Mode", &mode, F("Off, Heat%2C fast %20,50%25,100%,%41b%00"));
+  device.addEvent(F("Door"), F("opened,closed%2C locked"));
+  assert(device.addEventType("Door", "jammed, forced"));
+  assert(device.addEventType("Door", "50%25"));
+  assert(!device.hasRejections());
+  device.addSensor("Blank", &state, F("On,%20"));
+  assert(device.hasRejections());
+  command(device, stream, "<BLAECK.GET_DEVICES>");
+
+  stream.data.output.clear();
+  device.sendEntities();
+  const std::string &entities = stream.data.output;
+  assert(entities.find(std::string("Off,Heat%2C fast,50%25,100%,%41b%00") + '\0') != std::string::npos);
+  for (const char *type : {"opened", "closed, locked", "jammed, forced", "50%25"})
+    assert(entities.find(std::string(type) + '\0') != std::string::npos);
+
+  char option[16];
+  assert(device.getSelectOptionNameAt("Mode", 1, option, sizeof(option)) && strcmp(option, "Heat, fast") == 0);
+  assert(device.getSelectOptionNameAt("Mode", 2, option, sizeof(option)) && strcmp(option, "50%") == 0);
+  assert(device.getSelectOptionNameAt("Mode", 3, option, sizeof(option)) && strcmp(option, "100%") == 0);
+  // %00 is no escape: a name can't hold a zero byte.
+  assert(device.getSelectOptionNameAt("Mode", 4, option, sizeof(option)) && strcmp(option, "Ab%00") == 0);
+  // "Heat, fast" needs 11 bytes, decoded.
+  assert(!device.getSelectOptionNameAt("Mode", 1, option, 10));
+  assert(device.getSelectOptionIndexOf("Mode", "Heat, fast") == 1);
+  assert(device.getSelectOptionIndexOf("Mode", "Heat%2C fast") == -1);
+  assert(device.getSelectOptionIndexOf("Mode", "50%") == 2);
+
+  stream.data.output.clear();
+  command(device, stream, "<#1:Mode,Heat%2C fast>");
+  assert(ackReason(stream, 1) == BLAECK_ACK_OK && mode == 1);
+  command(device, stream, "<#2:Mode,50%25>");
+  assert(ackReason(stream, 2) == BLAECK_ACK_OK && mode == 2);
+
+  // The sketch names a type in plain text; one from addEventType() is taken as written.
+  assert(!device.addEventType("Door", "closed, locked"));
+  stream.data.output.clear();
+  device.writeEvent("Door", "closed, locked");
+  assert(!stream.data.output.empty());
+  stream.data.output.clear();
+  device.writeEvent("Door", "closed%2C locked");
+  assert(stream.data.output.empty());
+  device.writeEvent("Door", "50%25");
+  assert(!stream.data.output.empty());
+}
+
 // Clearing controls or sensors keeps the rest, numbered without gaps: a 0x95 names a property by
 // its position, so a kept sensor has to move down with everything it owns.
 static void clearsAndIdentity()
@@ -4043,6 +4098,7 @@ int main()
     deviceCommands();
     commandValues();
     trimmedOptionsAndEventTypes();
+    percentEncodedLists();
     properties();
     rangeAtTheVariablesWidth();
     aWholeRangeIsKeptWhole();

@@ -82,7 +82,9 @@ device.addSelect(F("Mode"), &mode, F("Off,Heat,Auto"));   // <Mode,Heat> or <Mod
 
 The acknowledgement tells whether a value was taken. A select stores the position;
 `getSelectOptionNameAt()` gives the option's name for it. Spaces around the commas don't count:
-`F("Off, Heat")` is the same list as `F("Off,Heat")`.
+`F("Off, Heat")` is the same list as `F("Off,Heat")`. For a comma inside an option, write
+`%2C`, and `%25` for a percent sign: `F("Off,Heat%2C fast")` is "Off" and "Heat, fast".
+Only the list is written this way; `getSelectOptionIndexOf(F("Heat, fast"))` takes plain text.
 
 An optional function runs when the user sets the value:
 
@@ -194,8 +196,9 @@ void loop()
 ```
 
 - `addEvent()` takes a name and every type the event reports, as one comma-separated list.
-  Spaces around the commas don't count.
-- `writeEvent()` reports one type. Events are fire and forget, and never logged.
+  Spaces around the commas don't count. A comma inside a type is written `%2C`, a percent
+  sign `%25`.
+- `writeEvent()` reports one type, as plain text. Events are fire and forget, and never logged.
 - `tooHot` makes each crossing fire once.
 
 ### The list of types
