@@ -2055,9 +2055,25 @@ void Blaeck::_parseCommandTokens(const char *raw)
     _parsedTruncated = true;
 
   // Every parameter may be percent-encoded, so a value can hold ',', '<', '>' and any byte.
-  // Decoded once here, for inputs, selects and plain commands alike.
+  // Decoded once here, for inputs, selects and plain commands alike. Then trimmed: a parameter
+  // never starts or ends with a space, encoded or not, so a stray space typed in a field is dropped.
   for (byte i = 0; i < _parsedParamCount; i++)
-    _percentDecodeInPlace(const_cast<char *>(_parsedParamPtrs[i]));
+  {
+    char *param = const_cast<char *>(_parsedParamPtrs[i]);
+    _percentDecodeInPlace(param);
+    _parsedParamPtrs[i] = _trimInPlace(param);
+  }
+}
+
+char *Blaeck::_trimInPlace(char *s)
+{
+  while (_isTrimChar((byte)*s))
+    s++;
+  size_t len = strlen(s);
+  while (len > 0 && _isTrimChar((byte)s[len - 1]))
+    len--;
+  s[len] = '\0';
+  return s;
 }
 
 void Blaeck::_dispatchRegisteredHandlers(bool sendAck)

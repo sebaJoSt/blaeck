@@ -2952,6 +2952,8 @@ protected:
   // Adds one event type per comma-separated field, in order.
   void _addEventTypesCsv(uint16_t channelIndex, const detail::StoredString &eventTypes);
   static void _percentDecodeInPlace(char *s);
+  // Cuts the outer trim characters off s; returns where it now starts.
+  static char *_trimInPlace(char *s);
   static long _flashCsvIndexOf(BlaeckString csv, const char *value);
   // Number of fields in a comma-separated string.
   static uint16_t _flashCsvOptionCount(BlaeckString csv);

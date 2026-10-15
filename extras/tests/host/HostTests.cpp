@@ -2710,7 +2710,7 @@ static void commandValues()
       {"<#1:F,21.5>", 1, BLAECK_ACK_OK},
       {"<#2:F,abc>", 2, BLAECK_ACK_NOT_A_NUMBER},
       {"<#3:F,.5>", 3, BLAECK_ACK_NOT_A_NUMBER},
-      {"<#4:F, 3>", 4, BLAECK_ACK_NOT_A_NUMBER},
+      {"<#4:F, 3>", 4, BLAECK_ACK_OK},
       {"<#5:F,0x1A>", 5, BLAECK_ACK_NOT_A_NUMBER},
       {"<#6:F,nan>", 6, BLAECK_ACK_NOT_A_NUMBER},
       {"<#7:F,007>", 7, BLAECK_ACK_NOT_A_NUMBER},
@@ -2737,6 +2737,15 @@ static void commandValues()
   command(device, stream, "<#18:P,x%3Cy,%41,50%>");
   assert(ackReason(stream, 18) == BLAECK_ACK_OK);
   assert((plainParams == std::vector<std::string>{"x<y", "A", "50%"}));
+
+  // Every parameter loses its outer spaces after decoding, encoded ones too; inner ones stay.
+  command(device, stream, "<#22:P, a b ,%20c%09, ,>");
+  assert(ackReason(stream, 22) == BLAECK_ACK_OK);
+  assert((plainParams == std::vector<std::string>{"a b", "c", "", ""}));
+  command(device, stream, "<#23:T, %20hi there%20 >");
+  assert(ackReason(stream, 23) == BLAECK_ACK_OK && strcmp(text, "hi there") == 0);
+  command(device, stream, "<#24:N,30 000>");
+  assert(ackReason(stream, 24) == BLAECK_ACK_NOT_A_NUMBER && n == 1000);
 
   // A catch-all that only logs leaves an unknown name unknown; one that takes it makes it accepted.
   device.onAnyCommand(logOnly);

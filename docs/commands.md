@@ -43,7 +43,7 @@ void loop()
 ```
 
 - `params` holds the parameters as text, `paramCount` their number. A percent-encoded
-  parameter (`%2C` for a comma) arrives decoded.
+  parameter (`%2C` for a comma) arrives decoded, without spaces at its start and end.
 - `tick()` reads the serial port and calls the handler.
 - Parameters are not checked; the handler decides what they mean.
 

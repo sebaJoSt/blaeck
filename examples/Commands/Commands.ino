@@ -25,8 +25,9 @@
 
     <COMMAND,PARAMETER01,PARAMETER02,...,PARAMETER10>
 
-    Parameters arrive as text. An empty one keeps its slot, so <SwitchLED,> arrives with
-    params[0][0] == '\0'.
+    Parameters arrive as text, without spaces at their start and end, so <Print, hi, 3>
+    works too. An empty one keeps its slot: <Print,,3> arrives as params[0] = "" and
+    params[1] = "3", so the count stays the second parameter.
 
   The circuit:
     - No wiring required, the on-board LED is used.
