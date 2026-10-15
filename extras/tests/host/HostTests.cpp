@@ -2836,16 +2836,20 @@ static void percentEncodedLists()
   device.addEvent(F("Door"), F("opened,closed%2C locked"));
   assert(device.addEventType("Door", "jammed, forced"));
   assert(device.addEventType("Door", "50%25"));
+  // One type, plain text: a comma or a "%20" is part of the name, not a blank field.
+  assert(device.addEventType("Door", "a,"));
+  assert(device.addEventType(F("Door"), F("%20")));
   assert(!device.hasRejections());
   device.addSensor("Blank", &state, F("On,%20"));
   assert(device.hasRejections());
+  assert(!device.addEventType("Door", " \t"));
   command(device, stream, "<BLAECK.GET_DEVICES>");
 
   stream.data.output.clear();
   device.sendEntities();
   const std::string &entities = stream.data.output;
   assert(entities.find(std::string("Off,Heat%2C fast,50%25,100%,%41b%00") + '\0') != std::string::npos);
-  for (const char *type : {"opened", "closed, locked", "jammed, forced", "50%25"})
+  for (const char *type : {"opened", "closed, locked", "jammed, forced", "50%25", "a,", "%20"})
     assert(entities.find(std::string(type) + '\0') != std::string::npos);
 
   char option[16];

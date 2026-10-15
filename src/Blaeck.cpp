@@ -2493,8 +2493,13 @@ bool Blaeck::_addEventType(byte deviceId, const char *channelName, BlaeckString 
   if (eventType == nullptr)
     return false;
 
-  // A blank type is refused, as in addEvent().
-  if (_flashCsvHasBlankField(eventType))
+  // A blank type is refused, as in addEvent(). The type is plain text, not a list: no
+  // splitting on commas, no decoding.
+  unsigned int start = 0, len = 0;
+  while (eventType.read(len) != 0)
+    len++;
+  _trimExtent(eventType, start, len);
+  if (len == 0)
   {
     if (_debugStream != nullptr)
     {
