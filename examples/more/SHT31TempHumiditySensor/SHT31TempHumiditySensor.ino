@@ -42,12 +42,12 @@ void setup()
   device.withName(F("SHT31TempHumiditySensor"));
   device.withFWVersion(F("1.0"));
 
-  // Logged: a column each, with the unit in the name.
-  device.addSignal(F("Temperature [°C]"), &temperature);
-  device.addSignal(F("Humidity [%]"), &humidity);
+  // Logged: a column each, with its unit. The unit is UTF-8 degrees Celsius; the escape keeps
+  // the text ASCII.
+  device.addSignal(F("Temperature"), &temperature).withUnit(F("\xC2\xB0" "C"));
+  device.addSignal(F("Humidity"), &humidity).withUnit(F("%"));
 
-  // Shown: a sensor on the same variable carries what a dashboard needs. The unit is UTF-8
-  // degrees Celsius; the escape keeps the text ASCII.
+  // Shown: a sensor on the same variable carries what a dashboard needs.
   device.addSensor(F("Temperature"), &temperature)
       .withUnit(F("\xC2\xB0" "C"))
       .withDeviceClass(F("temperature"))

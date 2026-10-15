@@ -4,8 +4,8 @@ Unified library combining BlaeckSerial and BlaeckTCP.
 Version 7.0.0 is in development; setting its metadata does not publish a release.
 
 - Follow `extras/API-STYLE.md` for public documentation and implementation comments.
-- Four concepts: a signal (a value logged over time: name and type in the B7 device list, no
-  metadata), a property (a value shown, or shown and set: inputs `addNumberInput`/
+- Four concepts: a signal (a value logged over time: name, unit and type in the B7 device list,
+  no other metadata), a property (a value shown, or shown and set: inputs `addNumberInput`/
   `addTextInput`/`addSwitch`/`addSelect` and sensors `addSensor`), an event (a moment from device
   to host, `addEvent`) and a command (a moment from host to device: `addButton`, listed, or
   `onCommand`, not listed). Properties, events and buttons are the IoT part, listed in the 0x90

@@ -113,11 +113,11 @@ PAYLOAD_MAX = 127
 
 def device_record(device_id, state, name, hw, fw, signals=()):
     """One B7 record: ID, parent 0, flags 0, state, the three names, then the signal count and
-    each signal's name and type code."""
+    each signal's name, unit (none here) and type code."""
     record = bytes([device_id, 0, 0, 0, state]) + b"\0".join(s.encode() for s in (name, hw, fw)) + b"\0"
     record += len(signals).to_bytes(2, "little")
     for signal, dtype in signals:
-        record += signal.encode() + b"\0" + bytes([dtype])
+        record += signal.encode() + b"\0\0" + bytes([dtype])
     return record
 
 

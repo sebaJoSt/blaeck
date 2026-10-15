@@ -72,6 +72,29 @@ for (int i = 0; i < 8; i++)
 }
 ```
 
+## Giving a signal a unit
+
+Give the unit with `withUnit()`, not in the name:
+
+```cpp
+device.addSignal(F("Temperature"), &temperature).withUnit(F("\xC2\xB0" "C"));
+
+for (int i = 0; i < 8; i++)
+{
+  device.addSignal(F("Current_"), &current[i]).withNameSuffix(i + 1).withUnit(F("mA"));
+}
+```
+
+The unit is sent in the device list, next to the name. A host shows it, and can convert values
+to the unit it expects: Loggbok checks a monitor with limits in `A` against a signal sent in `mA`.
+Use the spelling Home Assistant uses, such as `V`, `mA`, `W`, `Hz`, `°C` or `%`, so a host
+recognises it. Write `°` as `"\xC2\xB0"` and `μ` as `"\xCE\xBC"`; Arduino source is UTF-8, but
+the escapes are safe in any editor.
+
+Signals with the same unit share one stored copy of it, so a series of 40 signals in `mA` stores
+`mA` once. Empty text removes the unit; a unit with a control character is refused, and
+`hasRejections()` reports it.
+
 ## When a signal does not fit
 
 The signal table grows as signals are added, so the only limit is RAM. When the board runs out,

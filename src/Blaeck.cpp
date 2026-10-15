@@ -481,6 +481,7 @@ int Blaeck::_registerSignalCommon(byte deviceId, const char *ram, const __FlashS
   Signals[_signalIndex].HasSuffix = 0;
   Signals[_signalIndex].NameSuffix = 0;
   Signals[_signalIndex].DeviceId = deviceId;
+  Signals[_signalIndex].UnitIndex = 0;
   int16_t added = (int16_t)_signalIndex;
   _signalIndex++;
   SignalCount = _signalIndex;
@@ -492,6 +493,9 @@ void Blaeck::clearAllSignals()
 {
   // Free the name copies too, not only rewind the index.
   _freeSignalOwned();
+  for (uint8_t i = 0; i < _signalUnitCount; ++i)
+    _signalUnits[i] = nullptr;
+  _signalUnitCount = 0;
   _signalIndex = 0;
   SignalCount = _signalIndex;
   _schemaHash = 0;
@@ -502,10 +506,10 @@ void Blaeck::clearAllSignals()
 uint16_t Blaeck::_computeSchemaHash()
 {
   // CRC-16/XMODEM (init 0x0000, poly 0x1021) over each signal's device list bytes: its name, the
-  // 0 that ends it, its type code; a sub-device's signal is preceded by the device's name and its
-  // 0. That is Python's binascii.crc_hqx(data, 0). Names go through _emitSignalName(), as in the
-  // device list. The 0 after each name keeps two different lists from feeding the same bytes, and
-  // lets names hold any character, '/' included.
+  // 0 that ends it, its unit and its 0, its type code; a sub-device's signal is preceded by the
+  // device's name and its 0. That is Python's binascii.crc_hqx(data, 0). Names go through
+  // _emitSignalName(), as in the device list. The 0 after each text keeps two different lists
+  // from feeding the same bytes, and lets names hold any character, '/' included.
   //
   // Signals are hashed in device list order: the board's first, then each device's. That is the
   // order the list gives them in and data frames number them by, so each signal's WireIndex is
@@ -527,9 +531,64 @@ uint16_t Blaeck::_computeSchemaHash()
     }
     _signalNameFeedHash(Signals[j]);
     _schemaHashFeedByte(0);
+    const BlaeckString unit = _signalUnit(Signals[j]);
+    if (unit != nullptr)
+      for (size_t k = 0; unit.read(k) != 0; ++k)
+        _schemaHashFeedByte(unit.read(k));
+    _schemaHashFeedByte(0);
     _schemaHashFeedByte(_dtypeCode(Signals[j].DataType));
   }
   return _schemaHashAccum;
+}
+
+void Blaeck::_setSignalUnit(int16_t index, BlaeckString unit)
+{
+  if (index < 0 || index >= _signalIndex)
+    return;
+  if (unit != nullptr && unit.read() == 0)
+    unit = nullptr;
+  if (_hasControlChar(unit))
+  {
+    if (_rejectedStringCount != UINT16_MAX)
+      ++_rejectedStringCount;
+    if (_debugStream != nullptr)
+      _debugStream->println(F("Unit holds a control character; previous unit retained."));
+    return;
+  }
+  uint8_t unitIndex = 0;
+  if (unit != nullptr)
+  {
+    for (uint8_t i = 0; i < _signalUnitCount && unitIndex == 0; ++i)
+      if (BlaeckString(_signalUnits[i]) == unit)
+        unitIndex = i + 1;
+    if (unitIndex == 0)
+    {
+      if (_signalUnitCount == UINT8_MAX || !_signalUnits.reserve(_signalUnitCount + 1))
+      {
+        if (_rejectedStringCount != UINT16_MAX)
+          ++_rejectedStringCount;
+        if (_debugStream != nullptr)
+          _debugStream->println(F("No room for another unit; previous unit retained."));
+        return;
+      }
+      if (!_storeString(_signalUnits[_signalUnitCount], unit))
+        return;
+      unitIndex = ++_signalUnitCount;
+    }
+  }
+  Signal &s = Signals[index];
+  if (s.UnitIndex == unitIndex)
+    return;
+  s.UnitIndex = unitIndex;
+  // The unit is part of the schema hash.
+  _schemaHash = _computeSchemaHash();
+}
+
+BlaeckString Blaeck::_signalUnit(const Signal &s) const
+{
+  if (s.UnitIndex == 0)
+    return BlaeckString();
+  return _signalUnits[s.UnitIndex - 1];
 }
 
 void Blaeck::setSignalName(int signalIndex, const char *signalName)
@@ -2866,6 +2925,7 @@ void Blaeck::_emitDeviceSignals(byte deviceId)
     if (signal.DeviceId != deviceId)
       continue;
     _emitSignalName0(signal);
+    _emitFlashStr0(_signalUnit(signal));
     _emitByte(_dtypeCode(signal.DataType));
   }
 }

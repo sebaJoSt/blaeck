@@ -23,7 +23,7 @@ Scenarios use only what blaeckpy can declare: values are `bool`, `int` (a `long 
   "board": {"name": "Greenhouse", "hw_version": "...", "fw_version": "1.0"},
   "timestamp_mode": "none | micros | unix",
   "unix_start_us": 1700000000000000,
-  "signals": [{"name": "Temperature", "type": "float", "value": 21.5,
+  "signals": [{"name": "Temperature", "type": "float", "value": 21.5, "unit": "°C",
                "write_at_interval": "always | off | {\"on_change\": 0.5}",
                "write_on_change": "0.5 | any | off", "min_interval_ms": 100}],
   "properties": [{"kind": "number_input | sensor | select | switch | text_input", "name": "...", "...": "..."}],

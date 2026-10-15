@@ -205,6 +205,9 @@ struct Signal
   uint8_t NameSuffix;
   // The device from addDevice() the signal belongs to, 0 for the board itself.
   uint8_t DeviceId = 0;
+  // 1 + the unit's position in the unit table, 0 for none. An index, not a pointer, since
+  // the signals of a series share one unit.
+  uint8_t UnitIndex = 0;
   // The signal's number on the wire: its position in the device list, which groups signals by
   // device. Set by _computeSchemaHash() whenever the signals change.
   uint16_t WireIndex = 0;
@@ -931,6 +934,31 @@ public:
     return *this;
   }
 
+  /*!
+    @brief   Sets the unit of the signal's values.
+
+    A host shows it next to the name and can convert a value to another unit, such as
+    mA to A. Use the spelling Home Assistant uses: "V", "mA", "W", "Hz", "\xC2\xB0" "C".
+    Signals with the same unit share one stored copy of it.
+
+    @param   unit  The unit. RAM text is copied; an F() literal stays in flash. Empty
+                   text or nullptr removes the unit.
+    @return  The same handle, for chaining.
+    @note    A unit with a control character is refused and the previous one kept;
+             hasRejections() reports it, as it does running out of RAM.
+
+    @code
+      device.addSignal(F("Temperature"), &Temperature).withUnit(F("\xC2\xB0" "C"));
+      for (int i = 0; i < 8; i++)
+        device.addSignal(F("Sine_"), &sine[i]).withNameSuffix(i + 1).withUnit(F("V"));
+    @endcode
+  */
+  BlaeckSignalRef &withUnit(BlaeckString unit)
+  {
+    _setUnit(unit);
+    return *this;
+  }
+
 private:
   // Private, so only addSignal() can make a handle that names a signal.
   BlaeckSignalRef(Blaeck *owner, int16_t index) : _owner(owner), _index(index) {}
@@ -938,6 +966,7 @@ private:
   friend class BlaeckDeviceBase;
 
   void _setNameSuffix(uint8_t suffix);
+  void _setUnit(BlaeckString unit);
   void _setInterval(BlaeckIntervalMode mode, double delta);
   void _setOnChange(double delta, uint32_t minIntervalMs);
   void _setOnChange(BlaeckIntervalMode mode);
@@ -1442,9 +1471,10 @@ public:
   /*!
     @brief   Adds a variable to be sampled and logged over time.
 
-    A signal is a reading that is sent on every interval and kept as history: a name
-    and a type, nothing else. To show the value on a dashboard, add a sensor on the
-    same variable with addSensor(); for a setting a host changes, use an input.
+    A signal is a reading that is sent on every interval and kept as history: a name,
+    a type and optionally a unit, nothing else. To show the value on a dashboard, add a
+    sensor on the same variable with addSensor(); for a setting a host changes, use an
+    input.
 
     The variable is read each time data is sent, so it must be a global.
 
@@ -1459,7 +1489,7 @@ public:
              every call; hasRejections() reports it.
 
     @code
-      device.addSignal(F("Temperature [C]"), &Temperature);
+      device.addSignal(F("Temperature"), &Temperature).withUnit(F("\xC2\xB0" "C"));
       device.addSensor(F("Temperature"), &Temperature).withUnit(F("\xC2\xB0" "C"));
     @endcode
   */
@@ -2093,7 +2123,7 @@ private:
   Blaeck *_owner;
 };
 
-// Some hosts only record values and need nothing but signal names and types. Others also
+// Some hosts only record values and need nothing but signal names, units and types. Others also
 // build controls and displays, and only those use what withUnit(), withIcon() and the other
 // descriptive calls declare.
 class Blaeck : public BlaeckDeviceBase
@@ -2949,6 +2979,12 @@ protected:
   uint16_t _rejectedStringCount = 0;
   detail::ChunkList<Signal> Signals;
   int _signalIndex = 0;
+  // Each distinct signal unit once; Signal::UnitIndex points into it. Kept until
+  // clearAllSignals().
+  detail::ChunkList<detail::StoredString> _signalUnits;
+  uint8_t _signalUnitCount = 0;
+  void _setSignalUnit(int16_t index, BlaeckString unit);
+  BlaeckString _signalUnit(const Signal &s) const;
   uint16_t _rejectedSignalCount = 0;
   uint16_t _rejectedSignalPolicyCount = 0;
   uint16_t _rejectedCommandCount = 0;
@@ -3235,7 +3271,7 @@ protected:
   }
   // One device record of the B7 device list.
   void _emitDeviceRecord(byte deviceId, byte state, BlaeckString name, BlaeckString hw, BlaeckString fw);
-  // The signal count and each signal's name and type code, for one device of the list.
+  // The signal count and each signal's name, unit and type code, for one device of the list.
   void _emitDeviceSignals(byte deviceId);
   // Sends each device's pending C1 notices; stops at the first that can't be sent.
   void _writeDeviceNotices();
@@ -3573,6 +3609,12 @@ inline void BlaeckSignalRef::_setNameSuffix(uint8_t suffix)
   s.HasSuffix = 1;
   // The suffix changes the name, and the name is part of the schema hash.
   _owner->_schemaHash = _owner->_computeSchemaHash();
+}
+
+inline void BlaeckSignalRef::_setUnit(BlaeckString unit)
+{
+  if (_owner != nullptr)
+    _owner->_setSignalUnit(_index, unit);
 }
 
 inline BlaeckEventRef BlaeckEventRef::withIcon(BlaeckString icon)

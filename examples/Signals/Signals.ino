@@ -5,13 +5,13 @@
   A signal keeps a pointer to a variable: update that variable and tick() reads its current
   value when a frame is due. No write() call is needed.
 
-  A signal is a name and a type, nothing more: it becomes a column in the log. How a
-  dashboard shows a value - unit, icon, precision - belongs to a sensor on the same variable;
+  A signal is a name, a type and optionally a unit: it becomes a column in the log. How a
+  dashboard shows a value - icon, precision - belongs to a sensor on the same variable;
   see the Sensors example.
-    Temperature [C]  a float, with its unit in the column name
+    Temperature      a float, in degrees Celsius
     DoorOpen         a bool, logged as 0 or 1
     Mode             text
-    Uptime           an unsigned long
+    Uptime           an unsigned long, in seconds
     Sine_1..Sine_5   an array registered in a loop, with numbered names kept in flash
 
   No sensor hardware is needed. The values below simulate a room that cools while a door
@@ -67,12 +67,13 @@ void setup()
   device.withName(HOST_NAME);
   device.withFWVersion(F("1.0"));
 
-  // The name is the column name, so a unit that belongs in the log goes into it.
-  device.addSignal(F("Temperature [C]"), &temperature);
+  // The unit goes with the signal, not into its name, so a host can show and convert it.
+  // UTF-8 degrees Celsius; the escape keeps the text ASCII.
+  device.addSignal(F("Temperature"), &temperature).withUnit(F("\xC2\xB0" "C"));
   device.addSignal(F("DoorOpen"), &doorOpen);
   // Text takes the buffer itself, not &Mode.
   device.addSignal(F("Mode"), mode);
-  device.addSignal(F("Uptime"), &uptime);
+  device.addSignal(F("Uptime"), &uptime).withUnit(F("s"));
 
   // The suffix gives each array element a name without building or copying a string.
   for (byte i = 0; i < SINE_COUNT; i++)

@@ -27,7 +27,7 @@ This also applies after `end()` or failed initialization; a latched `OutOfMemory
 error is retained. `end()` closes the transport; it does not reset the instance for
 another `begin()`.
 
-RAM is the only limit. On AVR, with the default settings, a signal costs 10 bytes, an event type
+RAM is the only limit. On AVR, with the default settings, a signal costs 13 bytes, an event type
 6, an event 13, a device 10, a sensor or a control with a value about 40, and a command or
 button 66 - the largest there is. Every eight entries of a table share about 4 bytes of
 bookkeeping, and the last group of eight may hold up to seven unused slots. Each configuration
@@ -35,7 +35,8 @@ string passed as ordinary RAM text is copied, at about its length plus 7 bytes (
 count, the terminator and the heap's own header); an `F()` string costs nothing extra. A Mega's
 8 kB is gone at a few hundred of anything, where an ESP32 has room for thousands. The
 presentation of a sensor or control - unit, label, icon, device class - takes about 20 bytes
-more, only once it has one.
+more, only once it has one. A signal unit is stored once however many signals share it: about
+3 bytes, plus its copy when it is ordinary RAM text.
 
 Entries are added in `setup()`, and a table never moves or frees what it holds, so the heap
 doesn't fragment. `clearAllSignals()` and the other clear calls keep the space and reuse it.

@@ -116,8 +116,8 @@ void setup()
   device.setTimestampMode(BLAECK_MICROS);
 
   // Logged: a column each.
-  device.addSignal(F("Output [V]"), &output);
-  device.addSignal(F("Frequency"), &frequency);
+  device.addSignal(F("Output"), &output).withUnit(F("V"));
+  device.addSignal(F("Frequency"), &frequency).withUnit(F("Hz"));
   device.addSignal(F("Annotation"), annotation);
 
   // Set by a host. A value is checked against the range and stored on the step before the

@@ -62,7 +62,7 @@ void setup()
   device.withName(HOST_NAME);
   device.withFWVersion(F("1.0"));
 
-  device.addSignal(F("Uptime"), &uptime);
+  device.addSignal(F("Uptime"), &uptime).withUnit(F("s"));
   device.addSignal(F("EventCount"), &eventCount);
 
   // A doorbell must be able to report "ring". Home Assistant warns about a doorbell without it

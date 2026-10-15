@@ -166,6 +166,8 @@ class Program:
         var = self.variable(type_, s.get("value", "" if type_ == "str" else 0))
         target = f"(const char *){var}" if type_ == "str" else f"&{var}"
         call = f"{owner}.addSignal({c_string(s['name'])}, {target})"
+        if "unit" in s:
+            call += f".withUnit({c_string(s['unit'])})"
         if "write_at_interval" in s:
             mode = s["write_at_interval"]
             if mode == "always":

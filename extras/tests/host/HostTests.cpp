@@ -31,6 +31,7 @@ public:
   using Blaeck::writeIfDue;
   bool intervalActive() const { return _timedActivated; }
   unsigned long intervalMs() const { return _timedInterval_ms; }
+  uint8_t storedUnitCount() const { return _signalUnitCount; }
   // Points a text signal elsewhere without writing it, so the baseline stays as it was.
   void retargetText(int index, const void *value, bool inFlash)
   {
@@ -1532,14 +1533,23 @@ static std::string deviceRecord(byte id, byte state, const char *name, const cha
          name + '\0' + hw + '\0' + fw + '\0';
 }
 
-// The signals after a B7 record: a 2-byte count, then each name and type code.
-static std::string signalList(const std::vector<std::pair<std::string, byte>> &signals = {})
+// One signal of a B7 signal list. Brace-initialised as {name, type} or {name, type, unit}.
+struct SignalSpec
+{
+  SignalSpec(const std::string &n, byte t, const std::string &u = "") : name(n), type(t), unit(u) {}
+  std::string name;
+  byte type;
+  std::string unit;
+};
+
+// The signals after a B7 record: a 2-byte count, then each name, unit and type code.
+static std::string signalList(const std::vector<SignalSpec> &signals = {})
 {
   std::string out;
   out += static_cast<char>(signals.size() & 0xFF);
   out += static_cast<char>((signals.size() >> 8) & 0xFF);
   for (const auto &signal : signals)
-    out += signal.first + '\0' + static_cast<char>(signal.second);
+    out += signal.name + '\0' + signal.unit + '\0' + static_cast<char>(signal.type);
   return out;
 }
 
@@ -1574,6 +1584,102 @@ static void noDeviceOwnership()
   // Without devices the list holds the board alone; its restart went out as C1 in read().
   assert(commandFramePayload(stream.data.output, 0xB7, 0) ==
          deviceList(1, deviceRecord(0, 0, "Solo", "Mega", "n/a") + signalList({{"Value", 8}})));
+}
+
+// CRC-16/XMODEM (init 0, poly 0x1021), as a host computes the schema hash.
+static uint16_t crc16(const std::string &data)
+{
+  uint16_t crc = 0;
+  for (unsigned char b : data)
+  {
+    crc ^= static_cast<uint16_t>(b << 8);
+    for (int i = 0; i < 8; ++i)
+      crc = (crc & 0x8000) ? static_cast<uint16_t>((crc << 1) ^ 0x1021) : static_cast<uint16_t>(crc << 1);
+  }
+  return crc;
+}
+
+// withUnit() puts a signal's unit in the device list and the schema hash. Signals with equal
+// units share one stored copy; a refused unit keeps the previous one.
+static void signalUnits()
+{
+  FakeStream stream;
+  Capture debug;
+  TestBlaeck device;
+  device.begin(stream).withDebugStream(&debug);
+  device.withName("Solo");
+  device.withHWVersion("Mega");
+  float a = 1, b = 2, c = 3, flow = 4;
+  char ramUnit[8];
+  strcpy(ramUnit, "mA");
+  device.addSignal(F("Current_"), &a).withNameSuffix(1).withUnit(F("mA"));
+  device.addSignal(F("Current_"), &b).withNameSuffix(2).withUnit(ramUnit);
+  strcpy(ramUnit, "xx"); // copied, so the buffer may change
+  BlaeckSignalRef plain = device.addSignal(F("Plain"), &c).withUnit(F(""));
+  BlaeckDeviceRef pump = device.addDevice(F("Pump"));
+  pump.addSignal(F("Flow"), &flow).withUnit("L/min");
+  assert(device.storedUnitCount() == 2 && !device.hasRejections());
+  device.read();
+  stream.data.output.clear();
+
+  command(device, stream, "<BLAECK.GET_DEVICES>");
+  assert(commandFramePayload(stream.data.output, 0xB7, 0) ==
+         deviceList(2, deviceRecord(0, 0, "Solo", "Mega", "n/a") +
+                           signalList({{"Current_1", 8, "mA"}, {"Current_2", 8, "mA"}, {"Plain", 8}}) +
+                           deviceRecord(1, 0, "Pump", "n/a", "n/a") + signalList({{"Flow", 8, "L/min"}})));
+  stream.data.output.clear();
+
+  const char f = static_cast<char>(0x08);
+  const char z = '\0';
+  const std::string units = std::string("Current_1") + z + "mA" + z + f + "Current_2" + z + "mA" + z + f +
+                            "Plain" + z + z + f + "Pump" + z + "Flow" + z + "L/min" + z + f;
+  device.writeAll();
+  auto frames = takeData(stream.data.output, {4, 4, 4, 4});
+  assert(frames.size() == 1 && frames[0].schemaHash == crc16(units));
+
+  // A new unit changes the hash; setting the same one again changes nothing.
+  plain.withUnit(F("\xC2\xB0" "C"));
+  device.writeAll();
+  frames = takeData(stream.data.output, {4, 4, 4, 4});
+  const uint16_t withCelsius = frames[0].schemaHash;
+  assert(withCelsius != crc16(units) && device.storedUnitCount() == 3);
+  plain.withUnit("\xC2\xB0" "C");
+  device.writeAll();
+  frames = takeData(stream.data.output, {4, 4, 4, 4});
+  assert(frames[0].schemaHash == withCelsius && device.storedUnitCount() == 3);
+
+  // A control character is refused and the previous unit kept.
+  plain.withUnit("m\tA");
+  assert(device.hasRejections());
+  assert(debug.text.find("Unit holds a control character; previous unit retained.") != std::string::npos);
+  device.writeAll();
+  frames = takeData(stream.data.output, {4, 4, 4, 4});
+  assert(frames[0].schemaHash == withCelsius);
+
+  // Out of RAM for a new unit: the previous unit stays.
+  failAfter = 0;
+  plain.withUnit("kWh");
+  failAfter = -1;
+  device.writeAll();
+  frames = takeData(stream.data.output, {4, 4, 4, 4});
+  assert(frames[0].schemaHash == withCelsius && device.storedUnitCount() == 3);
+
+  // nullptr or empty text removes the unit.
+  plain.withUnit(nullptr);
+  device.writeAll();
+  frames = takeData(stream.data.output, {4, 4, 4, 4});
+  assert(frames[0].schemaHash == crc16(units));
+
+  // A rejected signal's handle ignores the unit.
+  device.addSignal(F("Plain"), &c).withUnit(F("V"));
+  assert(device.storedUnitCount() == 3);
+
+  // Clearing the signals forgets the units, and a reused slot starts without one.
+  device.clearAllSignals();
+  assert(device.storedUnitCount() == 0);
+  device.addSignal(F("Again"), &a);
+  command(device, stream, "<BLAECK.GET_DEVICES>");
+  assert(commandFramePayload(stream.data.output, 0xB7, 0).find(signalList({{"Again", 8}})) != std::string::npos);
 }
 
 static void subDevices(bool buffered)
@@ -1834,19 +1940,6 @@ static void deviceNoticesBeforeHost()
                        deviceRecord(2, 0, "Fan", "n/a", "n/a") + signalList()));
 }
 
-// CRC-16/XMODEM (init 0, poly 0x1021), as a host computes the schema hash.
-static uint16_t crc16(const std::string &data)
-{
-  uint16_t crc = 0;
-  for (unsigned char b : data)
-  {
-    crc ^= static_cast<uint16_t>(b << 8);
-    for (int i = 0; i < 8; ++i)
-      crc = (crc & 0x8000) ? static_cast<uint16_t>((crc << 1) ^ 0x1021) : static_cast<uint16_t>(crc << 1);
-  }
-  return crc;
-}
-
 // Owner bytes of every catalog entry with this name, in catalog order.
 static std::vector<std::string> ownersOf(const std::string &payload, const char *name, size_t gap = 0)
 {
@@ -1995,14 +2088,16 @@ static void sameNamesAcrossDevices()
   // The schema hash covers each signal's device list bytes, a sub-device's name first.
   const char f = static_cast<char>(0x08); // float
   const char z = '\0';                     // ends each name, as in the device list
+  const std::string u = std::string(1, z); // the empty unit and the 0 that ends it
   assert(frames[0].schemaHash ==
-         crc16(std::string("Temperature") + z + f + "Zone A" + z + "Temperature" + z + f + "Zone B" + z + "Temperature" + z + f));
+         crc16(std::string("Temperature") + z + u + f + "Zone A" + z + "Temperature" + z + u + f + "Zone B" + z + "Temperature" + z + u + f));
 
   const uint16_t hash = frames[0].schemaHash;
 
   // The check value and the worked example on the protocol's Schema Hash page.
   assert(crc16("123456789") == 0x31C3);
-  assert(crc16(std::string("Temperature") + z + f + "Zone A" + z + "Flow" + z + static_cast<char>(0x07)) == 0xE658);
+  assert(crc16(std::string("Temperature") + z + "\xC2\xB0" "C" + z + f + "Zone A" + z + "Flow" + z + "L/min" + z +
+               static_cast<char>(0x07)) == 0x5166);
 
   // Signals are numbered and hashed in device list order, so registering zone B's signal
   // before zone A's changes nothing a host sees.
@@ -2036,9 +2131,9 @@ static void sameNamesAcrossDevices()
   frames = takeData(swappedStream.data.output, widths);
   assert(frames.size() == 1 && frames[0].schemaHash != hash);
   assert(frames[0].schemaHash ==
-         crc16(std::string("Temperature") + z + f + "Zone B" + z + "Temperature" + z + f + "Zone A" + z + "Temperature" + z + f));
+         crc16(std::string("Temperature") + z + u + f + "Zone B" + z + "Temperature" + z + u + f + "Zone A" + z + "Temperature" + z + u + f));
 
-  // A board without devices hashes exactly as before: names and type codes only.
+  // A board without devices hashes names, units and type codes only.
   FakeStream plainStream;
   TestBlaeck plain;
   plain.begin(plainStream);
@@ -2047,7 +2142,7 @@ static void sameNamesAcrossDevices()
   plainStream.data.output.clear();
   plain.writeAll();
   frames = takeData(plainStream.data.output, {4});
-  assert(frames.size() == 1 && frames[0].schemaHash == crc16(std::string("Temperature") + z + f));
+  assert(frames.size() == 1 && frames[0].schemaHash == crc16(std::string("Temperature") + z + u + f));
 }
 
 // The ack of the one command in output: its status and reason.
@@ -3868,6 +3963,7 @@ int main()
     unifiedConnections();
     beginOnlyOnce();
     noDeviceOwnership();
+    signalUnits();
     subDevices(false);
     subDevices(true);
     deviceCommands();

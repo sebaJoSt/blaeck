@@ -172,8 +172,8 @@ void setup()
              .withHWVersion(F("Arduino Mega 2560"))
              .withFWVersion(F("1.0"));
 
-  device.addSignal(F("Temperature"), &boardTemperature);
-  device.addSignal(F("Humidity"), &boardHumidity);
+  device.addSignal(F("Temperature"), &boardTemperature).withUnit(F("\xC2\xB0" "C"));
+  device.addSignal(F("Humidity"), &boardHumidity).withUnit(F("%"));
   // Sensors too, so Home Assistant shows the board as a device of its own. Signals never reach
   // it, and a parent with nothing there is left out, its sub-devices shown on their own.
   device.addSensor(F("Temperature"), &boardTemperature)
@@ -187,8 +187,8 @@ void setup()
 
   // The pump's entries, registered through its handle. A host shows them under
   // "Pump controller", so their names need no "Pump" of their own.
-  pump.addSignal(F("Flow"), &pumpFlow);
-  pump.addSignal(F("Pressure"), &pumpPressure);
+  pump.addSignal(F("Flow"), &pumpFlow).withUnit(F("L/min"));
+  pump.addSignal(F("Pressure"), &pumpPressure).withUnit(F("bar"));
   pump.addSensor(F("Flow"), &pumpFlow).withUnit(F("L/min"));
   pump.addSensor(F("Pressure"), &pumpPressure).withUnit(F("bar"));
   pump.addNumberInput(F("PumpSpeed"), &pumpSpeed, onPumpSpeed)
