@@ -10,7 +10,8 @@
   built by hand.
 
   Log fast enough to resolve the wave: at the default 1 Hz, a 20 ms interval gives 50 points
-  per cycle. Sample slower than that and Output aliases into a waveform the device never made.
+  per cycle, at the top 10 Hz only 5 - log every 10 ms or faster to keep its shape. Sample
+  slower than that and Output aliases into a waveform the device never made.
 
   Four kinds of thing, each for its own job:
     signal   a value sampled and logged                -> Output, Frequency, Annotation
@@ -19,7 +20,7 @@
     event    a moment from a fixed list                 -> idle_warning, resumed
 
   Inputs (shown under their display name, set by their name):
-    Frequency      number  0..2 Hz, step 0.01, a typed box
+    Frequency      number  0..10 Hz, step 0.01, a typed box
     Amplitude      number  0..100, step 0.1, a slider
     Offset         number  -100..100, step 0.1
     Waveform       select  Sine/Square/Triangle/Sawtooth
@@ -123,7 +124,7 @@ void setup()
   // Set by a host. A value is checked against the range and stored on the step before the
   // variable changes; anything else is refused.
   device.addNumberInput(F("Frequency"), &frequency)
-      .withRange(0.0f, 2.0f, 0.01f)
+      .withRange(0.0f, 10.0f, 0.01f)
       .withUnit(F("Hz"))
       .withMode(BLAECK_NUMBER_MODE_BOX);
   device.addNumberInput(F("Amplitude"), &amplitude)
@@ -260,7 +261,7 @@ void statusEvery10s()
 // The status line, into one of the two text sensors. tick() sends it when it changes.
 void writeStatus(char *out, size_t size)
 {
-  char freqText[10] = ""; // fits "2.00"
+  char freqText[10] = ""; // fits "10.00"
   device.toText(frequency, 2, freqText, sizeof(freqText));
   char waveName[12] = ""; // fits the longest option, "Triangle"
   device.getSelectOptionNameAt(F("Waveform"), waveIndex, waveName, sizeof(waveName));
