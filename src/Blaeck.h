@@ -938,8 +938,9 @@ public:
     @brief   Sets the unit of the signal's values.
 
     A host shows it next to the name and can convert a value to another unit, such as
-    mA to A. Use the spelling Home Assistant uses: "V", "mA", "W", "Hz", "\xC2\xB0" "C".
-    Signals with the same unit share one stored copy of it.
+    mA to A. Loggbok logs and monitors the signal as "Name [unit]", so changing the unit
+    is like renaming the signal there. Use the spelling Home Assistant uses: "V", "mA",
+    "W", "Hz", "\xC2\xB0" "C". Signals with the same unit share one stored copy of it.
 
     @param   unit  The unit. RAM text is copied; an F() literal stays in flash. Empty
                    text or nullptr removes the unit.

@@ -87,6 +87,8 @@ for (int i = 0; i < 8; i++)
 
 The unit is sent in the device list, next to the name. A host shows it, and can convert values
 to the unit it expects: Loggbok checks a monitor with limits in `A` against a signal sent in `mA`.
+Loggbok logs and monitors the signal as `Temperature [°C]`, name and unit together, so changing
+the unit is like renaming the signal there.
 Use the spelling Home Assistant uses, such as `V`, `mA`, `W`, `Hz`, `°C` or `%`, so a host
 recognises it. Write `°` as `"\xC2\xB0"` and `μ` as `"\xCE\xBC"`; Arduino source is UTF-8, but
 the escapes are safe in any editor.
