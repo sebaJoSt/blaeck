@@ -184,6 +184,7 @@ The main examples run on these boards through a shared `NetworkSetup.h` tab:
 | Arduino Mega 2560 | Ethernet shield (W5100/W5500) |
 | Arduino Giga R1 | Ethernet shield |
 | Olimex ESP32-PoE | built-in Ethernet |
+| Olimex ESP32-PoE-ISO | built-in Ethernet |
 | WT32-ETH01 | built-in Ethernet |
 
 Each main example shows both Serial and TCP setup. Set `USE_TCP` to `1` in the main sketch

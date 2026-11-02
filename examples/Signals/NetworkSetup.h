@@ -23,6 +23,7 @@
     Arduino Mega 2560      Ethernet shield
     Arduino Giga R1        Ethernet shield
     Olimex ESP32-PoE       built-in Ethernet
+    Olimex ESP32-PoE-ISO   built-in Ethernet
     WT32-ETH01             built-in Ethernet
 
   Each board first asks for an address over DHCP, waiting up to 30 s, and takes the fixed
@@ -77,11 +78,11 @@ inline void networkPrintServer(const Printable &ip, uint16_t port)
 }
 
 // ---------------------------------------------------------------------------------------
-#if defined(ARDUINO_ESP32_POE) || defined(ARDUINO_WT32_ETH01)
+#if defined(ARDUINO_ESP32_POE) || defined(ARDUINO_ESP32_POE_ISO) || defined(ARDUINO_WT32_ETH01)
 // ---------------------------------------------------------------------------------------
 
 // The PHY pins come from the board definition, which is why the board has to be selected
-// as the ESP32-PoE or the WT32-ETH01 rather than as a generic ESP32.
+// as the ESP32-PoE, the ESP32-PoE-ISO or the WT32-ETH01 rather than as a generic ESP32.
 #include <ETH.h>
 #include <WiFi.h>
 namespace NetworkSetup
@@ -394,5 +395,5 @@ inline void networkLoop()
 
 // ---------------------------------------------------------------------------------------
 #else
-#error "NetworkSetup.h covers the Mega, the Giga, the ESP32-PoE and the WT32-ETH01. For another board, see the examples under more, or the Ethernet library's."
+#error "NetworkSetup.h covers the Mega, the Giga, the ESP32-PoE, the ESP32-PoE-ISO and the WT32-ETH01. For another board, see the examples under more, or the Ethernet library's."
 #endif
