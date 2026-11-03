@@ -13,7 +13,7 @@ import collections
 import sys
 import time
 
-VERSION = "7.0.0"
+VERSION = "1.0.0"
 
 try:
     from blaeckpy.protocol import _decode

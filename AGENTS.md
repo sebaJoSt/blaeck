@@ -1,7 +1,7 @@
 # blaeck
 
 Unified library combining BlaeckSerial and BlaeckTCP.
-Version 7.0.0 is in development; setting its metadata does not publish a release.
+Version 1.0.0 is in development; setting its metadata does not publish a release.
 
 - Follow `extras/API-STYLE.md` for public documentation and implementation comments.
 - Four concepts: a signal (a value logged over time: name, unit and type in the B7 device list,
@@ -42,7 +42,7 @@ Version 7.0.0 is in development; setting its metadata does not publish a release
 - begin() is allowed once per instance, including failed initialization. Later calls,
   even after end(), report an error and return an inert setup handle without changing
   the transport or catalogs. TCP reconnects and host takeovers do not call begin().
-- Both connections report lowercase `blaeck` version 7.0.0. Frames are framed in lowercase,
+- Both connections report lowercase `blaeck` version 1.0.0. Frames are framed in lowercase,
   `<blaeck:` ... `/>` and LF. Keep the class/header `Blaeck`/`Blaeck.h` and the uppercase
   `BLAECK.` built-in command names unchanged.
 - TCP has one host at a time. A connection's first `BLAECK.*` command makes it the host; the

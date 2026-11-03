@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [7.0.0] - Unreleased
+## [1.0.0] - Unreleased
 
 First release. blaeck replaces BlaeckSerial and BlaeckTCP, which end at 6.0.1, with one library
 for Serial and TCP. See

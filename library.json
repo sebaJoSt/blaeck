@@ -1,6 +1,6 @@
 {
   "name": "blaeck",
-  "version": "7.0.0",
+  "version": "1.0.0",
   "description": "Arduino data logging, monitoring and control via Serial or TCP. Send sensor data for live monitoring and logging, expose controls, and report device state and events. A device describes its own interface, so a host can build a dashboard from it.",
   "keywords": "serial, tcp, ethernet, wifi, binary, sensor, telemetry, logging, protocol, home-assistant",
   "homepage": "https://github.com/sebaJoSt/blaeck",
