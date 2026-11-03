@@ -356,6 +356,11 @@ class Program:
         elif kind == "write_all":
             self.steps.append(f"{owner}.writeAll();")
             self.steps.append(f"dump({label});")
+        elif kind in ("clear_all_signals", "clear_all_controls", "clear_all_sensors",
+                      "clear_all_events", "clear_all_commands"):
+            method = "clearAll" + kind[len("clear_all_"):].capitalize()
+            self.steps.append(f"device.{method}();")
+            self.steps.append(f"tickAndDump({label});")
         elif kind in ("mark_missing", "mark_present", "write_restarted"):
             method = {"mark_missing": "markMissing", "mark_present": "markPresent",
                       "write_restarted": "writeRestarted"}[kind]

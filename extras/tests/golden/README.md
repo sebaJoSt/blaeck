@@ -57,5 +57,6 @@ Steps, each followed by a `tick()` unless it only writes:
 | `{"write_event": ["Alarms", "Overheat"], "device": "..."}` | writeEvent(), on a sub-device if named |
 | `{"write_all": true}` | writeAll() |
 | `{"mark_missing": "Device"}`, `{"mark_present": ...}`, `{"write_restarted": ...}` | on a sub-device |
+| `{"clear_all_signals": true}`, and `_controls`, `_sensors`, `_events`, `_commands` | the clearAll…() of that name, then a tick |
 
 The clock starts at 0 and moves only with `advance_ms`, so every run sends the same bytes.
