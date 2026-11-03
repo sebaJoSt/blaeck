@@ -171,9 +171,8 @@ and **Events**, then **WaveformGenerator** to see the pieces working together.
 
 ## Coming from BlaeckSerial or BlaeckTCP
 
-blaeck replaces BlaeckSerial and BlaeckTCP, which end at 6.0.1. It continues their version
-numbering, but its API is new, so a sketch needs changes rather than a plain upgrade. The main
-ones:
+blaeck replaces BlaeckSerial and BlaeckTCP. Its API is new, so a sketch needs changes rather
+than a plain upgrade. The main ones:
 
 | BlaeckSerial / BlaeckTCP 6.0.1 | blaeck |
 |---|---|
