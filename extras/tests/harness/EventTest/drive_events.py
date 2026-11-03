@@ -4,11 +4,16 @@ An event or type that was never declared is dropped in silence, so the
 board's own output cannot tell the two apart - only the absence of an 0x85 on the wire
 can. Each case says which it expects.
 """
-import re
 import sys
 import time
 
 import serial
+
+try:
+    from blaeckpy.protocol import _decode
+except ImportError:
+    sys.exit("This driver reads frames with blaeckpy's decoder: "
+             "pip install git+https://github.com/sebaJoSt/blaeckpy")
 
 if len(sys.argv) != 2:
     sys.exit("Usage: python drive_events.py SERIAL_PORT")
@@ -33,38 +38,21 @@ def read_for(s, seconds):
     return buf
 
 
-def unescape(raw):
-    """A frame's bytes between its markers as sent before escaping: a backslash and the byte XOR 0x20."""
-    out = bytearray()
-    escaped = False
-    for b in raw:
-        if escaped:
-            out.append(b ^ 0x20)
-            escaped = False
-        elif b == 0x5C:
-            escaped = True
-        else:
-            out.append(b)
-    return bytes(out)
-
-
-def frames_of(raw):
-    """(key, message id, payload) of each frame in raw, unescaped."""
-    frames = []
-    for body in re.findall(rb"<blaeck:([^\n]*)/>\n", raw):
-        body = unescape(body)
-        frames.append((body[0:1], body[2:6], body[7:]))
-    return frames
+def split(raw):
+    """The frames in raw, decoded, and the text the board printed between them."""
+    items = _decode.Decoder().feed(raw)
+    return ([i for i in items if isinstance(i, _decode.Frame)],
+            "".join(i for i in items if isinstance(i, str)))
 
 
 def text_of(raw):
-    t = re.sub(rb"<blaeck:[^\n]*\n", b"", raw)
+    """The board's printed lines; the frames share the port with them."""
     out = []
-    for line in t.split(b"\n"):
-        line = line.replace(b"\r", b"")
-        p = bytes(c for c in line if 32 <= c < 127)
-        if len(p) >= 3 and len(p) >= len(line) * 0.8:
-            out.append(p.decode("ascii", "replace"))
+    for line in split(raw)[1].split("\n"):
+        line = line.replace("\r", "")
+        printable = "".join(c for c in line if 32 <= ord(c) < 127)
+        if len(printable) >= 3 and len(printable) >= len(line) * 0.8:
+            out.append(printable)
     return out
 
 
@@ -95,8 +83,7 @@ with serial.Serial(PORT, 115200, timeout=0.2) as s:
         s.reset_input_buffer()
         s.write(cmd.encode()); s.flush()
         raw = read_for(s, 0.9)
-        frames = frames_of(raw)
-        events = [p for k, _m, p in frames if k[0] == 0x85]
+        events = [f.fields for f in split(raw)[0] if f.key == 0x85]
         ran = any(l.startswith("FIRED") for l in text_of(raw))
         got = len(events) > 0
         ok = got == expect

@@ -4,11 +4,16 @@ must refuse.
 An input's value is checked before it is stored, so a refusal is an absence: the board prints
 nothing. Each case says which it expects, and the mismatch is the finding.
 """
-import re
 import sys
 import time
 
 import serial
+
+try:
+    from blaeckpy.protocol import _decode
+except ImportError:
+    sys.exit("This driver reads frames with blaeckpy's decoder: "
+             "pip install git+https://github.com/sebaJoSt/blaeckpy")
 
 if len(sys.argv) != 2:
     sys.exit("Usage: python drive_commands.py SERIAL_PORT")
@@ -60,99 +65,33 @@ def read_for(s, seconds):
     return buf
 
 
+def split(raw):
+    """The frames in raw, decoded, and the text the board printed between them."""
+    items = _decode.Decoder().feed(raw)
+    return ([i for i in items if isinstance(i, _decode.Frame)],
+            "".join(i for i in items if isinstance(i, str)))
+
+
 def text_of(raw):
-    """Strip Blaeck frames; the debug text shares the port with them."""
-    t = re.sub(rb"<blaeck:[^\n]*\n", b"", raw)
+    """The board's printed lines; the frames share the port with them."""
     out = []
-    for line in t.split(b"\n"):
-        line = line.replace(b"\r", b"")
-        printable = bytes(c for c in line if 32 <= c < 127)
+    for line in split(raw)[1].split("\n"):
+        line = line.replace("\r", "")
+        printable = "".join(c for c in line if 32 <= ord(c) < 127)
         if len(printable) >= 3 and len(printable) >= len(line) * 0.8:
-            out.append(printable.decode("ascii", "replace"))
+            out.append(printable)
     return out
 
 
-def unescape(raw):
-    """A frame's bytes between its markers as sent before escaping."""
-    out = bytearray()
-    escaped = False
-    for b in raw:
-        if escaped:
-            out.append(b ^ 0x20)
-            escaped = False
-        elif b == 0x5C:
-            escaped = True
-        else:
-            out.append(b)
-    return bytes(out)
-
-
-def entity_list(raw):
-    """The payload of the first 0x90 frame in raw."""
-    start = raw.find(b"<blaeck:\x90")
-    end = raw.find(b"/>\n", start)
-    if start < 0 or end < 0:
+def entities_of(raw):
+    """name -> (value kind, access bits, DTYPE) for every property of the first entity list in
+    raw, and name -> ("event" or "button", flags, None) for the other kinds."""
+    lists = [f.body for f in split(raw)[0] if f.key == 0x90]
+    if not lists:
         sys.exit("No entity list received")
-    return unescape(raw[start + len(b"<blaeck:"):end])[7:]
-
-
-# Wire width of each DTYPE, None for length-prefixed text.
-WIDTHS = {0: 1, 1: 1, 2: 2, 3: 2, 4: 2, 5: 2, 6: 4, 7: 4, 8: 4, 9: 8, 10: None, 11: 8}
-
-
-def parse_entities(p):
-    """name -> (value kind, access bits, DTYPE) for every property entry of the list, and
-    name -> ("event" or "button", flags, None) for the other kinds."""
-    out = {}
-    i = 0
-    while i < len(p):
-        kind = p[i + 1]
-        i += 2
-        end = p.index(b"\0", i)
-        name = p[i:end].decode()
-        i = end + 1
-        if kind == 1:  # event: flags, icon?, device class?, then its types
-            flags = int.from_bytes(p[i:i + 2], "little")
-            i += 2
-            for bit in (0, 2):
-                if flags & (1 << bit):
-                    i = p.index(b"\0", i) + 1
-            count = int.from_bytes(p[i:i + 2], "little")
-            i += 2
-            for _ in range(count):
-                i = p.index(b"\0", i) + 1
-            out[name] = ("event", flags, None)
-            continue
-        if kind == 2:  # button: flags, display name?, icon?, device class?
-            flags = int.from_bytes(p[i:i + 2], "little")
-            i += 2
-            for bit in (0, 1, 2):
-                if flags & (1 << bit):
-                    i = p.index(b"\0", i) + 1
-            out[name] = ("button", flags, None)
-            continue
-        if kind != 0:
-            sys.exit(f"Unknown entry kind {kind}")
-        value_kind = p[i]
-        flags = int.from_bytes(p[i + 1:i + 5], "little")
-        dtype = p[i + 5]
-        i += 6
-        width = WIDTHS[dtype]
-        i += (1 + p[i]) if width is None else width
-        if value_kind == 2:
-            i = p.index(b"\0", i) + 1
-        if value_kind == 3:
-            i += 2
-        if flags & (1 << 2):
-            i += 8
-        if flags & (1 << 3):
-            i += 4
-        for bit in (4, 5, 6, 7):
-            if flags & (1 << bit):
-                i = p.index(b"\0", i) + 1
-        if flags & (1 << 11):
-            i += 1
-        out[name] = (value_kind, flags & 3, dtype)
+    out = {p.name: (p.value_kind, p.flags & 3, p.dtype) for p in lists[0].properties}
+    out.update({e.name: ("event", e.flags, None) for e in lists[0].events})
+    out.update({b.name: ("button", b.flags, None) for b in lists[0].buttons})
     return out
 
 
@@ -218,7 +157,7 @@ with serial.Serial(PORT, 115200, timeout=0.2) as s:
     s.reset_input_buffer()
     s.write(b"<BLAECK.WRITE_ENTITIES>")
     s.flush()
-    entities = parse_entities(entity_list(read_for(s, 1.5)))
+    entities = entities_of(read_for(s, 1.5))
     for name, (kind, access, dtype) in EXPECTED_ENTITIES.items():
         got = entities.get(name)
         ok = got == (kind, access, dtype) or (got is not None and dtype is None and got[:2] == (kind, access))

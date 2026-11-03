@@ -4,71 +4,59 @@ Upload SubDevicesTest first and close Loggbok/serial monitors. Only a Mega and U
 needed: the pump controller is simulated in the sketch. Checks the device list (B7), which
 device each signal, input, sensor and command belongs to, the pump's commands sent by name, the
 notices (C1), data frames and refused commands while the pump is missing and after it returns,
-and the restart notice and event for a pump restart.
+and the restart notice and event for a pump restart. Frames are read with blaeckpy's decoder
+(pip install git+https://github.com/sebaJoSt/blaeckpy).
 Failures exit nonzero.
 """
 import argparse
-import struct
+import collections
 import sys
 import time
-import zlib
 
-START = b"<blaeck:"
-END = b"/>\n"
 VERSION = "7.0.0"
 
-def unescape(raw):
-    """A frame's bytes between its markers as sent before escaping: a backslash and the byte XOR 0x20."""
-    out = bytearray()
-    escaped = False
-    for b in raw:
-        if escaped:
-            out.append(b ^ 0x20)
-            escaped = False
-        elif b == 0x5C:
-            escaped = True
-        else:
-            out.append(b)
-    return bytes(out)
+try:
+    from blaeckpy.protocol import _decode
+except ImportError:
+    sys.exit("This driver reads frames with blaeckpy's decoder: "
+             "pip install git+https://github.com/sebaJoSt/blaeckpy")
 
 
 # The DeviceID each catalog entry carries: 0 for the board, 1 for the pump.
-BOARD = bytes([0])
-PUMP = bytes([1])
+BOARD = 0
+PUMP = 1
 # The PropertyIndex a 0x95 of PumpLink carries: SET_PUMP_SPEED, SIM_SILENT, PumpLink.
 PUMP_LINK = bytes([2, 0])
 
 
 class Link:
-    """Splits the serial byte stream into frames (key, payload) and text lines."""
+    """The serial byte stream as frames ("frame", key, fields, decoded frame) and text lines
+    ("text", line). blaeckpy's decoder checks each frame's markers, CRC32 and fields."""
 
     def __init__(self, port):
         self.port = port
+        self.reset()
+
+    def reset(self):
+        """Forget what was read so far, frames, text and the device list alike."""
         self.buffer = bytearray()
+        self.decoder = _decode.Decoder()
+        self.text = ""
+        self.pending = collections.deque()
 
     def _items(self):
-        while self.buffer:
-            if self.buffer.startswith(START):
-                # A raw LF only ever ends a frame, right after "/>".
-                end = self.buffer.find(b"\n")
-                if end < 0:
-                    return
-                if self.buffer[end - 2:end] != b"/>":
-                    raise ValueError(f"Frame does not end in /> and LF: {bytes(self.buffer[:end + 1])!r}")
-                body = unescape(bytes(self.buffer[len(START):end - 2]))
-                del self.buffer[:end + 1]
-                if len(body) < 7 or body[1] != ord(":") or body[6] != ord(":"):
-                    raise ValueError(f"Malformed frame header: {body[:8]!r}")
-                yield ("frame", body[0], body[7:], body)
-            elif START.startswith(bytes(self.buffer)):
-                return
-            else:
-                newline = self.buffer.find(b"\n")
-                if newline < 0:
-                    return
-                line = bytes(self.buffer[:newline]).rstrip(b"\r").decode("ascii", "replace")
-                del self.buffer[:newline + 1]
-                yield ("text", line)
+        if self.buffer:
+            data = bytes(self.buffer)
+            self.buffer.clear()
+            for item in self.decoder.feed(data):
+                if isinstance(item, str):
+                    self.text += item
+                    *lines, self.text = self.text.split("\n")
+                    self.pending.extend(("text", line.rstrip("\r")) for line in lines)
+                else:
+                    self.pending.append(("frame", item.key, item.fields, item))
+        while self.pending:
+            yield self.pending.popleft()
 
     def collect(self, until, timeout=5.0):
         """Reads until `until(item)` is true; returns the items read, that one included."""
@@ -94,8 +82,7 @@ def frame_with(key):
 
 def ack_for(message_id):
     """The acknowledgement of the command sent with this message id; earlier acks are skipped."""
-    return lambda item: (item[0] == "frame" and item[1] == 0xA5
-                         and struct.unpack_from("<I", item[3], 2)[0] == message_id)
+    return lambda item: item[0] == "frame" and item[1] == 0xA5 and item[3].message_id == message_id
 
 
 def done(command):
@@ -131,30 +118,17 @@ def notice(device_id, event):
     return bytes([device_id, event])
 
 
-def owner_before(payload, name, gap=0):
-    """The DeviceID byte of the catalog record that holds `name`."""
-    at = payload.find(name.encode() + b"\0")
-    if at < 1 + gap:
-        raise AssertionError(f"{name} not found in catalog")
-    return payload[at - 1 - gap:at - gap]
+def owners(entity_list):
+    """name -> DeviceID of every property, event and button in a decoded entity list."""
+    items = entity_list.properties + entity_list.events + entity_list.buttons
+    return {item.name: item.device_id for item in items}
 
 
-def decode_data(body):
-    """Signal indexes and float values of a D3 frame (all test signals are floats)."""
-    crc, = struct.unpack("<I", body[-4:])
-    if zlib.crc32(body[:-4]) != crc:
-        raise AssertionError("Data CRC32 mismatch")
-    mode = body[10]
-    position = 11 + (8 if mode != 0 else 0)
-    values = {}
-    while position < len(body) - 4:
-        index, = struct.unpack_from("<H", body, position)
-        value, = struct.unpack_from("<f", body, position + 2)
-        values[index] = value
-        position += 6
-    if position != len(body) - 4:
-        raise AssertionError("Misaligned signal payload")
-    return values
+def decode_data(frame):
+    """Signal index -> value of a data frame, read against the device list the driver asked for."""
+    if not isinstance(frame.body, _decode.Data):
+        raise AssertionError("A data frame before the device list")
+    return frame.body.values
 
 
 class Checks:
@@ -186,7 +160,7 @@ def run(port):
     link.send("<BLAECK.ENTITIES_START>", ack_for(0))
     time.sleep(0.5)
     port.reset_input_buffer()
-    link.buffer.clear()
+    link.reset()
 
     items = link.send("<BLAECK.GET_DEVICES>", frame_with(0xB7))
     devices = frames(items, 0xB7)[-1][2]
@@ -196,14 +170,14 @@ def run(port):
                                  device_record(1, 0, "Pump controller", "Simulated", "1.0",
                                                [("Flow", FLOAT), ("Pressure", FLOAT)])), devices)
 
-    # In the entity list, the entry kind sits between the DeviceID and the name.
-    entities = frames(link.send("<BLAECK.WRITE_ENTITIES>", frame_with(0x90)), 0x90)[-1][2]
+    entity_list = frames(link.send("<BLAECK.WRITE_ENTITIES>", frame_with(0x90)), 0x90)[-1][3].body
+    owner = owners(entity_list)
     check("the SET_PUMP_SPEED input and the PumpLink sensor belong to the pump",
-          owner_before(entities, "SET_PUMP_SPEED", 1) == PUMP and owner_before(entities, "PumpLink", 1) == PUMP)
-    check("the SIM_SILENT switch stays on the board", owner_before(entities, "SIM_SILENT", 1) == BOARD)
-    check("PumpAlarms belongs to the pump", owner_before(entities, "PumpAlarms", 1) == PUMP)
-    check("the SIM_RESTART button stays on the board", owner_before(entities, "SIM_RESTART", 1) == BOARD)
-    check("the plain POLL command is not listed", b"POLL\0" not in entities)
+          owner.get("SET_PUMP_SPEED") == PUMP and owner.get("PumpLink") == PUMP, owner)
+    check("the SIM_SILENT switch stays on the board", owner.get("SIM_SILENT") == BOARD, owner)
+    check("PumpAlarms belongs to the pump", owner.get("PumpAlarms") == PUMP, owner)
+    check("the SIM_RESTART button stays on the board", owner.get("SIM_RESTART") == BOARD, owner)
+    check("the plain POLL command is not listed", "POLL" not in owner, owner)
 
     link.send("<SET_PUMP_SPEED,40>", done("SET_PUMP_SPEED"))
     items = link.send("<POLL>", done("POLL"))
@@ -214,7 +188,7 @@ def run(port):
     # How Loggbok sets an input of the pump: by name, like the board's. The callback runs
     # after the ack.
     items = link.send("<#5:SET_PUMP_SPEED,30>", done("SET_PUMP_SPEED"))
-    acks = [f for f in frames(items, 0xA5) if struct.unpack_from("<I", f[3], 2)[0] == 5]
+    acks = [f for f in frames(items, 0xA5) if f[3].message_id == 5]
     check("a pump input is set and acknowledged",
           bool(acks) and acks[-1][2][8] == 0, acks[-1][2][8:10] if acks else items)
     items = link.send("<@1:POLL>", ack_for(0))

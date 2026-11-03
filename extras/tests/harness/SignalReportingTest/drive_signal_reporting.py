@@ -4,101 +4,61 @@ Upload SignalReportingTest first and close Loggbok/serial monitors. Opening the 
 usually resets a Mega. No pins are driven. Runs direct and buffered output, checking
 decoded values, selected signal indexes, CRC32, callbacks and device-clock timing.
 Failures exit nonzero. --self-test checks the decoder without a board or pyserial.
+Frames are read with blaeckpy's decoder (pip install git+https://github.com/sebaJoSt/blaeckpy).
 """
 import argparse
 import math
-import struct
 import time
 import unittest
-import zlib
 
-START = b"<blaeck:"
-END = b"/>\n"
-FORMATS = {0: "<f", 1: "<f", 2: "<f", 3: "<f", 4: "<?", 6: "<i", 7: "<I", 8: "<f"}
+try:
+    from blaeckpy.protocol import _decode
+    from blaeckpy.protocol import frames as wire
+except ImportError:
+    raise SystemExit("This driver reads frames with blaeckpy's decoder: "
+                     "pip install git+https://github.com/sebaJoSt/blaeckpy")
 
-
-def unescape(raw):
-    """A frame's bytes between its markers as sent before escaping: a backslash and the byte XOR 0x20."""
-    out = bytearray()
-    escaped = False
-    for b in raw:
-        if escaped:
-            out.append(b ^ 0x20)
-            escaped = False
-        elif b == 0x5C:
-            escaped = True
-        else:
-            out.append(b)
-    return bytes(out)
+# The harness's signals by index, at the Mega's widths: what the sketch registers, so data frames
+# are read without asking for the device list.
+SIGNALS = [_decode.Signal(f"signal {i}", "", dtype) for i, dtype in enumerate(
+    [wire.DType.FLOAT] * 4 + [wire.DType.BOOL, wire.DType.TEXT, wire.DType.LONG,
+                                wire.DType.ULONG, wire.DType.FLOAT])]
 
 
 def decode_data(frame):
-    if not frame.startswith(START + b"\xd3:") or not frame.endswith(END):
-        raise ValueError("Not a complete data frame")
-    body = unescape(frame[len(START):-len(END)])
-    if len(body) < 23:
-        raise ValueError("Truncated data frame")
-    crc, = struct.unpack("<I", body[-4:])
-    if zlib.crc32(body[:-4]) != crc:
-        raise ValueError("Data CRC32 mismatch")
-    if any(body[p] != ord(":") for p in (1, 6)):
-        raise ValueError("Invalid data header separators")
-    mode = body[10]
-    if mode != 1:
-        raise ValueError(f"Expected MICROS timestamp, got mode {mode}")
-    timestamp, = struct.unpack_from("<Q", body, 11)
-    position = 19
-    values = {}
-    while position < len(body) - 4:
-        index, = struct.unpack_from("<H", body, position)
-        position += 2
-        if index in values:
-            raise ValueError(f"Duplicate signal {index}")
-        if index == 5:
-            length = body[position]
-            position += 1
-            value = body[position:position + length].decode("ascii")
-            size = length
-        elif index in FORMATS:
-            size = struct.calcsize(FORMATS[index])
-            value, = struct.unpack_from(FORMATS[index], body, position)
-        else:
-            raise ValueError(f"Unknown signal {index}")
-        if position + size > len(body) - 4:
-            raise ValueError("Signal payload exceeds frame")
-        values[index] = value
-        position += size
-    if position != len(body) - 4:
-        raise ValueError("Misaligned signal payload")
-    return {"values": values, "timestamp": timestamp, "flags": body[7]}
+    """A data frame's values, timestamp and flags. The decoder checks the markers, the CRC32 and
+    every field; this adds what the harness expects of its frames."""
+    decoded = _decode.decode(frame, SIGNALS)
+    if decoded.key != wire.Key.DATA:
+        raise ValueError("Not a data frame")
+    data = decoded.body
+    if data.timestamp_mode != 1:
+        raise ValueError(f"Expected MICROS timestamp, got mode {data.timestamp_mode}")
+    return {"values": data.values, "timestamp": data.timestamp, "flags": data.flags}
 
 
 class Decoder:
+    """The serial stream as the driver reads it: each data frame decoded, each text line whole."""
+
     def __init__(self):
-        self.buffer = bytearray()
+        self.stream = _decode.Decoder()
+        self.stream.device_list = _decode.DeviceList("", "", 0, [
+            _decode.Device(0, 0, 0, 0, "", "", "", SIGNALS)])
+        self.text = ""
 
     def feed(self, data):
-        self.buffer.extend(data)
         result = []
-        while self.buffer:
-            if self.buffer.startswith(START):
-                # A raw LF only ever ends a frame. Keep partial UART reads intact.
-                end = self.buffer.find(b"\n")
-                if end < 0:
-                    break
-                frame = bytes(self.buffer[:end + 1])
-                del self.buffer[:end + 1]
-                if frame[len(START)] == 0xD3:
-                    result.append(decode_data(frame))
-            elif START.startswith(self.buffer):
-                break
-            else:
-                newline = self.buffer.find(b"\n")
-                if newline < 0:
-                    break
-                result.append(bytes(self.buffer[:newline]).rstrip(b"\r").decode("ascii"))
-                del self.buffer[:newline + 1]
-        if len(self.buffer) > 16384:
+        for item in self.stream.feed(bytes(data)):
+            if isinstance(item, str):
+                self.text += item
+                *lines, self.text = self.text.split("\n")
+                result.extend(line.rstrip("\r") for line in lines)
+            elif item.key == wire.Key.DATA:
+                if item.body.timestamp_mode != 1:
+                    raise ValueError(f"Expected MICROS timestamp, got mode {item.body.timestamp_mode}")
+                result.append({"values": item.body.values, "timestamp": item.body.timestamp,
+                               "flags": item.body.flags})
+        if len(self.stream._buffer) + len(self.text) > 16384:
             raise ValueError("Unterminated frame or unexpected serial output")
         return result
 
@@ -257,10 +217,9 @@ def run(driver, buffered):
     assert driver.callbacks == 3
 
 
-def sample_frame(payload=b"\x00\x00" + struct.pack("<f", 1.5)):
-    body = b"\xd2:" + bytes(4) + b":\x00:" + bytes(2) + b":\x01"
-    body += struct.pack("<Q", 123456) + b":" + payload + bytes(5)
-    return START + body + struct.pack("<I", zlib.crc32(body)) + END
+def sample_frame(values=((0, wire.DType.FLOAT, 1.5),)):
+    return wire.data(values, schema_hash=0, timestamp_mode=wire.TimestampMode.MICROS,
+                       timestamp=123456)
 
 
 class DecoderTests(unittest.TestCase):
@@ -276,24 +235,28 @@ class DecoderTests(unittest.TestCase):
     def test_bad_crc(self):
         frame = bytearray(sample_frame())
         frame[24] ^= 1
-        with self.assertRaisesRegex(ValueError, "CRC32"):
+        with self.assertRaisesRegex(ValueError, "CRC"):
             decode_data(bytes(frame))
 
     def test_duplicate_indexes(self):
-        with self.assertRaisesRegex(ValueError, "Duplicate"):
-            decode_data(sample_frame((b"\x00\x00" + struct.pack("<f", 1)) * 2))
+        with self.assertRaisesRegex(ValueError, "twice"):
+            decode_data(sample_frame(((0, wire.DType.FLOAT, 1.0),) * 2))
 
     def test_text_and_integer_widths(self):
-        payload = b"\x05\x00\x03abc\x06\x00" + struct.pack("<i", -2147483648)
-        payload += b"\x07\x00" + struct.pack("<I", 4294967295)
-        self.assertEqual(decode_data(sample_frame(payload))["values"],
+        values = ((5, wire.DType.TEXT, "abc"), (6, wire.DType.LONG, -2147483648),
+                  (7, wire.DType.ULONG, 4294967295))
+        self.assertEqual(decode_data(sample_frame(values))["values"],
                          {5: "abc", 6: -2147483648, 7: 4294967295})
 
     def test_other_frame_and_incomplete_data(self):
         decoder = Decoder()
-        self.assertEqual(decoder.feed(START + b"\xa5:" + bytes(4) + END), [])
+        self.assertEqual(decoder.feed(wire.command_ack(1, 2, 0)), [])
         self.assertEqual(decoder.feed(sample_frame()[:-1]), [])
         self.assertEqual(len(decoder.feed(b"\n")), 1)
+
+    def test_a_timestamp_other_than_micros_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "MICROS"):
+            decode_data(wire.data(((0, wire.DType.FLOAT, 1.0),), schema_hash=0))
 
 
 def main():

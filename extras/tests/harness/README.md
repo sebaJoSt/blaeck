@@ -67,7 +67,7 @@ passes independently observable. This tests real AVR arithmetic, memory and Seri
 not continuous `loop()` throughput. Allocation failures, TCP reconnects and clock rollover
 remain covered by the native suite.
 
-The driver's parser can be checked without a board or Python dependencies:
+The driver's parser can be checked without a board or pyserial:
 
 ```powershell
 python extras\tests\harness\SignalReportingTest\drive_signal_reporting.py --self-test
@@ -81,6 +81,14 @@ buffered Serial output. This does not establish Loggbok integration or TCP behav
 Install only what the chosen driver needs: `pyserial` for direct Serial checks,
 `paho-mqtt` for discovery captures, `websocket-client` for HA registry/login, and
 `psycopg2-binary` for TimescaleDB checks.
+
+The Serial drivers (`drive_commands.py`, `drive_events.py`, `drive_signal_reporting.py`,
+`drive_sub_devices.py`) read frames with blaeckpy's decoder rather than a copy of their own, so
+they follow the protocol as blaeckpy's tests and blaeck's golden scenarios hold it:
+
+```
+pip install git+https://github.com/sebaJoSt/blaeckpy
+```
 
 Live discovery drivers require `MQTT_HOST`, using a TLS WebSocket endpoint on port 443
 and path `/`. A saved `capture.json` supplies discovery messages without contacting MQTT.
