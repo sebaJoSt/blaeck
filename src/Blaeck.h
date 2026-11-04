@@ -361,7 +361,7 @@ static const byte MAX_COMMAND_NAME_COUNT = 40;
 #endif
 
 // EventTypeEntry::field value meaning the whole string rather than one field of it.
-static const byte WHOLE_STRING = 0xFF;
+static const uint16_t WHOLE_STRING = 0xFFFF;
 
 // True for F(""). Modifiers treat an empty string as not set. Read with pgm_read_byte,
 // since on AVR the pointer is a flash address.
@@ -569,7 +569,7 @@ struct EventTypeEntry
   uint16_t channelIndex = 0;
   // addEventType() stores a whole string; CSV entries share one stored list.
   detail::StoredString text;
-  byte field = WHOLE_STRING;
+  uint16_t field = WHOLE_STRING;
 };
 
 } // namespace blaeck_detail
@@ -3378,7 +3378,7 @@ protected:
   // One table of event types for all events. Each entry names its channel; a type's index
   // is its position among its channel's entries.
   typedef blaeck_detail::EventTypeEntry EventTypeEntry;
-  static const byte WHOLE_STRING = blaeck_detail::WHOLE_STRING;
+  static const uint16_t WHOLE_STRING = blaeck_detail::WHOLE_STRING;
 
   // The entry's name: where it starts and ends in its stored string, trimmed, and its length.
   // A field of an addEvent() list is percent-decoded; a type from addEventType() is plain.
@@ -3449,7 +3449,8 @@ protected:
   void _writeChangedProperties();
   void _writePropertyByName(byte deviceId, BlaeckString name);
   void writeEntities(unsigned long messageID);
-  void writeEntitiesFrame(unsigned long messageID);
+  // False if the list didn't go out whole.
+  bool writeEntitiesFrame(unsigned long messageID);
 
   void (*_beforeWriteCallback)() = nullptr;
   void (*_dataStartCallback)() = nullptr;

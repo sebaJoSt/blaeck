@@ -2347,6 +2347,21 @@ static void aWholeRangeIsKeptWhole()
   stream.data.output.clear();
   command(device, stream, "<Ticks,4000000000>");
   assert(reason() == BLAECK_ACK_OK && ticks == 4000000000UL);
+  stream.data.output.clear();
+
+  // A float without a range still refuses what it would hold only as infinity.
+  float wide = 0;
+  device.addNumberInput(F("Wide"), &wide);
+  device.read();
+  stream.data.output.clear();
+  command(device, stream, "<Wide,1e100>");
+  assert(reason() == BLAECK_ACK_OUT_OF_RANGE && wide == 0);
+  stream.data.output.clear();
+  command(device, stream, "<Wide,-1e100>");
+  assert(reason() == BLAECK_ACK_OUT_OF_RANGE && wide == 0);
+  stream.data.output.clear();
+  command(device, stream, "<Wide,3e38>");
+  assert(reason() == BLAECK_ACK_OK && wide == 3e38f);
 }
 
 // Inputs and sensors: the entity list, a host's writes and their checks, change reports and names.
@@ -2746,6 +2761,125 @@ static byte ackReason(FakeStream &stream, uint32_t id)
   stream.data.output.clear();
   return static_cast<byte>(ack[9]);
 }
+
+#if BLAECK_ENABLE_IOT
+static bool hasFrame(const std::string &wire, byte key)
+{
+  return unescaped(wire).find(std::string("<BLAECK:") + char(key) + ':') != std::string::npos;
+}
+
+static int changingGaugeReads = 0;
+static float readChangingGauge() { return ++changingGaugeReads == 1 ? 10.0f : 20.0f; }
+
+// A notice or entity list that didn't go out whole is sent again, the list before any value that
+// refers to it. A sensor's baseline is the value the list carried, not a later reading.
+static void failedCatalogWrites()
+{
+  hostMillis() = 0;
+  {
+    FakeStream stream;
+    TestBlaeck device;
+    device.begin(stream);
+    float first = 1;
+    device.addSensor("First", &first);
+    stream.data.writeLimit = 0;
+    device.read();
+    stream.data.writeLimit = SIZE_MAX;
+    stream.data.output.clear();
+    device.read();
+    assert(hasFrame(stream.data.output, 0xC1) && hasFrame(stream.data.output, 0x90));
+
+    float second = 2;
+    device.addSensor("Second", &second);
+    stream.data.writeLimit = 0;
+    device.read();
+    stream.data.writeLimit = SIZE_MAX;
+    stream.data.output.clear();
+    hostMillis() += 10000;
+    second = 3;
+    device.writeIfDue();
+    const std::string out = unescaped(stream.data.output);
+    const size_t list = out.find(std::string("<BLAECK:") + char(0x90) + ':');
+    const size_t value = out.find(std::string("<BLAECK:") + char(0x95) + ':');
+    assert(list != std::string::npos && value != std::string::npos && list < value);
+  }
+  {
+    changingGaugeReads = 0;
+    FakeStream stream;
+    TestBlaeck device;
+    device.begin(stream);
+    device.addSensor("Gauge", readChangingGauge);
+    device.read();
+    stream.data.output.clear();
+    hostMillis() += 10000;
+    device.writeIfDue();
+    const float twenty = 20.0f;
+    assert(commandFramePayload(stream.data.output, 0x95, 0).find(
+               std::string(reinterpret_cast<const char *>(&twenty), 4)) != std::string::npos);
+  }
+}
+
+// Event names and indices past what a byte or the name buffer holds.
+static void eventLimits()
+{
+  {
+    FakeStream stream;
+    Capture debug;
+    TestBlaeck device;
+    device.begin(stream).withDebugStream(&debug);
+    // An F() name as long as the copy writeEvent() makes for its lookup is refused, and its
+    // first characters don't reach the event that has them as its name.
+    device.addEvent(F("ABCDEFGHIJKLMNOPQRSTUVWXYZ01234"), F("x"));
+    assert(!device.hasRejections());
+    device.addEvent(F("ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"), F("x"));
+    assert(device.hasRejections());
+    assert(debug.text.find("Event name too long: ABCDEFGHIJKLMNOPQRSTUVWXYZ012345") != std::string::npos);
+    device.read();
+    stream.data.output.clear();
+    device.writeEvent(F("ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"), "x");
+    assert(!hasFrame(stream.data.output, 0x85));
+    assert(!device.addEventType(F("ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"), "y"));
+  }
+
+  FakeStream stream;
+  TestBlaeck device;
+  device.begin(stream);
+  std::vector<std::string> names, types;
+  for (int i = 0; i < 257; ++i)
+  {
+    names.push_back("E" + std::to_string(i));
+    types.push_back("t" + std::to_string(i));
+  }
+  for (int i = 0; i < 257; ++i)
+    device.addEvent(names[i].c_str(), types[i].c_str());
+  std::string csv;
+  for (int i = 0; i < 257; ++i)
+    csv += (i ? "," : "") + std::string("c") + std::to_string(i);
+  device.addEvent("Big", csv.c_str());
+  assert(device.addEventType(names[256].c_str(), "extra"));
+  assert(!device.hasRejections());
+  device.read();
+
+  const auto expectEvent = [&](const char *name, const char *type, uint16_t position, uint16_t index)
+  {
+    stream.data.output.clear();
+    device.writeEvent(name, type);
+    const std::string payload = commandFramePayload(stream.data.output, 0x85, 0);
+    assert(payload.size() == 4);
+    uint16_t sentPosition, sentIndex;
+    memcpy(&sentPosition, payload.data(), 2);
+    memcpy(&sentIndex, payload.data() + 2, 2);
+    assert(sentPosition == position && sentIndex == index);
+  };
+  expectEvent(names[256].c_str(), "t256", 256, 0);
+  expectEvent(names[256].c_str(), "extra", 256, 1);
+  stream.data.output.clear();
+  device.writeEvent(names[0].c_str(), "extra");
+  assert(!hasFrame(stream.data.output, 0x85));
+  expectEvent("Big", "c255", 257, 255);
+  expectEvent("Big", "c256", 257, 256);
+}
+#endif
 
 static void commandValues()
 {
@@ -4113,6 +4247,8 @@ int main()
   ordinaryConfiguration(false);
   ordinaryConfiguration(true);
   configurationAllocationFailures();
+  failedCatalogWrites();
+  eventLimits();
 #else
   iotOff();
 #endif

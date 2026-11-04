@@ -785,7 +785,9 @@ static bool _fitsType(dataType type, double v)
   case Blaeck_ushort: case Blaeck_uint: return v >= 0 && v <= 65535.0;
   case Blaeck_long: return v >= -2147483648.0 && v <= 2147483647.0;
   case Blaeck_ulong: return v >= 0 && v <= 4294967295.0;
-  case Blaeck_float: case Blaeck_double: return true;
+  // Finite, and for a float within its range: 1e100 would be stored as infinity.
+  case Blaeck_float: return fabs(v) <= (double)FLT_MAX;
+  case Blaeck_double: return !isnan(v) && !isinf(v);
   // The bounds are the nearest doubles inside the range: 2^63 itself does not fit.
   case Blaeck_longlong: return v >= -9223372036854775808.0 && v < 9223372036854775808.0;
   default: return false;
@@ -2334,12 +2336,22 @@ int Blaeck::_registerEventChannel(byte deviceId, const char *channelName, const 
     return -1;
   }
 
-  if (channelName != nullptr && strlen(channelName) >= MAX_EVENT_NAME_COUNT)
+  // An F() name is copied into a buffer this size for lookups, so it is held to it too.
+  unsigned int nameLength = 0;
+  if (flashName != nullptr)
+    while (BlaeckString(flashName).read(nameLength) != 0)
+      nameLength++;
+  else if (channelName != nullptr)
+    nameLength = strlen(channelName);
+  if (nameLength >= MAX_EVENT_NAME_COUNT)
   {
     if (_debugStream != nullptr)
     {
       _debugStream->print(F("Event name too long: "));
-      _debugStream->println(channelName);
+      if (flashName != nullptr)
+        _debugStream->println(flashName);
+      else
+        _debugStream->println(channelName);
     }
     _rejectedEventChannelCount++;
     return -1;
@@ -2414,7 +2426,9 @@ void Blaeck::_addEventTypesCsv(uint16_t channelIndex, const detail::StoredString
   uint16_t fieldCount = _flashCsvOptionCount(eventTypes);
   for (uint16_t f = 0; f < fieldCount; f++)
   {
-    if (_eventTypeCount >= MAX_TABLE_ENTRIES || !_eventTypes.reserve(_eventTypeCount + 1))
+    // WHOLE_STRING marks a type from addEventType(), so it can't number a field.
+    if (f >= WHOLE_STRING || _eventTypeCount >= MAX_TABLE_ENTRIES ||
+        !_eventTypes.reserve(_eventTypeCount + 1))
     {
       if (_eventChannels[channelIndex].nameInFlash)
         _warnNoRoom(F("event type"),
@@ -2534,7 +2548,7 @@ bool Blaeck::_addEventType(byte deviceId, const char *channelName, BlaeckString 
   }
 
   // A duplicate could never be reported: writeEvent() would always find the first.
-  if (_findEventType((byte)channelIndex, eventType) >= 0)
+  if (_findEventType((uint16_t)channelIndex, eventType) >= 0)
   {
     if (_debugStream != nullptr)
     {
@@ -2551,7 +2565,7 @@ bool Blaeck::_addEventType(byte deviceId, const char *channelName, BlaeckString 
     return false;
   }
 
-  _eventTypes[_eventTypeCount].channelIndex = (byte)channelIndex;
+  _eventTypes[_eventTypeCount].channelIndex = (uint16_t)channelIndex;
   if (!_storeString(_eventTypes[_eventTypeCount].text, eventType))
   {
     ++_rejectedEventTypeCount;
@@ -2667,7 +2681,7 @@ void Blaeck::_writeEvent(byte deviceId, const char *channelName, BlaeckString ev
     return;
   }
 
-  int eventIndex = _findEventType((byte)channelIndex, eventType);
+  int eventIndex = _findEventType((uint16_t)channelIndex, eventType);
   if (eventIndex < 0)
   {
     if (_debugStream != nullptr)
@@ -3090,13 +3104,14 @@ void Blaeck::writeRestarted(unsigned long msg_id)
 
   if (!_writeRestartedAlreadyDone)
   {
-    _writeRestartedAlreadyDone = true;
-
     if (!_frameOpen(0xC1, msg_id))
       return;
     _emitByte(0);
     _emitByte(DEVICE_EVENT_RESTARTED);
-    _frameClose();
+    // A notice that didn't go out whole is tried again at the next read().
+    if (!_frameClose())
+      return;
+    _writeRestartedAlreadyDone = true;
 
     // Send the entity list after the notice, so a host that stayed connected sees what this run
     // declares and that its values are back at their defaults. This runs from read(), so
@@ -3432,7 +3447,16 @@ BlaeckEventRef BlaeckDeviceBase::addEvent(BlaeckString channelName, BlaeckString
   return BlaeckEventRef(_core, (int16_t)_registerEventChannel(channelName, eventTypes));
 }
 
-// Blaeck looks events up by RAM name, so an F() name is copied for the lookup.
+// Blaeck looks events up by RAM name, so an F() name is copied for the lookup. A name too long
+// for the copy is no event's, and must not match one by its first characters.
+static const char *_eventLookupName(BlaeckString flashName, char *copy)
+{
+  const unsigned int length = strlen(copy);
+  if (flashName.read(length) != 0)
+    copy[0] = '\0';
+  return copy;
+}
+
 bool BlaeckDeviceBase::addEventType(BlaeckString channelName, BlaeckString eventType)
 {
   if (_core == nullptr)
@@ -3441,7 +3465,7 @@ bool BlaeckDeviceBase::addEventType(BlaeckString channelName, BlaeckString event
     return _core->_addEventType(_deviceId, channelName.data(), eventType);
   char name[Blaeck::MAX_EVENT_NAME_COUNT];
   Blaeck::copyFlashName(reinterpret_cast<const __FlashStringHelper *>(channelName.data()), name, sizeof(name));
-  return _core->_addEventType(_deviceId, name, eventType);
+  return _core->_addEventType(_deviceId, _eventLookupName(channelName, name), eventType);
 }
 
 void BlaeckDeviceBase::writeEvent(BlaeckString channelName, BlaeckString eventType)
@@ -3455,7 +3479,7 @@ void BlaeckDeviceBase::writeEvent(BlaeckString channelName, BlaeckString eventTy
   }
   char name[Blaeck::MAX_EVENT_NAME_COUNT];
   Blaeck::copyFlashName(reinterpret_cast<const __FlashStringHelper *>(channelName.data()), name, sizeof(name));
-  _core->_writeEvent(_deviceId, name, eventType);
+  _core->_writeEvent(_deviceId, _eventLookupName(channelName, name), eventType);
 }
 
 int BlaeckDeviceBase::findSignalIndex(BlaeckString signalName)
@@ -4148,6 +4172,8 @@ bool Blaeck::_writePropertyFrame(uint16_t index)
     return false;
   // A host must know the property before a value of it arrives.
   _flushCatalogs();
+  if (_entityCatalogDirty)
+    return false;
   PropertyEntry &p = _properties[index];
   ReportingState &r = *p.reporting;
 
@@ -4263,16 +4289,16 @@ void Blaeck::_writePropertyByName(byte deviceId, BlaeckString name)
 
 void Blaeck::writeEntities(unsigned long msg_id)
 {
-  _entityCatalogDirty = false;
-  writeEntitiesFrame(msg_id);
+  // A list that didn't go out whole stays due, so values never refer to entries a host lacks.
+  _entityCatalogDirty = !writeEntitiesFrame(msg_id);
 }
 
-void Blaeck::writeEntitiesFrame(unsigned long msg_id)
+bool Blaeck::writeEntitiesFrame(unsigned long msg_id)
 {
   // Layout: Entity List (0x90) in the protocol spec: the properties, then the events, then the
   // buttons, each kind in table order.
   if (!_frameOpen(0x90, msg_id))
-    return;
+    return false;
 #if BLAECK_ENABLE_IOT
   for (uint16_t i = 0; i < _propertyCount; ++i)
   {
@@ -4306,6 +4332,23 @@ void Blaeck::writeEntitiesFrame(unsigned long msg_id)
     }
     else
       _propertyValue(p, value);
+
+    // The value sent becomes the baseline once the list has gone out; a getter read again
+    // afterwards may answer differently.
+    ReportingState &r = *p.reporting;
+    r.valid = false;
+    if (p.kind != BLAECK_VALUE_TEXT)
+    {
+      _captureValue(r, p.type, value, false);
+      r.valid = true;
+    }
+    else if (_prepareTextSnapshot(r, textLength))
+    {
+      r.textLength = textLength;
+      memcpy(r.text, text, textLength);
+      r.text[textLength] = '\0';
+      r.valid = true;
+    }
 
     _emitEntry(p.deviceId, 0, [&]()
     {
@@ -4424,35 +4467,18 @@ void Blaeck::writeEntitiesFrame(unsigned long msg_id)
     });
   }
 #endif
-  if (!_frameClose())
-    return;
-  // The list carried each current value, so none is due again until it changes.
+  const bool complete = _frameClose();
+  // The list carried each value, so none is due again until it changes. One that didn't arrive
+  // is due now.
   const uint32_t now = static_cast<uint32_t>(millis());
   for (uint16_t i = 0; i < _propertyCount; ++i)
   {
-    PropertyEntry &p = _properties[i];
-    ReportingState &r = *p.reporting;
-    r.valid = false;
-    if (p.kind == BLAECK_VALUE_TEXT)
-    {
-      bool inFlash;
-      const char *text = _propertyText(p, inFlash);
-      const byte length = _propertyTextLength(text, p.textSize);
-      if (!_prepareTextSnapshot(r, length))
-        continue;
-      r.textLength = length;
-      memcpy(r.text, text, length);
-      r.text[length] = '\0';
-    }
-    else
-    {
-      byte value[8];
-      _propertyValue(p, value);
-      _captureValue(r, p.type, value, false);
-    }
-    r.valid = true;
+    ReportingState &r = *_properties[i].reporting;
+    if (!complete)
+      r.valid = false;
     r.lastWriteMs = now;
   }
+  return complete;
 }
 
 int BlaeckDeviceBase::_registerProperty(BlaeckString name, uint8_t kind, bool writable, dataType type,
