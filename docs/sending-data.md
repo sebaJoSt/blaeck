@@ -305,7 +305,7 @@ By default the data carries no time and the host stamps it when it arrives. That
 the link is quick and nothing buffers.
 
 For a time the device itself stands behind, pick a mode in `setup()`. `BLAECK_MICROS` needs
-nothing else - the library reads `micros()` and counts the overflows, so the number keeps
+nothing else: the library reads `micros()` and counts the overflows, so the number keeps
 climbing past the 71 minutes a 32-bit microsecond counter holds. Keep calling `tick()`
 regularly even when no data qualifies, so rollovers can be observed. A sketch
 that can sleep through a complete rollover needs a real clock instead:
@@ -359,5 +359,5 @@ anything, a host has to have the list of signals in the device list, and the ent
 the controls, sensors and events.
 
 Your sketch does not have to send these. They go out when the device starts, again whenever a
-host asks, and again whenever you change what the device declares - always ahead of the next
+host asks, and again whenever you change what the device declares, always ahead of the next
 value, so nothing is ever read against a list that has moved.

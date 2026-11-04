@@ -1,7 +1,7 @@
 # Sub-devices
 
 A sub-device is another board, or a part of this one, shown in Home Assistant as its own device
-below this board. The board fetches its values over any link - I2C, UART, CAN, radio - and
+below this board. The board fetches its values over any link (I2C, UART, CAN, radio) and
 reports them under it.
 
 ```text

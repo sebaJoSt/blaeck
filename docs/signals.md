@@ -1,7 +1,7 @@
 # Signals
 
 A signal is a variable your sketch sends: a temperature, a counter, a switch position.
-Blaeck reads it every time it sends data, so you only have to keep the variable up to
+blaeck reads it every time it sends data, so you only have to keep the variable up to
 date.
 
 The [Signals example](../examples/Signals/Signals.ino) demonstrates numeric, boolean and text
@@ -26,7 +26,7 @@ void setup()
 }
 ```
 
-Blaeck stores the pointer, not a copy. The variable must therefore be a global, or
+blaeck stores the pointer, not a copy. The variable must therefore be a global, or
 anything else that stays alive for as long as the sketch runs. A local variable inside
 `setup()` does not work.
 
@@ -100,7 +100,7 @@ Signals with the same unit share one stored copy of it, so a series of 40 signal
 ## When a signal does not fit
 
 The signal table grows as signals are added, so the only limit is RAM. When the board runs out,
-the signal is dropped - see [Configuration](configuration.md) for what each one costs.
+the signal is dropped; see [Configuration](configuration.md) for what each one costs.
 
 Ask whether that happened:
 

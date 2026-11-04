@@ -1,8 +1,7 @@
 # Configuration
 
-This library uses one shared configuration for Serial and TCP. Include `Blaeck.h` first
-when the old standalone libraries are also installed. The examples below use the Serial
-transport; TCP uses `begin(server)` after `server.begin()`, and the same core settings.
+This library uses one shared configuration for Serial and TCP. The examples below use the
+Serial transport; TCP uses `begin(server)` after `server.begin()`, and the same core settings.
 
 One thing is decided outside the code that uses it: which parts of the library are built at all.
 
@@ -29,12 +28,12 @@ another `begin()`.
 
 RAM is the only limit. On AVR, with the default settings, a signal costs 13 bytes, an event type
 6, an event 13, a device 10, a sensor or a control with a value about 40, and a command or
-button 66 - the largest there is. Every eight entries of a table share about 4 bytes of
+button 66, the largest there is. Every eight entries of a table share about 4 bytes of
 bookkeeping, and the last group of eight may hold up to seven unused slots. Each configuration
 string passed as ordinary RAM text is copied, at about its length plus 7 bytes (a reference
 count, the terminator and the heap's own header); an `F()` string costs nothing extra. A Mega's
 8 kB is gone at a few hundred of anything, where an ESP32 has room for thousands. The
-presentation of a sensor or control - unit, label, icon, device class - takes about 20 bytes
+presentation of a sensor or control (unit, label, icon, device class) takes about 20 bytes
 more, only once it has one. A signal unit is stored once however many signals share it: about
 3 bytes, plus its copy when it is ordinary RAM text.
 
@@ -57,7 +56,7 @@ their existing lifetime requirements; they are not copied configuration.
 ## Finding out what did not fit
 
 An entry that can't be added is dropped. Your sketch still runs, still logs, and is simply
-missing a signal or a control - which is why it is worth asking.
+missing a signal or a control, which is why it is worth asking.
 
 `withDebugStream()` names a stream for the library to report on. Enable it before registration
 to see why an entry was rejected. The debug stream may be the same stream the data goes to.
@@ -77,7 +76,7 @@ Blaeck registration rejections:
   Enable withDebugStream() before registration for details.
 ```
 
-It is safe on the Blaeck stream because no data has been written yet at the end of `setup()`.
+It is safe on the data stream because no data has been written yet at the end of `setup()`.
 
 To ask in code: `hasRejections()`, for any table at all.
 
@@ -107,8 +106,8 @@ so a name built at runtime can come from a local buffer.
 
 ## Compile-time settings
 
-The rest are `#define`s. `BLAECK_ENABLE_IOT` set to 0 drops the IoT part - controls,
-sensors and events - and reclaims the flash and SRAM it would have cost. The entity list then
+The rest are `#define`s. `BLAECK_ENABLE_IOT` set to 0 drops the IoT part (controls,
+sensors and events) and reclaims the flash and SRAM it would have cost. The entity list then
 goes out empty; signals and plain commands work as before. Your sketch needs no `#ifdef`
 around it: the calls still compile and simply store nothing, so the same sketch builds
 either way.
@@ -179,5 +178,5 @@ arduino-cli compile --fqbn <board> \
 
 `{build.source.path}` is your sketch folder. Nothing in your Arduino installation is touched,
 and this is the one your CI can reproduce. The IDE has no place to pass that flag, so building
-there needs the same line in a `platform.local.txt` next to your core's `platform.txt` - per
+there needs the same line in a `platform.local.txt` next to your core's `platform.txt`, per
 core, so once for avr, again for esp32, and so on.

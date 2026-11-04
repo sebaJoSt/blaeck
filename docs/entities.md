@@ -47,8 +47,8 @@ void loop()
 }
 ```
 
-- The sketch reads `setpoint` and writes `temperature`; Blaeck does the rest.
-- `<Setpoint,22.5>` sets the number. Blaeck stores the value, acknowledges it and sends it back.
+- The sketch reads `setpoint` and writes `temperature`; blaeck does the rest.
+- `<Setpoint,22.5>` sets the number. blaeck stores the value, acknowledges it and sends it back.
 - `<Reset>` presses the button.
 - `tick()` sends every value that changed.
 

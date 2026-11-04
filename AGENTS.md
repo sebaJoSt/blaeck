@@ -51,7 +51,6 @@ them to the Arduino Library Manager and the PlatformIO registry; never tag or pu
   only to the host, terminals get Terminal text, and terminal commands are not acknowledged.
 - Reuse the allocated client slots. Teardown closes accepted clients, not the supplied
   server. Report allocation/setup errors through transportError()/printTransportError().
-- Examples start with `Blaeck.h` to select this package while the old libraries coexist.
 - `src/detail/BlaeckDefaults.h` loads the optional user `BlaeckConfig.h`.
   Shared layout settings must reach every translation unit. Buffering defaults are per transport.
 - There is one set of main examples, not Serial/TCP trees. Each main sketch shows

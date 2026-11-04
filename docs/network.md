@@ -46,7 +46,7 @@ calling `tick()` on the existing instance.
 
 ### Optional TelnetStream
 
-TelnetStream is not required by Blaeck. To retain its network selection and wrappers,
+TelnetStream is not required by blaeck. To retain its network selection and wrappers,
 include its header explicitly and pass its global server:
 
 ```cpp
@@ -65,7 +65,7 @@ void setup()
 ```
 
 For a different port, configure TelnetPrint using its concrete server's API before attaching
-it. Never reassign or restart a server while Blaeck is using it.
+it. Never reassign or restart a server while blaeck is using it.
 
 The supplied server must have `accept()` returning a default-constructible, assignable
 client value derived from Arduino's `Client`. Each new connection must be returned only
@@ -85,7 +85,7 @@ Otherwise the message is simply `Client #0 connected`; protocol operation is unc
 
 One typed adapter is allocated when attaching. Client objects and Blaeck session state are
 allocated as two arrays on the first read, using the configured client count. Connections
-reuse these slots; Blaeck does not allocate a new client wrapper on each accept. Network
+reuse these slots; blaeck does not allocate a new client wrapper on each accept. Network
 libraries may still allocate their own socket storage.
 
 `transportError()` returns `None`, `NotStarted`, `OutOfMemory`, `InvalidClientCount`,
@@ -162,8 +162,8 @@ wait. Short lines don't get there.
 ## When a connection drops
 
 A connection that closes properly frees its slot at once, and
-the `onDisconnect()` function is called. One that dies without closing - a pulled cable,
-a laptop going to sleep - is noticed only when the network stack gives up on it.
+the `onDisconnect()` function is called. One that dies without closing (a pulled cable,
+a laptop going to sleep) is noticed only when the network stack gives up on it.
 
 A host that reconnects starts as a terminal again, and receives nothing until it sends a
 `BLAECK.` command. Loggbok does that as soon as it reconnects, so data continues, and the
