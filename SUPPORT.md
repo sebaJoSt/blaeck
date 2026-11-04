@@ -21,8 +21,8 @@ Include what you expected, what happened, and:
 - Whether you use Serial or TCP. For TCP, include the networking library and version.
 - The smallest sketch that still shows the problem, with credentials removed.
 - Full compiler output for build failures.
-- The host application and version for communication problems: Loggbok, blaecktcpy
-  or your own program.
+- The host application and version for communication problems: Loggbok or your own
+  program.
 
 For missing signals, commands or channels, include the output from this at the end
 of `setup()`, after registration:

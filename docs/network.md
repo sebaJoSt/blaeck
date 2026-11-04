@@ -109,7 +109,7 @@ disconnects or another connection takes over.
 
 | | Host | Terminal |
 |---|---|---|
-| Typical client | Loggbok, blaecktcpy | PuTTY, telnet |
+| Typical client | Loggbok | PuTTY, telnet |
 | How many | one | the remaining connections |
 | Receives frames | yes | never |
 | Receives text from `device.Terminal` | no | yes |
@@ -197,6 +197,14 @@ The `more` folder includes additional networking examples:
 [WiFi](../examples/more/WiFi) gets the UNO R4 WiFi and ESP32 boards online, and
 [ESP32C6BugBoard](../examples/more/ESP32C6BugBoard) sets the pins for the
 ESP32-C6-Bug's Ethernet add-on. These use their own network setup.
+
+The ESP32 network examples need ESP32 core 3.x. PlatformIO's own `espressif32` platform stays
+on core 2.x; use the community [pioarduino](https://github.com/pioarduino/platform-espressif32)
+platform instead:
+
+```ini
+platform = https://github.com/pioarduino/platform-espressif32/releases/download/stable/platform-espressif32.zip
+```
 
 The hardware name defaults to the selected build target, with a friendly name for recognised
 boards or the core's board identifier otherwise. It is not physical board detection.
