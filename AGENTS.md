@@ -1,7 +1,8 @@
 # blaeck
 
 Unified library combining BlaeckSerial and BlaeckTCP.
-Version 1.0.0 is in development; setting its metadata does not publish a release.
+Version 1.0.0 is the first release (November 4, 2026). The user tags releases and publishes
+them to the Arduino Library Manager and the PlatformIO registry; never tag or publish.
 
 - Follow `extras/API-STYLE.md` for public documentation and implementation comments.
 - Four concepts: a signal (a value logged over time: name, unit and type in the B7 device list,
@@ -57,6 +58,11 @@ Version 1.0.0 is in development; setting its metadata does not publish a release
   device.begin(Serial) and device.begin(server) in explicit USE_TCP branches.
   Do not hide the choice or begin call in a connection setup wrapper.
 - NetworkSetup.h exposes the board's concrete server alias as NetworkSetup::Server.
+- A new main example also goes in the README examples table and in the `for ex in` lists of
+  `compile-examples.yml` and `platformio.yml`. If it has a NetworkSetup.h tab, copy it from
+  Basic; syncnetwork.py only updates existing copies.
+- A protocol or frame change also reaches blaeckpy: it copies `extras/tests/golden` with its
+  `scripts/copy_golden.py`, and its golden tests must pass against the new recordings.
 - Text files use LF. Preserve byte equality of setup tab copies.
 - Edit `examples/Basic/NetworkSetup.h`, then run
   `python extras/scripts/syncnetwork.py`.
@@ -71,8 +77,5 @@ Version 1.0.0 is in development; setting its metadata does not publish a release
   one last-sent baseline. tick(timestamp) is the only loop call; read() and writeIfDue()
   are its protected halves, reached by tests through a subclass. Do not restore update
   flags or timed-write API variants.
-- Native reporting/transport tests and representative Mega Serial/GIGA TCP builds have
-  passed. SignalReportingTest also passed direct/buffered Serial checks on a physical
-  Optiboot Mega. This is not evidence of Loggbok integration or hardware TCP validation.
 - BlaeckSerial and BlaeckTCP are frozen at 6.0.1 and archived on GitHub; their README points
   to blaeck. Their post-6.0.1 development is on each repo's `7.0-dev` branch. Do not change them.
