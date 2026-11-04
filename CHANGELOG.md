@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.0.0] - 2026-11-03
+## [1.0.0] - 2026-11-04
 
 First release. blaeck replaces BlaeckSerial and BlaeckTCP with one library
 for Serial and TCP. See
