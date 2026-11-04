@@ -2380,6 +2380,18 @@ static void aWholeRangeIsKeptWhole()
   stream.data.output.clear();
   command(device, stream, "<FromMin,0.15>");
   assert(reason() == BLAECK_ACK_OK && fromMin == 0.15);
+  stream.data.output.clear();
+
+  // A minimum near a whole number keeps its decimals: 1.0001 is not 1.
+  double nearWhole = 1.0001;
+  device.addNumberInput(F("NearWhole"), &nearWhole).withRange(1.0001, 1.1001, 0.1);
+  device.read();
+  stream.data.output.clear();
+  command(device, stream, "<NearWhole,1.0001>");
+  assert(reason() == BLAECK_ACK_OK && nearWhole == 1.0001);
+  stream.data.output.clear();
+  command(device, stream, "<NearWhole,1.1001>");
+  assert(reason() == BLAECK_ACK_OK && nearWhole == 1.1001);
 }
 
 // Inputs and sensors: the entity list, a host's writes and their checks, change reports and names.

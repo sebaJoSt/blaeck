@@ -4024,10 +4024,10 @@ static bool _isNumberText(const char *v, bool &whole)
 }
 
 // The decimal places a step is written with: 0.01 gives 2, 0.5 gives 1, 2 gives 0. A step is
-// held as a double, a float on AVR, which no decimal fraction lands on exactly, so the answer is the first
-// scaling that leaves a whole number of at least 1 to within the same thousandth the snap itself
-// allows: 0.0001 is within a thousandth of 0 but has four decimals. -1 past six decimals, where
-// a float no longer distinguishes steps, and nothing is rounded.
+// held as a double, a float on AVR or when written as one, which no decimal fraction lands on
+// exactly, so the answer is the first scaling that leaves a whole number of at least 1 to within
+// what a float carries: 0.0001 is near 0 and 1.0001 near 1, but both have four decimals. -1 past
+// six decimals, where a float no longer distinguishes steps, and nothing is rounded.
 static int _stepDecimals(double step)
 {
   double scale = 1.0;
@@ -4035,7 +4035,7 @@ static int _stepDecimals(double step)
   {
     const double scaled = step * scale;
     const double whole = floor(scaled + 0.5);
-    if (whole >= 1.0 && fabs(scaled - whole) < 1e-3)
+    if (whole >= 1.0 && fabs(scaled - whole) <= 1e-6 * scaled)
       return decimals;
     scale *= 10.0;
   }
@@ -4131,7 +4131,12 @@ byte Blaeck::_receiveProperty(uint16_t index)
         for (int i = decimals; i > 0; i--)
           scale *= 10.0;
         if (decimals >= 0 && fabs(snapped) * scale < 1e15)
-          snapped = floor(fabs(snapped) * scale + 0.5) / scale * (snapped < 0.0 ? -1.0 : 1.0);
+        {
+          const double rounded = floor(fabs(snapped) * scale + 0.5) / scale * (snapped < 0.0 ? -1.0 : 1.0);
+          // Rounding only removes the arithmetic's noise; it never leaves the range.
+          if (rounded >= rangeMin && rounded <= _boundAsDouble(p.type, p.rangeMax))
+            snapped = rounded;
+        }
         number = snapped;
       }
     }
