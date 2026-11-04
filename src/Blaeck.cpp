@@ -4023,19 +4023,23 @@ static bool _isNumberText(const char *v, bool &whole)
   return *p == '\0';
 }
 
-// The decimal places a step is written with: 0.01 gives 2, 0.5 gives 1, 2 gives 0. A step is
-// held as a double, a float on AVR or when written as one, which no decimal fraction lands on
-// exactly, so the answer is the first scaling that leaves a whole number of at least 1 to within
-// what a float carries: 0.0001 is near 0 and 1.0001 near 1, but both have four decimals. -1 past
-// six decimals, where a float no longer distinguishes steps, and nothing is rounded.
-static int _stepDecimals(double step)
+// A decimal precision is usable only if it round-trips at the property's storage width.
+// Otherwise snapping is skipped rather than guessing away significant digits.
+static int _stepDecimals(double step, dataType type)
 {
+  if (type == Blaeck_float)
+    step = (float)step;
   double scale = 1.0;
-  for (int decimals = 0; decimals <= 6; decimals++)
+  for (int decimals = 0; decimals <= 17; decimals++)
   {
     const double scaled = step * scale;
+    if (isinf(scaled))
+      return -1;
     const double whole = floor(scaled + 0.5);
-    if (whole >= 1.0 && fabs(scaled - whole) <= 1e-6 * scaled)
+    double restored = whole / scale;
+    if (type == Blaeck_float)
+      restored = (float)restored;
+    if (whole >= 1.0 && restored == step)
       return decimals;
     scale *= 10.0;
   }
@@ -4114,16 +4118,8 @@ byte Blaeck::_receiveProperty(uint16_t index)
       if (fabs(steps - nearest) < 1e-3)
       {
         double snapped = rangeMin + nearest * rangeStep;
-        // min + n * step is arithmetic on two binary numbers, neither of which is the decimal it was
-        // written as, so the sum lands beside the step rather than on it - 0.1 came back as
-        // 0.099999994, a whole float step out and worse than the value that arrived. Rounding
-        // the sum to the step's own decimals puts it back: the scaling is by an exact power of
-        // ten, so the result is the nearest number there is to the decimal intended. Skipped
-        // where the scaling would run out of digits, which the range a step this fine can
-        // cover does not reach.
-        const int stepDecimals = _stepDecimals(rangeStep);
-        // The minimum's decimals count too: 0.05 with a step of 0.1 lands on 0.15, not 0.2.
-        const int minDecimals = rangeMin == 0.0 ? 0 : _stepDecimals(fabs(rangeMin));
+        const int stepDecimals = _stepDecimals(rangeStep, p.type);
+        const int minDecimals = rangeMin == 0.0 ? 0 : _stepDecimals(fabs(rangeMin), p.type);
         const int decimals = (stepDecimals < 0 || minDecimals < 0)
                                  ? -1
                                  : (stepDecimals > minDecimals ? stepDecimals : minDecimals);
@@ -4132,12 +4128,13 @@ byte Blaeck::_receiveProperty(uint16_t index)
           scale *= 10.0;
         if (decimals >= 0 && fabs(snapped) * scale < 1e15)
         {
-          const double rounded = floor(fabs(snapped) * scale + 0.5) / scale * (snapped < 0.0 ? -1.0 : 1.0);
-          // Rounding only removes the arithmetic's noise; it never leaves the range.
+          double rounded = floor(fabs(snapped) * scale + 0.5) / scale * (snapped < 0.0 ? -1.0 : 1.0);
+          if (p.type == Blaeck_float)
+            rounded = (float)rounded;
+          // Keep the original valid input if its nearest step would leave the range.
           if (rounded >= rangeMin && rounded <= _boundAsDouble(p.type, p.rangeMax))
-            snapped = rounded;
+            number = rounded;
         }
-        number = snapped;
       }
     }
     if (_isIntegerType(p.type))

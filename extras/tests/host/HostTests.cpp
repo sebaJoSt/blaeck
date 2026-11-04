@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 #include <limits>
+#include <cstdio>
 
 #ifndef BLAECK_TEST_REPORTING_ONLY
 #define BLAECK_TEST_REPORTING_ONLY 0
@@ -2394,6 +2395,44 @@ static void aWholeRangeIsKeptWhole()
   assert(reason() == BLAECK_ACK_OK && nearWhole == 1.1001);
 }
 
+template <class T>
+static void stepRoundingAtTheVariablesWidth()
+{
+  const struct
+  {
+    double low, high, step, sent, expected;
+  } cases[] = {
+      {0.01, 0.02, 0.0001, 0.015, 0.015},
+      {0.05, 0.15, 0.1, 0.15, 0.15},
+      {1.0001, 1.1001, 0.1, 1.0001, 1.0001},
+      {1000000.0001, 1000001.0001, 0.1, 1000000.1001, 1000000.1001},
+      {-1000001.0001, -1000000.0001, 0.1, -1000000.1001, -1000000.1001},
+      {1.0000000001, 2.0000000001, 0.1, 1.1000000001, 1.1000000001},
+      {0.05, 0.050001, 0.0000001, 0.050001, 0.050001},
+      {0.0, 0.299999, 0.1, 0.299999, 0.299999},
+      {-1.0, -0.700001, 0.1, -0.700001, -0.700001},
+      {0.0, 1.0, 0.1, 0.30000000000000004, 0.3},
+      {0.0, 1.0, 0.10001, 0.30003, 0.30003},
+  };
+  for (const auto &c : cases)
+  {
+    FakeStream stream;
+    TestBlaeck device;
+    T value = (T)c.low;
+    device.addNumberInput(F("Value"), &value).withRange((T)c.low, (T)c.high, (T)c.step);
+    assert(!device.hasRejections());
+    device.begin(stream);
+    device.read();
+    stream.data.output.clear();
+    char request[64];
+    std::snprintf(request, sizeof request, "<Value,%.17g>", (double)(T)c.sent);
+    command(device, stream, request);
+    assert(static_cast<byte>(commandFramePayload(stream.data.output, 0xA5, 0)[9]) == BLAECK_ACK_OK);
+    assert(value == (T)c.expected);
+    assert(value >= (T)c.low && value <= (T)c.high);
+  }
+}
+
 // Inputs and sensors: the entity list, a host's writes and their checks, change reports and names.
 // Events and buttons in the entity list, after the properties; a press; the 0x85 layout.
 // Signals, events and sub-devices are never sent as commands, so their names may hold '/', spaces
@@ -4362,6 +4401,8 @@ int main()
     properties();
     rangeAtTheVariablesWidth();
     aWholeRangeIsKeptWhole();
+    stepRoundingAtTheVariablesWidth<float>();
+    stepRoundingAtTheVariablesWidth<double>();
     entryNameRules();
     clearsAndIdentity();
     eventsAndButtons();
