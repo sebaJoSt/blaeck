@@ -87,7 +87,7 @@ The Serial drivers (`drive_commands.py`, `drive_events.py`, `drive_signal_report
 they follow the protocol as blaeckpy's tests and blaeck's golden scenarios hold it:
 
 ```
-pip install git+https://github.com/sebaJoSt/blaeckpy
+pip install blaeckpy
 ```
 
 Live discovery drivers require `MQTT_HOST`, using a TLS WebSocket endpoint on port 443

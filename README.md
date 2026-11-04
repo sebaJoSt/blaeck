@@ -19,6 +19,15 @@ Loggbok reads the board, logs the signals and passes the entities to Home Assist
 Loggbok is internal and not publicly released. The protocol is documented, so any program can
 read a board, and a serial monitor or TCP terminal can send commands.
 
+## Installation
+
+- **Arduino IDE:** open the Library Manager, search for **blaeck** and install it.
+- **PlatformIO:** add the library to `platformio.ini`:
+
+  ```ini
+  lib_deps = sebajost/blaeck
+  ```
+
 ## A first sketch
 
 These two sketches send the same simulated temperature and pressure readings.

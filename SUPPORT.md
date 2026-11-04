@@ -8,7 +8,7 @@ Before opening an issue:
 2. For frame layouts, check the
    [protocol documentation](https://sebajost.github.io/blaeck-protocol/).
 3. Open the nearest example under *File > Examples > blaeck*. Start with Basic or
-   Commands; WaveformGenerator combines signals, commands, state channels and events.
+   Commands; WaveformGenerator combines signals, commands, controls, sensors and events.
 
 If those do not answer the question, open a
 [new issue](https://github.com/sebaJoSt/blaeck/issues/new).
@@ -24,8 +24,8 @@ Include what you expected, what happened, and:
 - The host application and version for communication problems: Loggbok or your own
   program.
 
-For missing signals, commands or channels, include the output from this at the end
-of `setup()`, after registration:
+For missing signals, commands, controls, sensors or events, include the output from this at
+the end of `setup()`, after registration:
 
 ```cpp
 device.printRejections(&Serial);
