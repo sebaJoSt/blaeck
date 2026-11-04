@@ -29,6 +29,8 @@ public:
   }
   using Blaeck::read;
   using Blaeck::writeIfDue;
+  using Blaeck::MAX_PARSED_COMMAND_COUNT;
+  using Blaeck::setSignalName;
   bool intervalActive() const { return _timedActivated; }
   unsigned long intervalMs() const { return _timedInterval_ms; }
   uint8_t storedUnitCount() const { return _signalUnitCount; }
@@ -587,6 +589,32 @@ static void unifiedConnections()
 
 static void diagnosticMessages()
 {
+  // A signal whose name can't be copied isn't added unnamed; a rename that can't be copied keeps
+  // the old name.
+  {
+    FakeStream stream;
+    Capture debug;
+    TestBlaeck device;
+    device.begin(stream).withDebugStream(&debug);
+    float value = 0;
+    device.addSignal(F("First"), &value);
+    assert(!device.hasRejections());
+    failAfter = 0;
+    device.addSignal("Copied", &value);
+    failAfter = -1;
+    assert(device.findSignalIndex("Copied") < 0);
+    assert(device.hasRejections());
+    assert(debug.text.find("Dropped 'Copied': no room for another signal") != std::string::npos);
+    device.addSignal("Second", &value);
+    assert(device.findSignalIndex("Second") == 1);
+
+    failAfter = 0;
+    device.setSignalName(1, "Renamed");
+    failAfter = -1;
+    assert(device.findSignalIndex("Second") == 1 && device.findSignalIndex("Renamed") < 0);
+    assert(debug.text.find("No room for the signal name") != std::string::npos);
+  }
+
   Capture debug;
   TestBlaeck unattached;
   assert(unattached.printTransportError(&debug));
@@ -821,12 +849,12 @@ static void chunkedTables()
   for (int i = 0; i < 20; ++i)
     assert(device.findSignalIndex(names[i].c_str()) == i);
 
-  // Adding as many signals again after clearing allocates no chunk.
+  // Adding as many signals again after clearing allocates no chunk, only the name copies.
   device.clearAllSignals();
   const size_t before = allocations;
   for (int i = 0; i < 20; ++i)
     device.addSignal(names[19 - i].c_str(), &values[i]);
-  assert(allocations == before);
+  assert(allocations == before + 20);
   assert(device.SignalCount == 20);
   assert(device.findSignalIndex("S19") == 0 && device.findSignalIndex("S0") == 19);
 
@@ -864,6 +892,15 @@ static std::string commandFramePayload(const std::string &wire, byte key, uint32
   assert(end != std::string::npos);
   assert(output.find(marker, end) == std::string::npos);
   return output.substr(p, end - p);
+}
+
+static int longNameCalls = 0;
+static void onLongName(const char *, const char *const *, byte) { longNameCalls++; }
+static std::string anyCommandName;
+static bool recordAnyCommand(const char *command, const char *const *, byte)
+{
+  anyCommandName = command;
+  return false;
 }
 
 static uint32_t commandHash(const std::string &value)
@@ -946,6 +983,33 @@ static void commandBufferBoundaries(bool tcp, bool buffered)
   receive("<Ping,recovered>");
   assert(pings == std::vector<std::string>({"recovered"}));
   expectAck("Ping,recovered", 0, BLAECK_ACK_OK);
+
+  // A name one longer than the longest that can be registered doesn't run the handler it starts
+  // with. It's unknown, and the catch-all and the ack's name hash get it whole.
+  const size_t longest = TestBlaeck::MAX_PARSED_COMMAND_COUNT - 1;
+  if (capacity > longest + 16)
+  {
+    const std::string name(longest, 'L');
+    device.onCommand(name.c_str(), onLongName);
+    device.onAnyCommand(recordAnyCommand);
+    longNameCalls = 0;
+    receive("<#7:" + name + "X,1>");
+    assert(longNameCalls == 0);
+    assert(anyCommandName == name + "X");
+    {
+      const std::string ack = commandFramePayload(io.output, 0xA5, 7);
+      assert(ack.size() == 10);
+      uint32_t nameHash;
+      memcpy(&nameHash, ack.data() + 4, 4);
+      assert(nameHash == commandHash(name + "X"));
+      assert(static_cast<byte>(ack[9]) == BLAECK_ACK_UNKNOWN);
+      io.output.clear();
+    }
+    receive("<" + name + ",1>");
+    assert(longNameCalls == 1 && anyCommandName == name);
+    io.output.clear();
+    device.onAnyCommand(nullptr);
+  }
 
   // One message id prefix. A second one is part of the name, which can't start with '#'.
   const std::string prefix = "#42:";

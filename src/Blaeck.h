@@ -2864,7 +2864,8 @@ protected:
   void setSignalName(int signalIndex, const char *signalName);
   // Sets a signal's name: a heap copy of ram, or the flash pointer. Exactly one is non-null.
   // Frees the copy the slot held before.
-  void _setSignalName(int signalIndex, const char *ram, const __FlashStringHelper *flash);
+  // False when the index is out of range or the copy doesn't fit; the slot then keeps its name.
+  bool _setSignalName(int signalIndex, const char *ram, const __FlashStringHelper *flash);
   // Frees the name copies the signal table owns.
   void _freeSignalOwned();
   // Signal names are read only through these helpers, which handle flash and RAM names.
@@ -3398,6 +3399,13 @@ protected:
   byte _parsedParamCount = 0;
   // The command didn't arrive whole, so no handler may run on it.
   bool _parsedTruncated = false;
+  // The name is longer than _parsedCommand holds, so it matches no registered name.
+  bool _parsedNameTooLong = false;
+  // The name as sent, whole even when _parsedCommand is cut short.
+  const char *_parsedName() const
+  {
+    return _parsedNameTooLong ? _parsedTokenBuffer + _parsedPrefixLen : _parsedCommand;
+  }
   // The message id from the command's '#' prefix, echoed in its ack and reply. 0 if none.
   uint16_t _parsedPrefixMsgId = 0;
   // Length of the prefix. The ack's hash covers what follows it.

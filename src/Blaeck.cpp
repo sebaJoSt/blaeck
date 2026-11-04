@@ -460,7 +460,9 @@ int Blaeck::_registerSignalCommon(byte deviceId, const char *ram, const __FlashS
     return -1;
   }
 
-  if (_signalIndex >= MAX_TABLE_ENTRIES || !Signals.reserve(_signalIndex + 1))
+  // The name is copied before the slot counts, so a name that doesn't fit drops the signal.
+  if (_signalIndex >= MAX_TABLE_ENTRIES || !Signals.reserve(_signalIndex + 1) ||
+      !_setSignalName(_signalIndex, ram, flash))
   {
     if (flash != nullptr)
       _warnNoRoom(F("signal"), flash);
@@ -470,7 +472,6 @@ int Blaeck::_registerSignalCommon(byte deviceId, const char *ram, const __FlashS
     // -1 makes a handle that ignores every call.
     return -1;
   }
-  _setSignalName(_signalIndex, ram, flash);
   Signals[_signalIndex].DataType = type;
   Signals[_signalIndex].Address = address;
   Signals[_signalIndex].TextInFlash = textInFlash;
@@ -593,42 +594,45 @@ BlaeckString Blaeck::_signalUnit(const Signal &s) const
 
 void Blaeck::setSignalName(int signalIndex, const char *signalName)
 {
-  _setSignalName(signalIndex, signalName, nullptr);
+  if (!_setSignalName(signalIndex, signalName, nullptr))
+  {
+    if (_rejectedStringCount != UINT16_MAX)
+      ++_rejectedStringCount;
+    if (_debugStream != nullptr)
+      _debugStream->println(F("No room for the signal name; previous name retained."));
+    return;
+  }
   // A new name changes the schema, so the hash must change too.
   _schemaHash = _computeSchemaHash();
 }
 
-void Blaeck::_setSignalName(int signalIndex, const char *ram, const __FlashStringHelper *flash)
+bool Blaeck::_setSignalName(int signalIndex, const char *ram, const __FlashStringHelper *flash)
 {
   if (signalIndex < 0 || signalIndex >= (int)Signals.capacity())
-    return;
+    return false;
+
+  const char *name = nullptr;
+  if (flash != nullptr)
+    name = reinterpret_cast<const char *>(flash);
+  else if (ram != nullptr)
+  {
+    // Copied, so the caller can reuse its buffer. Out of RAM, the slot keeps its name.
+    size_t needed = strlen(ram) + 1;
+    char *copy = new (std::nothrow) char[needed];
+    if (copy == nullptr)
+      return false;
+    memcpy(copy, ram, needed);
+    name = copy;
+  }
 
   Signal &s = Signals[signalIndex];
   // Free the copy the slot held; a flash name owns nothing. Test the pointer before
   // NameInFlash, which means nothing in a slot that has never been named.
   if (s.SignalName != nullptr && !s.NameInFlash)
-    free((void *)s.SignalName);
-  s.SignalName = nullptr;
-  s.NameInFlash = 0;
-
-  if (flash != nullptr)
-  {
-    s.SignalName = reinterpret_cast<const char *>(flash);
-    s.NameInFlash = 1;
-    return;
-  }
-  if (ram == nullptr)
-    return;
-
-  // Copied, so the caller can reuse its buffer.
-  size_t needed = strlen(ram) + 1;
-  char *copy = (char *)malloc(needed);
-  if (copy != nullptr)
-  {
-    memcpy(copy, ram, needed);
-    s.SignalName = copy;
-  }
-    // Out of RAM: the signal stays, with an empty name.
+    delete[] s.SignalName;
+  s.SignalName = name;
+  s.NameInFlash = flash != nullptr;
+  return true;
 }
 
 void Blaeck::_freeSignalOwned()
@@ -637,7 +641,7 @@ void Blaeck::_freeSignalOwned()
   {
     // Pointer first, as in _setSignalName().
     if (Signals[i].SignalName != nullptr && !Signals[i].NameInFlash)
-      free((void *)Signals[i].SignalName);
+      delete[] Signals[i].SignalName;
     Signals[i].SignalName = nullptr;
     Signals[i].NameInFlash = 0;
     delete Signals[i].Reporting;
@@ -1208,7 +1212,11 @@ void Blaeck::read()
       bool builtinMatched = true;
       const unsigned long msg_id = _parsedPrefixMsgId;
 
-      if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_DATA)))
+      if (_parsedNameTooLong)
+      {
+        builtinMatched = false;
+      }
+      else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_WRITE_DATA)))
       {
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
         // Marks the data frame as a reply to a request.
@@ -2027,6 +2035,7 @@ void Blaeck::_parseCommandTokens(const char *raw)
   // Characters were lost while receiving, so this is a fragment. Reset here, before the
   // empty-command check, so an empty command doesn't keep the previous verdict.
   _parsedTruncated = _receiver.overflowed;
+  _parsedNameTooLong = false;
   for (byte i = 0; i < MAX_COMMAND_PARAM_COUNT; i++)
   {
     _parsedParamPtrs[i] = nullptr;
@@ -2082,6 +2091,8 @@ void Blaeck::_parseCommandTokens(const char *raw)
   }
   strncpy(_parsedCommand, tokenStart, MAX_PARSED_COMMAND_COUNT - 1);
   _parsedCommand[MAX_PARSED_COMMAND_COUNT - 1] = '\0';
+  // No registered name is this long. Cut short, it could match one that is.
+  _parsedNameTooLong = strlen(tokenStart) >= MAX_PARSED_COMMAND_COUNT;
 
   if (!hasComma)
     return;
@@ -2148,7 +2159,7 @@ void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
 
   // An input or sensor: the value is checked and stored here; its callback and the new value
   // follow the ack.
-  const int property = _findProperty(BlaeckString(_parsedCommand));
+  const int property = _parsedNameTooLong ? -1 : _findProperty(BlaeckString(_parsedCommand));
   if (property >= 0)
   {
     matched = true;
@@ -2160,7 +2171,7 @@ void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
     }
   }
 
-  for (uint16_t i = 0; !matched && i < _commandSlots(); i++)
+  for (uint16_t i = 0; !matched && !_parsedNameTooLong && i < _commandSlots(); i++)
   {
     const CommandHandlerEntry &e = _commandHandlers[i];
     if (e.inUse && strcmp(e.command, _parsedCommand) == 0)
@@ -2187,7 +2198,7 @@ void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
   if (_anyCommandHandler != nullptr)
   {
     const bool took = _anyCommandHandler(
-        _parsedCommand,
+        _parsedName(),
         (const char *const *)_parsedParamPtrs,
         _parsedParamCount);
 
@@ -2238,7 +2249,7 @@ void Blaeck::_writeCommandAck(const char *rawCommand, byte status, byte reasonCo
 
   // The name hash still identifies a command that didn't arrive whole, since the name comes
   // before the first comma.
-  uint32_t nameHash = (_parsedCommand[0] == '\0') ? 0UL : _fnv1a32(_parsedCommand);
+  uint32_t nameHash = (_parsedCommand[0] == '\0') ? 0UL : _fnv1a32(_parsedName());
 
   // Hash what follows the prefix. The length check can't fail after the parse above, but guards
   // against reading past the end.
