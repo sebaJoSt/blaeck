@@ -2817,6 +2817,32 @@ static void failedCatalogWrites()
     assert(commandFramePayload(stream.data.output, 0x95, 0).find(
                std::string(reinterpret_cast<const char *>(&twenty), 4)) != std::string::npos);
   }
+  {
+    // The entity list outgrows the frame buffer and the larger one can't be had: the event
+    // waits rather than go out against a list the host never received.
+    FakeStream stream;
+    Capture debug;
+    TestBlaeck device;
+    device.begin(stream).withDebugStream(&debug);
+    device.setBufferedWrites(true);
+    device.addEvent("Alarm", "high");
+    device.read();
+    std::string types;
+    for (int i = 0; i < 100; ++i)
+      types += (i ? "," : "") + std::string("type") + std::to_string(i);
+    device.addEvent("Wide", types.c_str());
+    stream.data.output.clear();
+    failAfter = 0;
+    device.writeEvent("Alarm", "high");
+    failAfter = -1;
+    assert(!hasFrame(stream.data.output, 0x90) && !hasFrame(stream.data.output, 0x85));
+    assert(debug.text.find("Event dropped, entity list not sent: Alarm") != std::string::npos);
+    device.writeEvent("Alarm", "high");
+    const std::string out = unescaped(stream.data.output);
+    const size_t list = out.find(std::string("<BLAECK:") + char(0x90) + ':');
+    const size_t event = out.find(std::string("<BLAECK:") + char(0x85) + ':');
+    assert(list != std::string::npos && event != std::string::npos && list < event);
+  }
 }
 
 // Event names and indices past what a byte or the name buffer holds.

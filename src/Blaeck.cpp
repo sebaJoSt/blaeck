@@ -2669,6 +2669,15 @@ void Blaeck::_writeEvent(byte deviceId, const char *channelName, BlaeckString ev
 
   // Send changed catalogs first. An event sent against an old list can't be corrected later.
   _flushCatalogs();
+  if (_entityCatalogDirty)
+  {
+    if (_debugStream != nullptr)
+    {
+      _debugStream->print(F("Event dropped, entity list not sent: "));
+      _debugStream->println(channelName != nullptr ? channelName : "");
+    }
+    return;
+  }
 
   int channelIndex = _findEventChannel(deviceId, channelName);
   if (channelIndex < 0)
