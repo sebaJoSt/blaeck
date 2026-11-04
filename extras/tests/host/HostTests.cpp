@@ -2362,6 +2362,15 @@ static void aWholeRangeIsKeptWhole()
   stream.data.output.clear();
   command(device, stream, "<Wide,3e38>");
   assert(reason() == BLAECK_ACK_OK && wide == 3e38f);
+  stream.data.output.clear();
+
+  // A step under a thousandth is still rounded to its own decimals, not to whole numbers.
+  double fine = 0.01;
+  device.addNumberInput(F("Fine"), &fine).withRange(0.01, 0.02, 0.0001);
+  device.read();
+  stream.data.output.clear();
+  command(device, stream, "<Fine,0.015>");
+  assert(reason() == BLAECK_ACK_OK && fine == 0.015);
 }
 
 // Inputs and sensors: the entity list, a host's writes and their checks, change reports and names.

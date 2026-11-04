@@ -2,6 +2,7 @@
 import argparse
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -11,6 +12,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cxx", default="g++")
     args = parser.parse_args()
+    if sys.platform == "win32":
+        # A failed assert aborts; without this Windows holds the test in a crash dialog. Child
+        # processes inherit the error mode.
+        import ctypes
+        SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX = 0x0001, 0x0002
+        ctypes.windll.kernel32.SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX)
     host = ROOT / "extras" / "tests" / "host"
     with tempfile.TemporaryDirectory(prefix="blaeck-host-tests-") as temp:
         exe = Path(temp) / "host-tests.exe"
