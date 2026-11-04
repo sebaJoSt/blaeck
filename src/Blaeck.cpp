@@ -4121,7 +4121,12 @@ byte Blaeck::_receiveProperty(uint16_t index)
         // ten, so the result is the nearest number there is to the decimal intended. Skipped
         // where the scaling would run out of digits, which the range a step this fine can
         // cover does not reach.
-        const int decimals = _stepDecimals(rangeStep);
+        const int stepDecimals = _stepDecimals(rangeStep);
+        // The minimum's decimals count too: 0.05 with a step of 0.1 lands on 0.15, not 0.2.
+        const int minDecimals = rangeMin == 0.0 ? 0 : _stepDecimals(fabs(rangeMin));
+        const int decimals = (stepDecimals < 0 || minDecimals < 0)
+                                 ? -1
+                                 : (stepDecimals > minDecimals ? stepDecimals : minDecimals);
         double scale = 1.0;
         for (int i = decimals; i > 0; i--)
           scale *= 10.0;

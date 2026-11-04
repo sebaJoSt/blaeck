@@ -2371,6 +2371,15 @@ static void aWholeRangeIsKeptWhole()
   stream.data.output.clear();
   command(device, stream, "<Fine,0.015>");
   assert(reason() == BLAECK_ACK_OK && fine == 0.015);
+  stream.data.output.clear();
+
+  // On a step from a minimum with more decimals than the step: rounded to the minimum's.
+  double fromMin = 0.05;
+  device.addNumberInput(F("FromMin"), &fromMin).withRange(0.05, 0.15, 0.1);
+  device.read();
+  stream.data.output.clear();
+  command(device, stream, "<FromMin,0.15>");
+  assert(reason() == BLAECK_ACK_OK && fromMin == 0.15);
 }
 
 // Inputs and sensors: the entity list, a host's writes and their checks, change reports and names.
