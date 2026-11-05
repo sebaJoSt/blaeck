@@ -3051,6 +3051,42 @@ static void ackBeforeFunctions()
   ackOrderStream = nullptr;
 }
 
+// An interval started before data is counts for nothing until data can go out: the function that
+// reads the sensors for a report doesn't run on every tick with no report to read them for.
+static int intervalBeforeWriteCalls = 0;
+static void countIntervalBeforeWrite() { ++intervalBeforeWriteCalls; }
+
+static void intervalBeforeDataStart()
+{
+  hostMillis() = 0;
+  intervalBeforeWriteCalls = 0;
+  FakeStream stream;
+  TestBlaeck device(false);
+  device.begin(stream);
+  float value = 1;
+  device.addSignal("Value", &value);
+  device.onBeforeWrite(countIntervalBeforeWrite);
+  command(device, stream, "<BLAECK.INTERVAL_START,1000>");
+  for (int i = 0; i < 50; ++i)
+  {
+    hostMillis() += 100;
+    device.writeIfDue();
+  }
+  assert(intervalBeforeWriteCalls == 0);
+
+  // DATA_START: the first report goes out once, then one a second.
+  stream.data.output.clear();
+  command(device, stream, "<BLAECK.DATA_START>");
+  device.writeIfDue();
+  assert(intervalBeforeWriteCalls == 1);
+  assert(hasFrame(stream.data.output, 0xD3));
+  device.writeIfDue();
+  assert(intervalBeforeWriteCalls == 1);
+  hostMillis() += 1000;
+  device.writeIfDue();
+  assert(intervalBeforeWriteCalls == 2);
+}
+
 // Event names and indices past what a byte or the name buffer holds.
 static void eventLimits()
 {
@@ -4481,6 +4517,7 @@ int main()
   configurationAllocationFailures();
   failedCatalogWrites();
   ackBeforeFunctions();
+  intervalBeforeDataStart();
   eventLimits();
 #else
   iotOff();

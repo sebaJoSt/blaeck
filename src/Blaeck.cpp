@@ -2890,7 +2890,9 @@ void Blaeck::writeIfDue(unsigned long long timestamp)
   const uint32_t now = static_cast<uint32_t>(millis());
   const uint32_t elapsed = now - _lastIntervalMs;
   const bool initialInterval = _timedActivated && _timedFirstTime;
-  const bool intervalDue = _timedActivated &&
+  // An interval counts only while data can go out, or onBeforeWrite would run on every tick with
+  // the first report still to come.
+  const bool intervalDue = _timedActivated && _mayWriteData() &&
       (_timedFirstTime || _timedInterval_ms == 0 || elapsed >= _timedInterval_ms);
   if (intervalDue)
   {
