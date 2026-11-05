@@ -126,8 +126,10 @@ void Blaeck::_flushCatalogs()
   if (!_mayWriteFrame())
     return;
 
-  // Each writer clears its own dirty flag, so a catalog a host asked for isn't sent twice.
-  if (_entityCatalogDirty)
+  // Each writer clears its own dirty flag, so a catalog a host asked for isn't sent twice. A list
+  // the transport wouldn't take waits a while, since building it walks every entry.
+  if (_entityCatalogDirty &&
+      (!_entityListFailed || millis() - _entityListFailedAt >= ENTITY_LIST_RETRY_MS))
     this->writeEntities(0);
 }
 
@@ -3026,7 +3028,7 @@ bool Blaeck::_frameOpen(byte msgKey, unsigned long msgId)
 
   _frameWriteFailed = false;
 
-  _frameDirect = !_bufReady();
+  _frameDirect = _frameForceDirect || !_bufReady();
   if (!_frameDirect)
     _bufReset();
   _frameCrcOn = false;
@@ -4308,8 +4310,22 @@ void Blaeck::_writePropertyByName(byte deviceId, BlaeckString name)
 
 void Blaeck::writeEntities(unsigned long msg_id)
 {
+  _bufOverflowHandled = true;
+  bool sent = writeEntitiesFrame(msg_id);
+  _bufOverflowHandled = false;
+  // Too big for the memory left for the frame buffer: straight to the transport instead, so the
+  // list doesn't hold up every event and value after it.
+  if (!sent && _bufOverflow)
+  {
+    _frameForceDirect = true;
+    sent = writeEntitiesFrame(msg_id);
+    _frameForceDirect = false;
+  }
   // A list that didn't go out whole stays due, so values never refer to entries a host lacks.
-  _entityCatalogDirty = !writeEntitiesFrame(msg_id);
+  _entityCatalogDirty = !sent;
+  _entityListFailed = !sent;
+  if (!sent)
+    _entityListFailedAt = millis();
 }
 
 bool Blaeck::writeEntitiesFrame(unsigned long msg_id)

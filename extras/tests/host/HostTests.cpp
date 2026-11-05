@@ -97,6 +97,7 @@ struct SocketState
   std::string input;
   std::string output;
   size_t writeLimit = SIZE_MAX;
+  size_t writeCalls = 0;
 };
 
 class FakeClient : public Client
@@ -129,6 +130,7 @@ public:
   size_t write(const uint8_t *data, size_t size) override
   {
     assert(connected());
+    ++state->writeCalls;
     const size_t accepted = size < state->writeLimit ? size : state->writeLimit;
     state->output.append(reinterpret_cast<const char *>(data), accepted);
     return accepted;
@@ -2855,6 +2857,7 @@ static void failedCatalogWrites()
     device.read();
     stream.data.writeLimit = SIZE_MAX;
     stream.data.output.clear();
+    hostMillis() += 1000;
     device.read();
     assert(hasFrame(stream.data.output, 0xC1) && hasFrame(stream.data.output, 0x90));
 
@@ -2887,8 +2890,8 @@ static void failedCatalogWrites()
                std::string(reinterpret_cast<const char *>(&twenty), 4)) != std::string::npos);
   }
   {
-    // The entity list outgrows the frame buffer and the larger one can't be had: the event
-    // waits rather than go out against a list the host never received.
+    // The entity list outgrows the frame buffer and the larger one can't be had: it goes straight
+    // to the transport instead, whole, so events and values keep flowing.
     FakeStream stream;
     Capture debug;
     TestBlaeck device;
@@ -2904,13 +2907,55 @@ static void failedCatalogWrites()
     failAfter = 0;
     device.writeEvent("Alarm", "high");
     failAfter = -1;
-    assert(!hasFrame(stream.data.output, 0x90) && !hasFrame(stream.data.output, 0x85));
-    assert(debug.text.find("Event dropped, entity list not sent: Alarm") != std::string::npos);
-    device.writeEvent("Alarm", "high");
     const std::string out = unescaped(stream.data.output);
     const size_t list = out.find(std::string("<BLAECK:") + char(0x90) + ':');
     const size_t event = out.find(std::string("<BLAECK:") + char(0x85) + ':');
     assert(list != std::string::npos && event != std::string::npos && list < event);
+    assert(out.find("type99") != std::string::npos);
+    // The list arrived whole, with both events in it.
+    const std::string payload = commandFramePayload(stream.data.output, 0x90, 0);
+    assert(payload.find("Alarm") != std::string::npos && payload.find("Wide") != std::string::npos);
+    assert(debug.text.find("Event dropped") == std::string::npos);
+    assert(debug.text.find("frame dropped") == std::string::npos);
+  }
+  {
+    // A list the transport won't take is tried again once a second, not on every tick, and
+    // whatever refers to it waits. A host asking for it gets a try at once.
+    FakeStream stream;
+    Capture debug;
+    TestBlaeck device;
+    device.begin(stream).withDebugStream(&debug);
+    device.addEvent("Alarm", "high");
+    device.read();
+    device.addSensor("Gauge", readChangingGauge);
+    stream.data.writeLimit = 0;
+    device.read();
+    const size_t writesAfterFirstTry = stream.data.writeCalls;
+    assert(writesAfterFirstTry > 0);
+    for (int i = 0; i < 100; ++i)
+    {
+      hostMillis() += 1;
+      device.read();
+      device.writeIfDue();
+    }
+    assert(stream.data.writeCalls == writesAfterFirstTry);
+    hostMillis() += 900;
+    device.read();
+    const size_t writesAfterRetry = stream.data.writeCalls;
+    assert(writesAfterRetry > writesAfterFirstTry);
+
+    device.writeEvent("Alarm", "high");
+    assert(debug.text.find("Event dropped, entity list not sent: Alarm") != std::string::npos);
+    assert(stream.data.writeCalls == writesAfterRetry);
+
+    stream.data.writeLimit = SIZE_MAX;
+    stream.data.output.clear();
+    stream.data.input = "<BLAECK.WRITE_ENTITIES>";
+    device.read();
+    assert(hasFrame(stream.data.output, 0x90));
+    stream.data.output.clear();
+    device.writeEvent("Alarm", "high");
+    assert(hasFrame(stream.data.output, 0x85));
   }
 }
 

@@ -3126,6 +3126,8 @@ protected:
   int _frameBufSize = 0;
   bool _bufOverflow = false;
   bool _bufOverflowWarned = false;
+  // Set while a frame is written whose overflow is answered by sending it directly.
+  bool _bufOverflowHandled = false;
 
   void _bufAllocate();
   // True when frames are buffered and the buffer exists. It is allocated on first use,
@@ -3180,6 +3182,7 @@ protected:
   // into the buffer, or straight to the stream if buffering is off or the buffer couldn't be
   // allocated.
   bool _frameDirect = false;
+  bool _frameForceDirect = false;
   bool _frameWriteFailed = false;
   bool _shortWriteReported = false;
   // On while a data frame's CRC is being computed.
@@ -3288,7 +3291,7 @@ protected:
   {
     if (_bufOverflow)
     {
-      if (!_bufOverflowWarned && _debugStream != nullptr)
+      if (!_bufOverflowHandled && !_bufOverflowWarned && _debugStream != nullptr)
       {
         _debugStream->println(F("Buffered frame exceeds available memory; frame dropped."));
         _bufOverflowWarned = true;
@@ -3420,6 +3423,10 @@ protected:
   uint16_t _propertyCount = 0;
   uint16_t _rejectedPropertyCount = 0;
   bool _entityCatalogDirty = false;
+  // The last try to send the entity list failed, and when.
+  bool _entityListFailed = false;
+  unsigned long _entityListFailedAt = 0;
+  static const unsigned long ENTITY_LIST_RETRY_MS = 1000;
   // The input a host has just set: its callback runs and its value is sent after the ack.
   int _propertyJustSet = -1;
   int _registerProperty(byte deviceId, BlaeckString name, uint8_t kind, bool writable, dataType type,
