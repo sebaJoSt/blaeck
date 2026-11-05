@@ -3104,6 +3104,59 @@ static void intervalBeforeDataStart()
   assert(intervalBeforeWriteCalls == 2);
 }
 
+// A fraction on an integer input is refused with or without a step; %00 stays as it is; a
+// WRITE_DATA answered inside tick() carries the time tick() was given.
+static void smallCorrections()
+{
+  {
+    FakeStream stream;
+    TestBlaeck device;
+    device.begin(stream);
+    byte stepped = 7;
+    device.addNumberInput("Stepped", &stepped).withRange(0, 255, 1);
+    byte free_ = 7;
+    device.addNumberInput("Free", &free_).withRange(0, 255);
+    device.read();
+    for (const char *text : {"<Stepped,128.0005>", "<Free,128.0005>"})
+    {
+      stream.data.output.clear();
+      command(device, stream, text);
+      const std::string ack = commandFramePayload(stream.data.output, 0xA5, 0);
+      assert(static_cast<byte>(ack[9]) == BLAECK_ACK_NOT_AN_INTEGER);
+    }
+    assert(stepped == 7 && free_ == 7);
+    command(device, stream, "<Stepped,128.0>");
+    assert(stepped == 128);
+  }
+  {
+    FakeStream stream;
+    TestBlaeck device;
+    device.begin(stream);
+    char label[16] = "";
+    device.addTextInput("Label", label, sizeof(label));
+    device.read();
+    command(device, stream, "<Label,ab%00cd>");
+    assert(strcmp(label, "ab%00cd") == 0);
+    command(device, stream, "<Label,%41%4a>");
+    assert(strcmp(label, "AJ") == 0);
+  }
+  {
+    FakeStream stream;
+    TestBlaeck device;
+    device.begin(stream);
+    device.setTimestampMode(BLAECK_UNIX);
+    float value = 1;
+    device.addSignal("Value", &value);
+    device.read();
+    stream.data.output.clear();
+    stream.data.input = "<BLAECK.WRITE_DATA>";
+    const unsigned long long measured = 1234567890123ULL;
+    device.tick(measured);
+    const std::string frame = commandFramePayload(stream.data.output, 0xD3, 0);
+    assert(frame.find(std::string(reinterpret_cast<const char *>(&measured), 8)) != std::string::npos);
+  }
+}
+
 // Event names and indices past what a byte or the name buffer holds.
 static void eventLimits()
 {
@@ -4535,6 +4588,7 @@ int main()
   failedCatalogWrites();
   ackBeforeFunctions();
   intervalBeforeDataStart();
+  smallCorrections();
   eventLimits();
 #else
   iotOff();

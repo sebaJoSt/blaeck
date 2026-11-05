@@ -3148,6 +3148,8 @@ protected:
   bool _entitiesStopped = true;
   // Set while a command is handled, so whatever it causes goes out even when stopped.
   bool _answering = false;
+  // The time tick() was given, while it reads a command.
+  unsigned long long _tickTimestamp = BLAECK_NOW;
 
   // Checked once per frame, when it opens.
   bool _mayWriteFrame() { return _transportReady(); }

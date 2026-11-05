@@ -1245,7 +1245,7 @@ void Blaeck::read()
         _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
         // Marks the data frame as a reply to a request.
         _frameRequested = true;
-        this->writeAll(msg_id, getTimeStamp());
+        this->writeAll(msg_id, _tickTimestamp == BLAECK_NOW ? getTimeStamp() : _tickTimestamp);
         _frameRequested = false;
       }
       else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_GET_DEVICES)))
@@ -2779,7 +2779,8 @@ void Blaeck::_percentDecodeInPlace(char *s)
                   : (lo >= 'a' && lo <= 'f') ? lo - 'a' + 10
                   : (lo >= 'A' && lo <= 'F') ? lo - 'A' + 10
                                              : -1;
-      if (hiVal >= 0 && loVal >= 0)
+      // %00 stays as it is, as in an option: a null byte would end the value there, silently.
+      if (hiVal >= 0 && loVal >= 0 && (hiVal != 0 || loVal != 0))
       {
         *dst++ = (char)((hiVal << 4) | loVal);
         src += 3;
@@ -2905,7 +2906,10 @@ void Blaeck::writeData(unsigned long msg_id, int signalIndex_start, int signalIn
 
 void Blaeck::tick(unsigned long long timestamp)
 {
+  // A WRITE_DATA answered in read() belongs to this tick too.
+  _tickTimestamp = timestamp;
   read();
+  _tickTimestamp = BLAECK_NOW;
   writeIfDue(timestamp);
 }
 
@@ -4132,9 +4136,11 @@ byte Blaeck::_receiveProperty(uint16_t index)
         return BLAECK_ACK_OUT_OF_RANGE;
       return BLAECK_ACK_OK;
     }
-    // A 64-bit integer takes digits only: without a 64-bit double on AVR, "1e3" or "12.0" can't
-    // be checked exactly.
-    if (p.type == Blaeck_longlong)
+    // An integer wider than the board's double holds exactly takes digits only: "1e3" or "12.0"
+    // couldn't be checked exactly. A long long everywhere, and a long where a double has 32 bits,
+    // as on AVR, where 3999999999.0 would otherwise reach the variable as 4000000000.
+    if (p.type == Blaeck_longlong ||
+        (sizeof(double) < 8 && (p.type == Blaeck_long || p.type == Blaeck_ulong)))
       return BLAECK_ACK_NOT_AN_INTEGER;
     // The text is a valid number, so strtod() reads all of it the same way everywhere.
     double number = strtod(v, nullptr);
@@ -4146,6 +4152,9 @@ byte Blaeck::_receiveProperty(uint16_t index)
         (number < _boundAsDouble(p.type, p.rangeMin) ||
          number > _boundAsDouble(p.type, p.rangeMax)))
       return BLAECK_ACK_OUT_OF_RANGE;
+    // Before the step, or a value near one would pass for a whole number only when a step is set.
+    if (_isIntegerType(p.type) && number != floor(number))
+      return BLAECK_ACK_NOT_AN_INTEGER;
     // On its step: a value within a thousandth of a step of one is stored as exactly that.
     if (p.flags & blaeck_detail::PROPERTY_HAS_STEP)
     {
@@ -4174,11 +4183,6 @@ byte Blaeck::_receiveProperty(uint16_t index)
             number = rounded;
         }
       }
-    }
-    if (_isIntegerType(p.type))
-    {
-      if (number != floor(number))
-        return BLAECK_ACK_NOT_AN_INTEGER;
     }
     if (!_storeNumber(p.address, p.type, number))
       return BLAECK_ACK_OUT_OF_RANGE;
