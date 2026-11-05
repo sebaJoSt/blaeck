@@ -26,9 +26,9 @@ This also applies after `end()` or failed initialization; a latched `OutOfMemory
 error is retained. `end()` closes the transport; it does not reset the instance for
 another `begin()`.
 
-RAM is the only limit. On AVR, with the default settings, a signal costs 13 bytes, an event type
-6, an event 13, a device 10, a sensor or a control with a value about 40, and a command or
-button 66, the largest there is. Every eight entries of a table share about 4 bytes of
+RAM is the only limit. On AVR, with the default settings, a signal costs about 13 bytes, an event
+type 7, an event 16, a device 13, a command or button 41, and a sensor or a control about 85, the
+largest there is. Every eight entries of a table share about 4 bytes of
 bookkeeping, and the last group of eight may hold up to seven unused slots. Each configuration
 string passed as ordinary RAM text is copied, at about its length plus 7 bytes (a reference
 count, the terminator and the heap's own header); an `F()` string costs nothing extra. A Mega's
@@ -50,8 +50,8 @@ Their buffers can then be changed or discarded. `F()` remains optional and avoid
 An allocation failure leaves an existing setting unchanged and is reported by `hasRejections()`,
 `printRejections()` and the debug stream.
 
-Signal and bound state **values**, text getters and the device identity fields below retain
-their existing lifetime requirements; they are not copied configuration.
+Signal and bound state **values** and text getters retain their existing lifetime requirements;
+they are not copied configuration.
 
 ## Finding out what did not fit
 
@@ -123,7 +123,6 @@ These change a default:
 | `BLAECK_TCP_STOP_TIMEOUT_MS` | 100. How long closing a connection waits for the peer, on clients that provide `setConnectionTimeout()` |
 | `BLAECK_BUFFERED_WRITES_DEFAULT` | Optional build-wide override for both transports, unless a transport-specific default is supplied |
 | `BLAECK_USB_PACKET_BYTES` | 64. The USB packet size a frame is padded away from, so it never ends on a full one and stalls in the host. Lower it to match a core built with a smaller endpoint |
-| `BLAECK_STATE_MAX_OPTION_CHARS` | 24. Room for one resolved select option while a frame is built |
 
 Command buffers support configured sizes from 1 to 65535 bytes, subject to the board's
 RAM and compiler object-size limits. The maximum command content is one byte less than
