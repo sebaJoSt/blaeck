@@ -2160,6 +2160,7 @@ void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
   byte ackReason = BLAECK_ACK_UNKNOWN; // reason reported when rejected
   bool matched = false;
   int propertySet = -1;
+  const CommandHandlerEntry *command = nullptr;
 
   // An input or sensor: the value is checked and stored here; its callback and the new value
   // follow the ack.
@@ -2189,31 +2190,21 @@ void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
       if (ackReason == BLAECK_ACK_OK)
       {
         ackStatus = 0;
-        // A button ignores any parameters sent with the press.
-        if (e.press != nullptr)
-          e.press();
-        else
-          e.handler(_parsedCommand, (const char *const *)_parsedParamPtrs, _parsedParamCount);
+        command = &e;
       }
       break;
     }
   }
 
-  if (_anyCommandHandler != nullptr)
+  // A command nothing else has is accepted only if the catch-all says it took it, so a handler
+  // that only logs leaves a typo answered as unknown. That answer is what the ack carries, so here
+  // the catch-all goes first; otherwise it sees the command after its own function.
+  const bool catchAllFirst = !matched && _anyCommandHandler != nullptr;
+  if (catchAllFirst && _anyCommandHandler(_parsedName(), (const char *const *)_parsedParamPtrs,
+                                          _parsedParamCount))
   {
-    const bool took = _anyCommandHandler(
-        _parsedName(),
-        (const char *const *)_parsedParamPtrs,
-        _parsedParamCount);
-
-    // A command nothing else has is accepted only if the catch-all says it took it, so a handler
-    // that only logs leaves a typo answered as unknown.
-    if (!matched && took)
-    {
-      matched = true;
-      ackStatus = 0;
-      ackReason = BLAECK_ACK_OK;
-    }
+    ackStatus = 0;
+    ackReason = BLAECK_ACK_OK;
   }
 
   // Every command gets one ack. A matched built-in was acknowledged in read() and passes
@@ -2223,6 +2214,16 @@ void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
     _writeCommandAck(_receiver.chars, ackStatus, ackReason);
   }
 
+  // The ack is out, so a function that takes long doesn't hold it back, and what it sends follows.
+  if (command != nullptr)
+  {
+    // A button ignores any parameters sent with the press.
+    if (command->press != nullptr)
+      command->press();
+    else
+      command->handler(_parsedCommand, (const char *const *)_parsedParamPtrs, _parsedParamCount);
+  }
+
   if (propertySet >= 0)
   {
     PropertyEntry &p = _properties[propertySet];
@@ -2230,6 +2231,9 @@ void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
       p.callback();
     _writePropertyFrame((uint16_t)propertySet);
   }
+
+  if (!catchAllFirst && _anyCommandHandler != nullptr)
+    _anyCommandHandler(_parsedName(), (const char *const *)_parsedParamPtrs, _parsedParamCount);
 }
 
 uint32_t Blaeck::_fnv1a32(const char *s)

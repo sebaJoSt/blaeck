@@ -2959,6 +2959,87 @@ static void failedCatalogWrites()
   }
 }
 
+// A command's ack goes first: what its function sends comes after it, and a function that takes
+// long doesn't hold it back. Only a name nothing has waits for the catch-all, whose answer the ack
+// carries.
+static TestBlaeck *ackOrderDevice = nullptr;
+static FakeStream *ackOrderStream = nullptr;
+static std::vector<std::string> ackOrderLog;
+
+static void logAckOrder(const char *who)
+{
+  ackOrderLog.push_back(std::string(who) + (hasFrame(ackOrderStream->data.output, 0xA5) ? " after" : " before"));
+}
+static void ackOrderPress()
+{
+  logAckOrder("press");
+  ackOrderDevice->writeAll();
+}
+static void ackOrderHandler(const char *, const char *const *, byte)
+{
+  logAckOrder("handler");
+  ackOrderDevice->writeAll();
+}
+static void ackOrderInput() { logAckOrder("input"); }
+static bool ackOrderCatchAll(const char *name, const char *const *, byte)
+{
+  logAckOrder("catch-all");
+  return strcmp(name, "TAKEN") == 0;
+}
+
+static void ackBeforeFunctions()
+{
+  FakeStream stream;
+  TestBlaeck device;
+  ackOrderDevice = &device;
+  ackOrderStream = &stream;
+  device.begin(stream);
+  float value = 1;
+  device.addSignal("Value", &value);
+  device.addButton("PRESS", ackOrderPress);
+  device.onCommand("RUN", ackOrderHandler);
+  float setpoint = 0;
+  device.addNumberInput("Setpoint", &setpoint, ackOrderInput);
+  device.onAnyCommand(ackOrderCatchAll);
+  device.read();
+
+  const auto run = [&](const char *text) {
+    stream.data.output.clear();
+    ackOrderLog.clear();
+    command(device, stream, text);
+    return unescaped(stream.data.output);
+  };
+  const auto ackBeforeData = [](const std::string &out) {
+    const size_t ack = out.find(std::string("<BLAECK:") + char(0xA5) + ':');
+    const size_t data = out.find(std::string("<BLAECK:") + char(0xD3) + ':');
+    return ack != std::string::npos && data != std::string::npos && ack < data;
+  };
+
+  assert(ackBeforeData(run("<PRESS>")));
+  assert((ackOrderLog == std::vector<std::string>{"press after", "catch-all after"}));
+
+  assert(ackBeforeData(run("<RUN,1>")));
+  assert((ackOrderLog == std::vector<std::string>{"handler after", "catch-all after"}));
+
+  run("<Setpoint,2>");
+  assert((ackOrderLog == std::vector<std::string>{"input after", "catch-all after"}));
+  assert(setpoint == 2);
+
+  // The catch-all's answer decides the ack, so it runs first.
+  const std::string taken = run("<TAKEN>");
+  assert((ackOrderLog == std::vector<std::string>{"catch-all before"}));
+  ackResult(taken, 0, "TAKEN", 0);
+  const std::string unknown = run("<NOBODY>");
+  assert((ackOrderLog == std::vector<std::string>{"catch-all before"}));
+  ackResult(unknown, 0, "NOBODY", 1);
+
+  // A refused value and an unknown value are told first too.
+  run("<Setpoint,abc>");
+  assert((ackOrderLog == std::vector<std::string>{"catch-all after"}));
+  ackOrderDevice = nullptr;
+  ackOrderStream = nullptr;
+}
+
 // Event names and indices past what a byte or the name buffer holds.
 static void eventLimits()
 {
@@ -4388,6 +4469,7 @@ int main()
   ordinaryConfiguration(true);
   configurationAllocationFailures();
   failedCatalogWrites();
+  ackBeforeFunctions();
   eventLimits();
 #else
   iotOff();
