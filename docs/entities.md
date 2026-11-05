@@ -109,7 +109,8 @@ device.addNumberInput(F("Speed"), &speed).withRange(0, 255, 1);         // <Spee
 device.addNumberInput(F("Total"), &total).withRange(0, 4000000000, 1);  // <Total,3999999999>  unsigned long: exact, also on AVR
 ```
 
-- Values are stored on the step: `<Gain,0.9>` stores 0.9, the step itself.
+- A value within a thousandth of a step lands on it: `<Gain,0.90004>` stores 0.9. A value further
+  off is kept as sent, so `<Gain,0.15>` stores 0.15.
 - The range goes out in the variable's own type, so a step of 0.1 shows as 0.1.
 - A decimal step takes a `float` variable. The debug stream reports a range the variable can't
   hold.
