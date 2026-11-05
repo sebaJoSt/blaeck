@@ -45,6 +45,8 @@ Blaeck device;
 // These provide values to log and let the event count be compared with what arrived.
 unsigned long uptime = 0;
 unsigned long eventCount = 0;
+// An event raised while entities are stopped is lost, so only what can arrive is raised and counted.
+bool entitiesStarted = false;
 
 void setup()
 {
@@ -96,8 +98,7 @@ void setup()
       .disabledByDefault();
 
   // addEventType() appends to an event already declared, for a list that is not fully known
-  // at compile time. It is the only way to build one conditionally: the types passed to
-  // addEvent() are a flash literal, so they cannot be assembled at runtime.
+  // at compile time.
   if (HAS_OVERHEAT_SENSOR)
     device.addEventType(F("System"), F("overheated"));
 
@@ -105,8 +106,12 @@ void setup()
   // has been written to Serial as a Blaeck frame yet.
   device.printRejections(&Serial);
 
-  device.writeEvent(F("System"), F("started"));
-  eventCount++;
+  device.onEntitiesStart([]() {
+    entitiesStarted = true;
+    device.writeEvent(F("System"), F("started"));
+    eventCount++;
+  });
+  device.onEntitiesStop([]() { entitiesStarted = false; });
 }
 
 void loop()
@@ -125,7 +130,7 @@ void FireEvents()
   static unsigned long lastFired = 0;
   static byte step = 0;
 
-  if (millis() - lastFired < 5000)
+  if (!entitiesStarted || millis() - lastFired < 5000)
     return;
   lastFired = millis();
 
