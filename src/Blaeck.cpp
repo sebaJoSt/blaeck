@@ -1184,6 +1184,26 @@ int Blaeck::_findSignalIndex(byte deviceId, const __FlashStringHelper *signalNam
   return -1;
 }
 
+// The interval of BLAECK.INTERVAL_START: plain digits, in milliseconds, that fit 32 bits.
+static byte _parseInterval(const char *text, uint32_t &out)
+{
+  if (text == nullptr || text[0] == '\0')
+    return BLAECK_ACK_MISSING_VALUE;
+  for (const char *p = text; *p != '\0'; ++p)
+    if (*p < '0' || *p > '9')
+      return BLAECK_ACK_NOT_A_NUMBER;
+  uint32_t value = 0;
+  for (const char *p = text; *p != '\0'; ++p)
+  {
+    const uint32_t digit = (uint32_t)(*p - '0');
+    if (value > (0xFFFFFFFFUL - digit) / 10)
+      return BLAECK_ACK_OUT_OF_RANGE;
+    value = value * 10 + digit;
+  }
+  out = value;
+  return BLAECK_ACK_OK;
+}
+
 void Blaeck::read()
 {
   this->writeRestarted();
@@ -1240,14 +1260,21 @@ void Blaeck::read()
       }
       else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_INTERVAL_START)))
       {
-        // strtoul, because atoi is 16-bit on AVR.
-        unsigned long timedInterval_ms = 0;
-        if (_parsedParamCount > 0 && _parsedParamPtrs[0] != nullptr)
-          timedInterval_ms = strtoul(_parsedParamPtrs[0], nullptr, 10);
-        _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
-        this->_setTimedDataState(true, timedInterval_ms);
-        if (_intervalStartCallback != nullptr)
-          _intervalStartCallback((uint32_t)_timedInterval_ms);
+        uint32_t timedInterval_ms = 0;
+        const byte reason = _parseInterval(_parsedParamCount > 0 ? _parsedParamPtrs[0] : nullptr,
+                                           timedInterval_ms);
+        // A value that isn't one changes nothing: an interval already running goes on.
+        if (reason != BLAECK_ACK_OK)
+        {
+          _writeCommandAck(_receiver.chars, 1, reason);
+        }
+        else
+        {
+          _writeCommandAck(_receiver.chars, 0, BLAECK_ACK_OK);
+          this->_setTimedDataState(true, timedInterval_ms);
+          if (_intervalStartCallback != nullptr)
+            _intervalStartCallback((uint32_t)_timedInterval_ms);
+        }
       }
       else if (equalsFlash(_parsedCommand, F(BLAECK_BUILTIN_INTERVAL_STOP)))
       {

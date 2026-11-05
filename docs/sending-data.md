@@ -144,7 +144,9 @@ device.addSignal(F("Temperature"), &temperature)
 | `writeAtInterval(BLAECK_ON_CHANGE, delta)` | Send if it differs enough from the last sent value |
 | `writeAtInterval(BLAECK_OFF)` | Do not include it |
 
-Every `INTERVAL_START` makes an initial interval report immediately due. It includes all
+`INTERVAL_START` takes plain digits, in milliseconds. Anything else is refused and changes
+nothing, so an interval already running goes on. Every `INTERVAL_START` makes an initial interval
+report immediately due. It includes all
 interval-enabled signals, without change filtering, even if they were sent before.
 This also applies when `INTERVAL_START` changes the interval while already running. Later
 intervals apply the policies above normally. If data is stopped, the initial report

@@ -3074,6 +3074,23 @@ static void intervalBeforeDataStart()
   }
   assert(intervalBeforeWriteCalls == 0);
 
+  // A value that isn't an interval is refused, and neither stops nor restarts the one running.
+  command(device, stream, "<BLAECK.DATA_START>");
+  device.writeIfDue();
+  const int callsWhileRunning = intervalBeforeWriteCalls;
+  for (const char *bad : {"<BLAECK.INTERVAL_START>", "<BLAECK.INTERVAL_START,abc>", "<BLAECK.INTERVAL_START,-1>"})
+  {
+    stream.data.output.clear();
+    command(device, stream, bad);
+    assert(static_cast<byte>(commandFramePayload(stream.data.output, 0xA5, 0)[8]) == 1);
+    device.writeIfDue();
+    assert(intervalBeforeWriteCalls == callsWhileRunning);
+  }
+  command(device, stream, "<BLAECK.INTERVAL_STOP>");
+  command(device, stream, "<BLAECK.DATA_STOP>");
+  intervalBeforeWriteCalls = 0;
+  command(device, stream, "<BLAECK.INTERVAL_START,1000>");
+
   // DATA_START: the first report goes out once, then one a second.
   stream.data.output.clear();
   command(device, stream, "<BLAECK.DATA_START>");
