@@ -2149,8 +2149,11 @@ char *Blaeck::_trimInPlace(char *s)
 
 void Blaeck::_dispatchRegisteredHandlers(bool sendAck)
 {
+  // No name reaches no function, but every command gets one ack.
   if (_parsedCommand[0] == '\0')
   {
+    if (sendAck)
+      _writeCommandAck(_receiver.chars, 1, BLAECK_ACK_UNKNOWN);
     return;
   }
 

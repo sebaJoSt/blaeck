@@ -354,6 +354,9 @@ static void sessionBehavior(bool buffered)
   assert((pings == std::vector<std::string>{"t"}));
   assert(terminal.output.empty() && host2.output.empty());
   assert(debug.text.find("Incomplete transport write") == std::string::npos);
+  terminal.input = "<>";
+  device.read();
+  assert(terminal.output.empty() && host2.output.empty());
 
   // Round-robin fairness and independent parsers.
   pings.clear();
@@ -3032,6 +3035,14 @@ static void ackBeforeFunctions()
   const std::string unknown = run("<NOBODY>");
   assert((ackOrderLog == std::vector<std::string>{"catch-all before"}));
   ackResult(unknown, 0, "NOBODY", 1);
+
+  // A command with no name is answered, carrying its id, and reaches nothing.
+  const std::string nameless = commandFramePayload(run("<#7:>"), 0xA5, 7);
+  assert(ackOrderLog.empty());
+  uint32_t namelessName;
+  memcpy(&namelessName, nameless.data() + 4, 4);
+  assert(namelessName == 0 && static_cast<byte>(nameless[8]) == 1 &&
+         static_cast<byte>(nameless[9]) == BLAECK_ACK_UNKNOWN);
 
   // A refused value and an unknown value are told first too.
   run("<Setpoint,abc>");
