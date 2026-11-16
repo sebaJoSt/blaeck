@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- README links and logo now work on the PlatformIO registry.
+
 ## [1.0.0] - 2026-11-16
 
 First release. blaeck replaces BlaeckSerial and BlaeckTCP with one library

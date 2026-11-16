@@ -1,7 +1,7 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="extras/blaeck-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="extras/blaeck-light.svg">
-  <img src="extras/blaeck-light.svg" alt="blaeck" height="75">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/sebaJoSt/blaeck/main/extras/blaeck-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/sebaJoSt/blaeck/main/extras/blaeck-light.svg">
+  <img src="https://raw.githubusercontent.com/sebaJoSt/blaeck/main/extras/blaeck-light.svg" alt="blaeck" height="75">
 </picture>
 
 ---
@@ -131,27 +131,27 @@ The host decides how often data is sent. It sends `<BLAECK.DATA_START>` and
 interval-driven data.
 The data frames are binary, not readable text in a terminal.
 
-TCP sketches need the networking library for their board; see [networking](docs/network.md) for supported server requirements
+TCP sketches need the networking library for their board; see [networking](https://github.com/sebaJoSt/blaeck/blob/main/docs/network.md) for supported server requirements
 and the optional TelnetStream setup.
 
 ## Documentation
 
 | Guide | What it covers |
 |---|---|
-| [Signals](docs/signals.md) | Registering values to log, and naming them |
-| [Entities](docs/entities.md) | Controls, sensors and events, as Home Assistant shows them |
-| [Commands](docs/commands.md) | Handling commands, and a function that sees every command |
-| [Sub-devices](docs/sub-devices.md) | Showing a second board, or a part of this one, as its own device |
-| [Sending data](docs/sending-data.md) | Intervals, sending it yourself, timestamps, buffered writes |
-| [Configuration](docs/configuration.md) | Tables, memory and compile-time settings |
-| [Networking](docs/network.md) | Servers, client limits, terminal output and transport errors |
+| [Signals](https://github.com/sebaJoSt/blaeck/blob/main/docs/signals.md) | Registering values to log, and naming them |
+| [Entities](https://github.com/sebaJoSt/blaeck/blob/main/docs/entities.md) | Controls, sensors and events, as Home Assistant shows them |
+| [Commands](https://github.com/sebaJoSt/blaeck/blob/main/docs/commands.md) | Handling commands, and a function that sees every command |
+| [Sub-devices](https://github.com/sebaJoSt/blaeck/blob/main/docs/sub-devices.md) | Showing a second board, or a part of this one, as its own device |
+| [Sending data](https://github.com/sebaJoSt/blaeck/blob/main/docs/sending-data.md) | Intervals, sending it yourself, timestamps, buffered writes |
+| [Configuration](https://github.com/sebaJoSt/blaeck/blob/main/docs/configuration.md) | Tables, memory and compile-time settings |
+| [Networking](https://github.com/sebaJoSt/blaeck/blob/main/docs/network.md) | Servers, client limits, terminal output and transport errors |
 
 ## Examples
 
 The examples are in `examples/`. In the Arduino IDE, open them with
 **File > Examples > blaeck**.
 
-The main examples include a [NetworkSetup.h tab](examples/Basic/NetworkSetup.h) with
+The main examples include a [NetworkSetup.h tab](https://github.com/sebaJoSt/blaeck/blob/main/examples/Basic/NetworkSetup.h) with
 ready-made Ethernet setup for Mega/GIGA shields and ESP32-PoE/WT32-ETH01 boards.
 Leave `USE_TCP` at `0` for Serial or set it to `1` for TCP and configure the included tab.
 Using `NetworkSetup.h` is optional. You can use your own networking libraries and setup instead.
@@ -161,22 +161,22 @@ and **Events**, then **WaveformGenerator** to see the pieces working together.
 
 | Example | What it teaches |
 |---|---|
-| [Basic](examples/Basic) | The smallest sketch that logs two values |
-| [Signals](examples/Signals) | Numeric, boolean and text signals, and numbered arrays |
-| [Commands](examples/Commands) | Plain commands, and a function that sees every command |
-| [Controls](examples/Controls) | A number, text, switch, select and buttons |
-| [Sensors](examples/Sensors) | A number, bool, function, index and text sensor |
-| [Events](examples/Events) | Declaring and reporting occurrences |
-| [WaveformGenerator](examples/WaveformGenerator) | A complete, controllable waveform dashboard |
-| [WriteModes](examples/WriteModes) | Interval, on-change, and explicit signal writes |
-| [more / ConfigurableSignals](examples/more/ConfigurableSignals) | Choose which signals to log through commands and save the selection in EEPROM |
-| [more / SHT31TempHumiditySensor](examples/more/SHT31TempHumiditySensor) | Read a real temperature and humidity sensor; requires Adafruit SHT31 |
-| [more / TimestampsRTC](examples/more/TimestampsRTC) | Wall-clock timestamps using the UNO R4's RTC |
-| [more / TimestampsNTP](examples/more/TimestampsNTP) | Network-synchronized timestamps |
-| [more / WiFi](examples/more/WiFi) | WiFi-specific connection setup |
-| [more / ESP32C6BugBoard](examples/more/ESP32C6BugBoard) | An ESP32-C6 board-specific example |
-| [more / BridgeESP32PoE](examples/more/BridgeESP32PoE) | A bridge between a UART and TCP |
-| [more / SubDevices](examples/more/SubDevices) | A second board shown as its own device, polled over a UART |
+| [Basic](https://github.com/sebaJoSt/blaeck/tree/main/examples/Basic) | The smallest sketch that logs two values |
+| [Signals](https://github.com/sebaJoSt/blaeck/tree/main/examples/Signals) | Numeric, boolean and text signals, and numbered arrays |
+| [Commands](https://github.com/sebaJoSt/blaeck/tree/main/examples/Commands) | Plain commands, and a function that sees every command |
+| [Controls](https://github.com/sebaJoSt/blaeck/tree/main/examples/Controls) | A number, text, switch, select and buttons |
+| [Sensors](https://github.com/sebaJoSt/blaeck/tree/main/examples/Sensors) | A number, bool, function, index and text sensor |
+| [Events](https://github.com/sebaJoSt/blaeck/tree/main/examples/Events) | Declaring and reporting occurrences |
+| [WaveformGenerator](https://github.com/sebaJoSt/blaeck/tree/main/examples/WaveformGenerator) | A complete, controllable waveform dashboard |
+| [WriteModes](https://github.com/sebaJoSt/blaeck/tree/main/examples/WriteModes) | Interval, on-change, and explicit signal writes |
+| [more / ConfigurableSignals](https://github.com/sebaJoSt/blaeck/tree/main/examples/more/ConfigurableSignals) | Choose which signals to log through commands and save the selection in EEPROM |
+| [more / SHT31TempHumiditySensor](https://github.com/sebaJoSt/blaeck/tree/main/examples/more/SHT31TempHumiditySensor) | Read a real temperature and humidity sensor; requires Adafruit SHT31 |
+| [more / TimestampsRTC](https://github.com/sebaJoSt/blaeck/tree/main/examples/more/TimestampsRTC) | Wall-clock timestamps using the UNO R4's RTC |
+| [more / TimestampsNTP](https://github.com/sebaJoSt/blaeck/tree/main/examples/more/TimestampsNTP) | Network-synchronized timestamps |
+| [more / WiFi](https://github.com/sebaJoSt/blaeck/tree/main/examples/more/WiFi) | WiFi-specific connection setup |
+| [more / ESP32C6BugBoard](https://github.com/sebaJoSt/blaeck/tree/main/examples/more/ESP32C6BugBoard) | An ESP32-C6 board-specific example |
+| [more / BridgeESP32PoE](https://github.com/sebaJoSt/blaeck/tree/main/examples/more/BridgeESP32PoE) | A bridge between a UART and TCP |
+| [more / SubDevices](https://github.com/sebaJoSt/blaeck/tree/main/examples/more/SubDevices) | A second board shown as its own device, polled over a UART |
 
 ## Coming from BlaeckSerial or BlaeckTCP
 
@@ -188,7 +188,7 @@ than a plain upgrade. The main ones:
 | `#include <BlaeckSerial.h>` and `BlaeckSerial BlaeckSerial;` | `#include <Blaeck.h>` and `Blaeck device;` |
 | `BlaeckSerial.begin(&Serial, 2)` | `device.begin(Serial)`. Tables grow as entries are added |
 | `BlaeckTCP.begin(clients, &Serial, 2, port)` | Start the server yourself, then `device.begin(server).withClients(clients)`. Add `.withDebugStream(Serial)` for debug output |
-| `update()`, `markSignalUpdated()`, `writeUpdatedData()`, `timedWrite…()` | `write()` sends a value at once; `writeAtInterval()` and `writeOnChange()` choose when each signal is sent. See [Sending data](docs/sending-data.md) |
+| `update()`, `markSignalUpdated()`, `writeUpdatedData()`, `timedWrite…()` | `write()` sends a value at once; `writeAtInterval()` and `writeOnChange()` choose when each signal is sent. See [Sending data](https://github.com/sebaJoSt/blaeck/blob/main/docs/sending-data.md) |
 | `setIntervalMs()` | Removed. The host sets the interval with `BLAECK.INTERVAL_START` |
 | Writes go out at once | Nothing goes out until the host sends `BLAECK.DATA_START` (data) or `BLAECK.ENTITIES_START` (controls, sensors and events) |
 | `deleteSignals()` | `clearAllSignals()` |
@@ -208,9 +208,9 @@ The frame formats are described in the
 
 ## Help and licence
 
-For questions and bug reports, see [SUPPORT.md](SUPPORT.md). To contribute, see
-[CONTRIBUTING.md](CONTRIBUTING.md). blaeck is licensed under the MIT licence
-([LICENSE.md](LICENSE.md)).
+For questions and bug reports, see [SUPPORT.md](https://github.com/sebaJoSt/blaeck/blob/main/SUPPORT.md). To contribute, see
+[CONTRIBUTING.md](https://github.com/sebaJoSt/blaeck/blob/main/CONTRIBUTING.md). blaeck is licensed under the MIT licence
+([LICENSE.md](https://github.com/sebaJoSt/blaeck/blob/main/LICENSE.md)).
 
 The internal CRC32 helper is adapted from
 [Rob Tillaart's CRC library](https://github.com/RobTillaart/CRC), with its MIT notice
