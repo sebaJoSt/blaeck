@@ -18,6 +18,7 @@
   "platforms": "*",
   "headers": ["Blaeck.h"],
   "export": {
-    "include": ["src", "examples", "docs", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SUPPORT.md", "LICENSE.md", "extras"]
+    "include": ["src", "examples", "docs", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SUPPORT.md", "LICENSE.md", "extras"],
+    "exclude": ["extras/tests", "extras/scripts"]
   }
 }
