@@ -175,7 +175,7 @@ class Program:
             elif mode == "off":
                 call += ".writeAtInterval(BLAECK_OFF)"
             else:
-                call += f".writeAtInterval(BLAECK_ON_CHANGE, {float(mode['on_change'])!r})"
+                call += f".writeAtInterval(BLAECK_IF_CHANGED, {float(mode['if_changed'])!r})"
         if "write_on_change" in s:
             delta = s["write_on_change"]
             if delta == "off":

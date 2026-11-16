@@ -70,7 +70,7 @@ them to the Arduino Library Manager and the PlatformIO registry; never tag or pu
 - Put `[skip ci]` in the message of a commit that changes only comments or wording in source,
   sketch or header files. Never for a commit that also changes code, build files or workflows.
   Markdown-only commits need no marker: every workflow excludes `**/*.md`.
-- Reporting uses per-signal writeAtInterval(BLAECK_ALWAYS/ON_CHANGE/OFF) and independent
+- Reporting uses per-signal writeAtInterval(BLAECK_ALWAYS/IF_CHANGED/OFF) and independent
   writeOnChange(delta, minIntervalMs), disabled with writeOnChange(BLAECK_OFF).
   BLAECK_ANY_CHANGE is a named zero threshold; numeric zero remains valid. Both share
   one last-sent baseline. tick(timestamp) is the only loop call; read() and writeIfDue()

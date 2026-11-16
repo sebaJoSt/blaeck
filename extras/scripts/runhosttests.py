@@ -71,6 +71,33 @@ def main():
                 raise RuntimeError(f"Invalid buffer size {capacity} not rejected as expected:\n"
                                    + bounds.stdout + bounds.stderr)
         print("PASS: command-buffer compile-time bounds")
+        # A sketch's own names don't clash with the library's internal ones.
+        sketch = subprocess.run(
+            [args.cxx, "-std=c++11", "-fsyntax-only", "-Wall", "-Werror", "-x", "c++",
+             "-I" + str(host), "-I" + str(ROOT / "src"), "-"],
+            input="#include <Blaeck.h>\n"
+                  "struct Signal { int pin; };\n"
+                  "struct ReportingState { int x; };\n"
+                  "enum DataType { Analog, Digital };\n"
+                  "namespace detail { int helper = 0; }\n"
+                  "Signal signals[2];\n"
+                  "Blaeck device;\n"
+                  "float value;\n"
+                  "void setup()\n"
+                  "{\n"
+                  "  device.addSignal(F(\"Value\"), &value)\n"
+                  "      .writeAtInterval(BLAECK_IF_CHANGED, BLAECK_ANY_CHANGE);\n"
+                  "  device.setTimestampMode(BLAECK_UNIX);\n"
+                  "  device.addButton(F(\"Go\"), []() {});\n"
+                  "  device.onCommand(F(\"Run\"), [](const char *, const char *const *, byte) {});\n"
+                  "  BlaeckSignalRef ref = device.addSignal(\"Other\", &value);\n"
+                  "  (void)ref; (void)signals; (void)detail::helper;\n"
+                  "}\n",
+            capture_output=True, text=True)
+        if sketch.returncode != 0:
+            raise RuntimeError("Sketch names clash with the library's:\n"
+                               + sketch.stdout + sketch.stderr)
+        print("PASS: sketch names don't clash with library internals")
         disabled = Path(temp) / "server-no-delay-test.exe"
         command[1:1] = ["-DBLAECK_TCP_NO_DELAY_DEFAULT=false"]
         command[-1] = str(disabled)

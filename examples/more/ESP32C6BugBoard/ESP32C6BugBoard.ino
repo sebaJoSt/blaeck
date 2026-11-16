@@ -121,7 +121,7 @@ void setup()
   server.begin();
   device.begin(server)
       .withClients(MAX_CLIENTS)
-      .withDebugStream(&device.Terminal);
+      .withDebugStream(device.Terminal);
 
   device.withName(HOST_NAME);
   // This wiring is for a specific board that the generic ESP32C6 build target cannot name.

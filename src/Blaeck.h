@@ -148,7 +148,7 @@ enum BlaeckIntervalMode : uint8_t
 {
   BLAECK_OFF,
   BLAECK_ALWAYS,
-  BLAECK_ON_CHANGE
+  BLAECK_IF_CHANGED
 };
 
 /*!
@@ -159,7 +159,7 @@ enum BlaeckIntervalMode : uint8_t
 
   @code
     device.addSignal(F("Temperature"), &Temperature)
-        .writeAtInterval(BLAECK_ON_CHANGE, BLAECK_ANY_CHANGE)
+        .writeAtInterval(BLAECK_IF_CHANGED, BLAECK_ANY_CHANGE)
         .writeOnChange(BLAECK_ANY_CHANGE);
   @endcode
 */
@@ -227,7 +227,7 @@ typedef void (*BlaeckCommandHandler)(const char *command, const char *const *par
 typedef bool (*BlaeckAnyCommandHandler)(const char *command, const char *const *params, byte paramCount);
 
 // Runs on each press of a button. A press carries no value; fixed arguments go in a lambda:
-// addButton("ACTIVATE_ALL", []() { activateRange(1, 40); }).
+// addButton(F("ACTIVATE_ALL"), []() { activateRange(1, 40); }).
 typedef void (*BlaeckButtonFunction)();
 
 // Where a host files a control or value. CONFIG is a device setting, DIAGNOSTIC is information
@@ -300,7 +300,7 @@ class Blaeck;
 
 // Returned by begin() to set the connection limit and the debug stream, e.g.
 //
-//   device.begin(server).withClients(2).withDebugStream(&Serial);
+//   device.begin(server).withClients(2).withDebugStream(Serial);
 //
 // Tables need no size: each grows as entries are added.
 //
@@ -340,10 +340,10 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.begin(Serial).withDebugStream(&Serial);
+      device.begin(Serial).withDebugStream(Serial);
     @endcode
   */
-  BlaeckBeginRef &withDebugStream(Print *debugStream);
+  BlaeckBeginRef &withDebugStream(Print &debugStream);
 
 private:
   Blaeck *_owner;
@@ -699,7 +699,7 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.addButton("STATUS", onStatus).withDisplayName(F("Request status"));
+      device.addButton(F("STATUS"), onStatus).withDisplayName(F("Request status"));
     @endcode
   */
   TYPE &withDisplayName(BlaeckString displayName)
@@ -717,7 +717,7 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.addButton("CALIBRATE", onCalibrate).withIcon(F("mdi:tune"));
+      device.addButton(F("CALIBRATE"), onCalibrate).withIcon(F("mdi:tune"));
     @endcode
   */
   TYPE &withIcon(BlaeckString icon)
@@ -734,7 +734,7 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.addButton("FACTORY_RESET", onFactoryReset).config();
+      device.addButton(F("FACTORY_RESET"), onFactoryReset).config();
     @endcode
   */
   TYPE &config()
@@ -751,7 +751,7 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.addButton("REBOOT", onReboot).diagnostic();
+      device.addButton(F("REBOOT"), onReboot).diagnostic();
     @endcode
   */
   TYPE &diagnostic()
@@ -769,7 +769,7 @@ public:
     @return  The same handle, for chaining.
 
     @code
-      device.addButton("CALIBRATE", onCalibrate).disabledByDefault();
+      device.addButton(F("CALIBRATE"), onCalibrate).disabledByDefault();
     @endcode
   */
   TYPE &disabledByDefault(bool on = true)
@@ -802,7 +802,7 @@ public:
     @note    These buttons usually belong under diagnostic() as well.
 
     @code
-      device.addButton("REBOOT", onReboot).withDeviceClass(F("restart")).diagnostic();
+      device.addButton(F("REBOOT"), onReboot).withDeviceClass(F("restart")).diagnostic();
     @endcode
   */
   BlaeckButtonRef &withDeviceClass(BlaeckString deviceClass)
@@ -835,14 +835,14 @@ public:
   /*!
     @brief   Selects how this signal participates in host-interval reports.
 
-    BLAECK_ALWAYS is the default. BLAECK_ON_CHANGE compares against the last sent
+    BLAECK_ALWAYS is the default. BLAECK_IF_CHANGED compares against the last sent
     value when the interval is due. BLAECK_OFF excludes this signal from interval
     reports. This replaces the interval policy, independently of writeOnChange().
     Every INTERVAL_START makes an initial interval report due: all interval-enabled
     signals are included, without change filtering, even when already active.
     Explicit writes bypass both policies and update their shared baseline.
 
-    @param   mode   BLAECK_ALWAYS, BLAECK_ON_CHANGE or BLAECK_OFF.
+    @param   mode   BLAECK_ALWAYS, BLAECK_IF_CHANGED or BLAECK_OFF.
     @param   delta  Nonnegative finite numeric threshold; BLAECK_ANY_CHANGE (zero)
                     means any difference.
                     Ignored for boolean and text signals.
@@ -850,7 +850,7 @@ public:
 
     @code
       device.addSignal(F("Temperature"), &Temperature)
-          .writeAtInterval(BLAECK_ON_CHANGE, 0.1);
+          .writeAtInterval(BLAECK_IF_CHANGED, 0.1);
     @endcode
   */
   BlaeckSignalRef &writeAtInterval(BlaeckIntervalMode mode, double delta = BLAECK_ANY_CHANGE)
@@ -1010,7 +1010,6 @@ public:
   /*!
     @brief   Files the event under the device's configuration.
 
-    @param   on  false undoes it.
     @return  The same handle, for chaining.
 
     @note    Home Assistant files events under diagnostics or nowhere, so it shows a config
@@ -1020,19 +1019,18 @@ public:
       device.addEvent(F("Calibrated"), F("done")).config();
     @endcode
   */
-  BlaeckEventRef config(bool on = true);
+  BlaeckEventRef config();
 
   /*!
     @brief   Files the event under the device's diagnostics.
 
-    @param   on  false undoes it.
     @return  The same handle, for chaining.
 
     @code
       device.addEvent(F("Faults"), F("brownout,watchdog")).diagnostic();
     @endcode
   */
-  BlaeckEventRef diagnostic(bool on = true);
+  BlaeckEventRef diagnostic();
 
   /*!
     @brief   Sets what kind of events the channel reports: button, doorbell or motion.
@@ -1067,7 +1065,7 @@ public:
   BlaeckEventRef disabledByDefault(bool on = true);
 
 private:
-  void _setCategory(uint8_t category, bool on);
+  void _setCategory(uint8_t category);
   Blaeck *_owner;
   int16_t _index;
 };
@@ -1925,10 +1923,10 @@ public:
              hasRejections().
 
     @code
-      device.onCommand("SwitchLED", onSwitchLED);
+      device.onCommand(F("SwitchLED"), onSwitchLED);
     @endcode
   */
-  void onCommand(const char *command, BlaeckCommandHandler handler);
+  void onCommand(BlaeckString command, BlaeckCommandHandler handler);
 
   /*!
     @brief   Adds a button, which a host shows and presses.
@@ -1943,10 +1941,10 @@ public:
     @return  A handle for describing how a host shows the button.
 
     @code
-      device.addButton("STATUS", onStatus);
+      device.addButton(F("STATUS"), onStatus);
     @endcode
   */
-  BlaeckButtonRef addButton(const char *name, BlaeckButtonFunction press);
+  BlaeckButtonRef addButton(BlaeckString name, BlaeckButtonFunction press);
 
 protected:
   BlaeckDeviceBase(Blaeck *core, byte deviceId) : _core(core), _deviceId(deviceId) {}
@@ -1963,7 +1961,7 @@ private:
   // Blaeck's calls of the same names, for this device. A handle without a board registers
   // nothing (-1) and sends nothing.
   int _registerSignal(BlaeckString signalName, dataType type, void *address, bool textInFlash = false);
-  int _registerCommand(const char *command, BlaeckCommandHandler handler, BlaeckButtonFunction press);
+  int _registerCommand(BlaeckString command, BlaeckCommandHandler handler, BlaeckButtonFunction press);
   int _registerEventChannel(BlaeckString channelName, BlaeckString eventTypes);
   int _registerProperty(BlaeckString name, uint8_t kind, bool writable, dataType type, void *address,
                         void (*getter)(), uint8_t getterType, uint16_t textSize, BlaeckString options,
@@ -2201,15 +2199,13 @@ public:
   void clearAllSignals();
 
   /*!
-    @brief   The number of signals added. Valid indexes run from 0 to SignalCount - 1.
-
-    @note    Read it only. Assigning to it breaks the count.
+    @brief   The number of signals added. Valid indexes run from 0 to signalCount() - 1.
 
     @code
-      Serial.println(device.SignalCount);
+      Serial.println(device.signalCount());
     @endcode
   */
-  int SignalCount;
+  int signalCount() const { return _signalIndex; }
 
   // ----- Device Restarted -----
 
@@ -2360,7 +2356,7 @@ public:
 
     @code
       device.clearAllCommands();
-      device.onCommand("LED", onLED);
+      device.onCommand(F("LED"), onLED);
     @endcode
   */
   void clearAllCommands();
@@ -2436,13 +2432,6 @@ public:
     @endcode
   */
   static char *toText(float value, byte decimals, char *out, byte outSize);
-
-  // Stores a channel name: an F() name as its pointer, a RAM name as a heap copy. Frees
-  // what the slot held before.
-  static bool _setChannelName(const char *&slot, bool &inFlash, const char *ram, const __FlashStringHelper *flash);
-  // Equality against a stored channel name, whichever memory it lives in.
-  static bool _channelNameEquals(const char *stored, bool inFlash, const char *candidate);
-  static bool _channelNameEqualsFlash(const char *stored, bool inFlash, const __FlashStringHelper *candidate);
 
   /*!
     @brief   Reports rejected declarations, configuration and signal-reporting failures.
@@ -2719,7 +2708,7 @@ public:
       server.begin();
       device.begin(server)
           .withClients(4)
-          .withDebugStream(&device.Terminal);
+          .withDebugStream(device.Terminal);
     @endcode
   */
   template<class Server>
@@ -2948,7 +2937,7 @@ protected:
   void _writeEvent(byte deviceId, const char *channelName, BlaeckString eventType);
   // Registers a plain command (handler set) or a button (press set) and returns its table
   // index, or -1 if it was rejected (counted, and reported on the debug stream).
-  int _registerCommand(byte deviceId, const char *command, BlaeckCommandHandler handler, BlaeckButtonFunction press);
+  int _registerCommand(byte deviceId, BlaeckString command, BlaeckCommandHandler handler, BlaeckButtonFunction press);
   // Empties an entry, so registering a name again starts from scratch.
   static void _resetCommand(blaeck_detail::CommandHandlerEntry &e);
   // Adds an event and returns its index, or -1 if it was rejected. Adding an existing
@@ -3546,6 +3535,13 @@ private:
   // Copies an F() string into out, cut to fit and always terminated; returns the length.
   static byte copyFlashName(const __FlashStringHelper *flash, char *out, byte outSize);
 
+  // Stores a channel name: an F() name as its pointer, a RAM name as a heap copy. Frees
+  // what the slot held before.
+  static bool _setChannelName(const char *&slot, bool &inFlash, const char *ram, const __FlashStringHelper *flash);
+  // Equality against a stored channel name, whichever memory it lives in.
+  static bool _channelNameEquals(const char *stored, bool inFlash, const char *candidate);
+  static bool _channelNameEqualsFlash(const char *stored, bool inFlash, const __FlashStringHelper *candidate);
+
   struct Connection
   {
     Receiver receiver;
@@ -3599,11 +3595,11 @@ inline BlaeckBeginRef &BlaeckBeginRef::withClients(byte count)
   return *this;
 }
 
-inline BlaeckBeginRef &BlaeckBeginRef::withDebugStream(Print *debugStream)
+inline BlaeckBeginRef &BlaeckBeginRef::withDebugStream(Print &debugStream)
 {
   if (_owner != nullptr)
   {
-    _owner->_debugStream = debugStream;
+    _owner->_debugStream = &debugStream;
     _owner->_reportTransportError();
   }
   return *this;
@@ -3702,34 +3698,31 @@ inline BlaeckEventRef BlaeckEventRef::withDisplayName(BlaeckString displayName)
   return *this;
 }
 
-inline void BlaeckEventRef::_setCategory(uint8_t category, bool on)
+inline void BlaeckEventRef::_setCategory(uint8_t category)
 {
 #if BLAECK_ENABLE_IOT
   if (_index < 0 || _owner == nullptr)
     return;
   uint8_t &current = _owner->_eventChannels[_index].category;
-  // Undoing a category the event doesn't have leaves it as it is.
-  const uint8_t wanted = on ? category : (current == category ? 0 : current);
-  if (current != wanted)
+  if (current != category)
   {
-    current = wanted;
+    current = category;
     _owner->_entityCatalogDirty = true;
   }
 #else
   (void)category;
-  (void)on;
 #endif
 }
 
-inline BlaeckEventRef BlaeckEventRef::config(bool on)
+inline BlaeckEventRef BlaeckEventRef::config()
 {
-  _setCategory(1, on);
+  _setCategory(BLAECK_CAT_CONFIG);
   return *this;
 }
 
-inline BlaeckEventRef BlaeckEventRef::diagnostic(bool on)
+inline BlaeckEventRef BlaeckEventRef::diagnostic()
 {
-  _setCategory(2, on);
+  _setCategory(BLAECK_CAT_DIAGNOSTIC);
   return *this;
 }
 
@@ -3766,7 +3759,53 @@ inline BlaeckEventRef BlaeckEventRef::disabledByDefault(bool on)
 
 } // namespace blaeck
 
-// Keep the sketch API available without namespace qualification.
-using namespace blaeck;
+// The names a sketch uses, without blaeck::. Internal types stay in the namespace so they
+// can't clash with a sketch's own names. Add a new public type or constant here too.
+using blaeck::Blaeck;
+using blaeck::BlaeckBeginRef;
+using blaeck::BlaeckButtonRef;
+using blaeck::BlaeckDeviceBase;
+using blaeck::BlaeckDeviceRef;
+using blaeck::BlaeckEventRef;
+using blaeck::BlaeckNumberPropertyRef;
+using blaeck::BlaeckPropertyRef;
+using blaeck::BlaeckSignalRef;
+using blaeck::BlaeckString;
+using blaeck::BlaeckTerminal;
+using blaeck::BlaeckTextPropertyRef;
+
+using blaeck::BlaeckAnyCommandHandler;
+using blaeck::BlaeckButtonFunction;
+using blaeck::BlaeckCommandHandler;
+using blaeck::BlaeckPropertyCallback;
+
+using blaeck::BLAECK_ANY_CHANGE;
+using blaeck::BLAECK_NOW;
+
+using blaeck::BlaeckIntervalMode;
+using blaeck::BLAECK_OFF;
+using blaeck::BLAECK_ALWAYS;
+using blaeck::BLAECK_IF_CHANGED;
+
+using blaeck::BlaeckTimestampMode;
+using blaeck::BLAECK_NO_TIMESTAMP;
+using blaeck::BLAECK_MICROS;
+using blaeck::BLAECK_UNIX;
+
+using blaeck::BlaeckStateClass;
+using blaeck::BLAECK_STATE_CLASS_NONE;
+using blaeck::BLAECK_STATE_CLASS_MEASUREMENT;
+using blaeck::BLAECK_STATE_CLASS_TOTAL;
+using blaeck::BLAECK_STATE_CLASS_TOTAL_INCREASING;
+using blaeck::BLAECK_STATE_CLASS_MEASUREMENT_ANGLE;
+
+using blaeck::BlaeckNumberMode;
+using blaeck::BLAECK_NUMBER_MODE_AUTO;
+using blaeck::BLAECK_NUMBER_MODE_BOX;
+using blaeck::BLAECK_NUMBER_MODE_SLIDER;
+
+using blaeck::BlaeckTextMode;
+using blaeck::BLAECK_TEXT_MODE_PLAIN;
+using blaeck::BLAECK_TEXT_MODE_PASSWORD;
 
 #endif // BLAECK_H

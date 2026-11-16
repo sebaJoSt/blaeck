@@ -33,7 +33,7 @@ void setup()
   Serial.begin(115200);
   device.begin(Serial);
 
-  device.onCommand("Print", onPrint);   // <Print,Hello,3>
+  device.onCommand(F("Print"), onPrint);   // <Print,Hello,3>
 }
 
 void loop()

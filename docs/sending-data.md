@@ -135,13 +135,13 @@ Choose one interval policy when registering a signal:
 
 ```cpp
 device.addSignal(F("Temperature"), &temperature)
-    .writeAtInterval(BLAECK_ON_CHANGE, 0.05f);
+    .writeAtInterval(BLAECK_IF_CHANGED, 0.05f);
 ```
 
 | Policy | At each host interval |
 | --- | --- |
 | `writeAtInterval(BLAECK_ALWAYS)` | Send the current value; this is the default |
-| `writeAtInterval(BLAECK_ON_CHANGE, delta)` | Send if it differs enough from the last sent value |
+| `writeAtInterval(BLAECK_IF_CHANGED, delta)` | Send if it differs enough from the last sent value |
 | `writeAtInterval(BLAECK_OFF)` | Do not include it |
 
 `INTERVAL_START` takes plain digits, in milliseconds. Anything else is refused and changes
@@ -175,7 +175,7 @@ INTERVAL_START, and INTERVAL_STOP does not stop it. DATA_STOP does.
 Use `writeOnChange(BLAECK_ANY_CHANGE)` to report any difference from the last sent value,
 still subject to the minimum interval. Numeric zero remains equivalent; it does not turn
 reporting off. The same named threshold works in
-`writeAtInterval(BLAECK_ON_CHANGE, BLAECK_ANY_CHANGE)`.
+`writeAtInterval(BLAECK_IF_CHANGED, BLAECK_ANY_CHANGE)`.
 
 Disable immediate change reporting with `writeOnChange(BLAECK_OFF)`, without changing
 the interval policy or blocking explicit writes:
@@ -191,14 +191,14 @@ Disabling is harmless if already off and frees tracking storage when interval fi
 does not need it. Re-enabling replaces the threshold and minimum interval. If interval
 filtering retained the shared baseline and clock, they are reused; otherwise the next
 eligible report sends an initial value. `BLAECK_OFF` takes no minimum-interval argument.
-Other mode values, such as `BLAECK_ALWAYS` and `BLAECK_ON_CHANGE`, are invalid for
+Other mode values, such as `BLAECK_ALWAYS` and `BLAECK_IF_CHANGED`, are invalid for
 `writeOnChange()` and produce a policy warning rather than acting as numeric thresholds.
 
 The two paths are independent. For small changes at intervals and larger changes promptly:
 
 ```cpp
 device.addSignal(F("Temperature"), &temperature)
-    .writeAtInterval(BLAECK_ON_CHANGE, 0.05f)
+    .writeAtInterval(BLAECK_IF_CHANGED, 0.05f)
     .writeOnChange(0.1f);
 ```
 

@@ -56,7 +56,7 @@ void setup()
   networkBegin(23);
   server.begin();
   device.begin(server)
-      .withDebugStream(&device.Terminal);
+      .withDebugStream(device.Terminal);
 #else
   device.begin(Serial);
 #endif

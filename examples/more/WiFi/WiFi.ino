@@ -98,7 +98,7 @@ void setup()
   server.begin();
   device.begin(server)
       .withClients(MAX_CLIENTS)
-      .withDebugStream(&device.Terminal);
+      .withDebugStream(device.Terminal);
 
   device.withName(HOST_NAME);
   device.withFWVersion(F("1.0"));

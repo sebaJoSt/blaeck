@@ -46,9 +46,9 @@ void resetSignals(bool buffered)
   unsignedValue = 0;
   callbackCalls = 0;
   device.addSignal(F("Periodic"), &periodic);
-  device.addSignal(F("Filtered"), &filtered).writeAtInterval(BLAECK_ON_CHANGE, 0.5f);
+  device.addSignal(F("Filtered"), &filtered).writeAtInterval(BLAECK_IF_CHANGED, 0.5f);
   device.addSignal(F("Immediate"), &immediate).writeAtInterval(BLAECK_OFF).writeOnChange(1, 1000);
-  device.addSignal(F("Combined"), &combined).writeAtInterval(BLAECK_ON_CHANGE, 0.5f).writeOnChange(1, 1000);
+  device.addSignal(F("Combined"), &combined).writeAtInterval(BLAECK_IF_CHANGED, 0.5f).writeOnChange(1, 1000);
   device.addSignal(F("Flag"), &flag).writeAtInterval(BLAECK_OFF).writeOnChange(999, 0);
   device.addSignal(F("Text"), text).writeAtInterval(BLAECK_OFF).writeOnChange(999, 0);
   device.addSignal(F("Signed"), &signedValue).writeAtInterval(BLAECK_OFF).writeOnChange(1, 0);

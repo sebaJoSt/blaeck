@@ -16,7 +16,7 @@ void setup()
 {
   Serial.begin(115200);
 
-  device.begin(Serial).withDebugStream(&Serial1);
+  device.begin(Serial).withDebugStream(Serial1);
 }
 ```
 

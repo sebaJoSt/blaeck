@@ -103,17 +103,17 @@ void setup()
       .withRange(1.0f, (float)MAXIMUM_SIGNALS, 1.0f)
       .withMode(BLAECK_NUMBER_MODE_BOX)
       .withDisplayName(F("Range to"));
-  device.addButton("SIGNAL_ACTIVATE", onSignalActivate)
+  device.addButton(F("SIGNAL_ACTIVATE"), onSignalActivate)
       .withDisplayName(F("Activate range"));
-  device.addButton("SIGNAL_DEACTIVATE", onSignalDeactivate)
+  device.addButton(F("SIGNAL_DEACTIVATE"), onSignalDeactivate)
       .withDisplayName(F("Deactivate range"));
 
   // Presets: a press carries no value, so a fixed range goes in a lambda. The label says what
   // it does, so no dashboard control is needed to pick one.
-  device.addButton("SIGNAL_ACTIVATE_ALL", []() { ApplySignalRange(true, 1, MAXIMUM_SIGNALS); })
+  device.addButton(F("SIGNAL_ACTIVATE_ALL"), []() { ApplySignalRange(true, 1, MAXIMUM_SIGNALS); })
       .withDisplayName(F("Activate all signals"))
       .withIcon(F("mdi:select-all"));
-  device.addButton("SIGNAL_DEACTIVATE_ALL", []() { ApplySignalRange(false, 1, MAXIMUM_SIGNALS); })
+  device.addButton(F("SIGNAL_DEACTIVATE_ALL"), []() { ApplySignalRange(false, 1, MAXIMUM_SIGNALS); })
       .withDisplayName(F("Deactivate all signals"))
       .withIcon(F("mdi:select-off"));
 

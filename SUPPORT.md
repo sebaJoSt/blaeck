@@ -39,7 +39,7 @@ example, with an already-open Serial data port and a separate Serial1 debug port
 
 ```cpp
 Serial1.begin(115200);
-device.begin(Serial).withDebugStream(&Serial1);
+device.begin(Serial).withDebugStream(Serial1);
 ```
 
 Use that on the sketch's existing `begin()` call, not as an additional initialization.

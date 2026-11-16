@@ -170,7 +170,7 @@ void setup()
   // Pointed at the stream the frames go out on, deliberately: N_badrange makes a warning,
   // and a warning must never land inside an open frame. Keeping the two streams the same is
   // what would catch that.
-  device.begin(Serial).withDebugStream(&Serial);
+  device.begin(Serial).withDebugStream(Serial);
 
   device.withName(F("Command Test"));
   device.withHWVersion(HARNESS_BOARD);

@@ -29,7 +29,7 @@ import clang.cindex as ci
 # Constructors are left out: the handle types are returned by the library, never
 # constructed by a sketch, so nobody hovers them.
 #
-# Data members are in: SignalCount and its neighbours are read by sketches
+# Data members are in: Terminal and its neighbours are used by sketches
 # and hovered like anything else, and a comment written for a group of them shows
 # the group's text whichever one is hovered - the same defect the methods had.
 KINDS = {

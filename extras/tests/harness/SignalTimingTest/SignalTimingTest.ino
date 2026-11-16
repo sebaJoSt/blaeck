@@ -180,7 +180,7 @@ void setup()
   Serial.begin(115200);
 
   device.begin(Serial)
-      .withDebugStream(&Serial);
+      .withDebugStream(Serial);
 
   device.withName(F("Signal Timing Test"));
   device.withHWVersion(HARNESS_BOARD);

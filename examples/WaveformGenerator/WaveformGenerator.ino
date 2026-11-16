@@ -104,7 +104,7 @@ void setup()
   networkBegin(23);
   server.begin();
   device.begin(server)
-      .withDebugStream(&device.Terminal);
+      .withDebugStream(device.Terminal);
 #else
   device.begin(Serial);
 #endif
@@ -141,7 +141,7 @@ void setup()
       .withIcon(F("mdi:tag"))
       .config();
   device.addTextInput(F("Annotation"), annotation, sizeof(annotation));
-  device.addButton("STATUS", onStatus)
+  device.addButton(F("STATUS"), onStatus)
       .withDisplayName(F("Request status"))
       .diagnostic();
 

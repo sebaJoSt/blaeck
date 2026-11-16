@@ -4,7 +4,7 @@
   Four signals get the same value every 100 ms; only how they report it differs:
 
     Interval            every host interval, changed or not (the default).
-    OnChangeAtInterval  at the host interval, if it changed by at least 0.01.
+    IfChangedAtInterval at the host interval, if it changed by at least 0.01.
     OnChange            as soon as it changes by at least 0.01; needs no interval.
     Explicit            write() sends every value.
 
@@ -17,11 +17,11 @@
   Try this:
     Set the host's logging interval to 2000 ms, or send <BLAECK.DATA_START> and
     <BLAECK.INTERVAL_START,2000>.
-    Interval and OnChangeAtInterval only check every 2 s, so they can miss the
+    Interval and IfChangedAtInterval only check every 2 s, so they can miss the
     spikes; OnChange and Explicit catch them.
-    While flat, the flicker stays below 0.01: OnChangeAtInterval and OnChange
+    While flat, the flicker stays below 0.01: IfChangedAtInterval and OnChange
     go quiet, while Interval and Explicit keep sending.
-    Send <BLAECK.INTERVAL_STOP>: only Interval and OnChangeAtInterval stop.
+    Send <BLAECK.INTERVAL_STOP>: only Interval and IfChangedAtInterval stop.
 
   These are binary data frames, not readable text in a serial monitor.
 
@@ -50,7 +50,7 @@ Blaeck device;
 
 // Signals retain pointers to these variables, so keep them alive for the device's lifetime.
 float interval = 0.0f;
-float onChangeAtInterval = 0.0f;
+float ifChangedAtInterval = 0.0f;
 float onChange = 0.0f;
 float explicitValue = 0.0f;
 
@@ -62,7 +62,7 @@ void setup()
   networkBegin(23);
   server.begin();
   device.begin(server)
-      .withDebugStream(&device.Terminal);
+      .withDebugStream(device.Terminal);
 #else
   device.begin(Serial);
 #endif
@@ -71,8 +71,8 @@ void setup()
   device.withFWVersion(F("1.0"));
 
   device.addSignal(F("Interval"), &interval);
-  device.addSignal(F("OnChangeAtInterval"), &onChangeAtInterval)
-      .writeAtInterval(BLAECK_ON_CHANGE, 0.01f);
+  device.addSignal(F("IfChangedAtInterval"), &ifChangedAtInterval)
+      .writeAtInterval(BLAECK_IF_CHANGED, 0.01f);
   device.addSignal(F("OnChange"), &onChange)
       .writeAtInterval(BLAECK_OFF).writeOnChange(0.01f, 0);
   device.addSignal(F("Explicit"), &explicitValue).writeAtInterval(BLAECK_OFF);
@@ -121,6 +121,6 @@ void UpdateSignals()
     value += 1.45f * (1.0f - cos(TWO_PI * spikePhase));
   }
 
-  interval = onChangeAtInterval = onChange = value;
+  interval = ifChangedAtInterval = onChange = value;
   device.write("Explicit", value);
 }

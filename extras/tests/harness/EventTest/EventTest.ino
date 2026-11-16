@@ -79,7 +79,7 @@ void setup()
   // Both streams on Serial on purpose: anything the library prints while a frame is open
   // would land inside it, and this is where that would show.
   device.begin(Serial)
-      .withDebugStream(&Serial);
+      .withDebugStream(Serial);
 
   device.withName(F("Event Test"));
   device.withHWVersion(HARNESS_BOARD);

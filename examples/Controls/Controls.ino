@@ -78,10 +78,10 @@ void setup()
   networkBegin(23);
   server.begin();
   device.begin(server)
-      .withDebugStream(&device.Terminal);
+      .withDebugStream(device.Terminal);
 #else
   device.begin(Serial)
-      .withDebugStream(&Serial);
+      .withDebugStream(Serial);
 #endif
 
   device.withName(HOST_NAME);
@@ -99,9 +99,9 @@ void setup()
   device.addSelect(F("Mode"), &mode, F("Off,Heat,Auto"), onMode)   // <Mode,Heat>
       .withIcon(F("mdi:thermostat"));
 
-  device.addButton("Reset", onReset)                            // <Reset>
+  device.addButton(F("Reset"), onReset)                         // <Reset>
       .withIcon(F("mdi:restore"));
-  device.addButton("Boost", []() { setpoint = min(setpoint + 2.0f, 30.0f); })   // <Boost>
+  device.addButton(F("Boost"), []() { setpoint = min(setpoint + 2.0f, 30.0f); })   // <Boost>
       .withIcon(F("mdi:fire"));
 
   device.addSensor(F("Temperature"), &temperature)

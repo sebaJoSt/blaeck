@@ -74,7 +74,7 @@ void setup()
   networkBegin(23);
   server.begin();
   device.begin(server)
-      .withDebugStream(&device.Terminal);
+      .withDebugStream(device.Terminal);
 #else
   device.begin(Serial);
 #endif
@@ -82,8 +82,8 @@ void setup()
   device.withName(HOST_NAME);
   device.withFWVersion(F("1.0"));
 
-  device.onCommand("SwitchLED", onSwitchLED);   // <SwitchLED,1>
-  device.onCommand("Print", onPrint);           // <Print,Hello,3>
+  device.onCommand(F("SwitchLED"), onSwitchLED);   // <SwitchLED,1>
+  device.onCommand(F("Print"), onPrint);           // <Print,Hello,3>
 
   device.onAnyCommand(handleAnyCommand);
 }

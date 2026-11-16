@@ -37,7 +37,7 @@ void setup()
       .withUnit(F("\xC2\xB0" "C"));
   device.addSensor(F("Temperature"), &temperature)
       .withUnit(F("\xC2\xB0" "C"));
-  device.addButton("Reset", onReset);               // <Reset>
+  device.addButton(F("Reset"), onReset);            // <Reset>
 }
 
 void loop()
@@ -125,7 +125,7 @@ void onStatus()
   reportStatus();
 }
 
-device.addButton("STATUS", onStatus)   // <STATUS>
+device.addButton(F("STATUS"), onStatus)   // <STATUS>
     .withDisplayName(F("Request status"))
     .diagnostic();
 ```
@@ -133,9 +133,9 @@ device.addButton("STATUS", onStatus)   // <STATUS>
 A lambda gives one function fixed arguments, so several buttons share it:
 
 ```cpp
-device.addButton("ACTIVATE_ALL", []() { activateRange(1, 40); })     // <ACTIVATE_ALL>
+device.addButton(F("ACTIVATE_ALL"), []() { activateRange(1, 40); })     // <ACTIVATE_ALL>
     .withDisplayName(F("Activate all"));
-device.addButton("ACTIVATE_FIRST", []() { activateRange(1, 10); })   // <ACTIVATE_FIRST>
+device.addButton(F("ACTIVATE_FIRST"), []() { activateRange(1, 10); })   // <ACTIVATE_FIRST>
     .withDisplayName(F("Activate first ten"));
 ```
 

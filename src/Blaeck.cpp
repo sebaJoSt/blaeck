@@ -138,7 +138,6 @@ void Blaeck::_resetSignalCatalog()
   // The table keeps its chunks; only what the entries own is freed.
   _freeSignalOwned();
   _signalIndex = 0;
-  SignalCount = 0;
   _schemaHash = 0;
   _rejectedSignalCount = 0;
   _rejectedSignalPolicyCount = 0;
@@ -463,7 +462,7 @@ int Blaeck::_registerSignalCommon(byte deviceId, const char *ram, const __FlashS
   }
 
   // The name is copied before the slot counts, so a name that doesn't fit drops the signal.
-  if (_signalIndex >= MAX_TABLE_ENTRIES || !Signals.reserve(_signalIndex + 1) ||
+  if (_signalIndex >= (int)MAX_TABLE_ENTRIES || !Signals.reserve(_signalIndex + 1) ||
       !_setSignalName(_signalIndex, ram, flash))
   {
     if (flash != nullptr)
@@ -487,7 +486,6 @@ int Blaeck::_registerSignalCommon(byte deviceId, const char *ram, const __FlashS
   Signals[_signalIndex].UnitIndex = 0;
   int16_t added = (int16_t)_signalIndex;
   _signalIndex++;
-  SignalCount = _signalIndex;
   _schemaHash = _computeSchemaHash();
   return added;
 }
@@ -500,7 +498,6 @@ void Blaeck::clearAllSignals()
     _signalUnits[i] = nullptr;
   _signalUnitCount = 0;
   _signalIndex = 0;
-  SignalCount = _signalIndex;
   _schemaHash = 0;
   _rejectedSignalCount = 0;
   _rejectedSignalPolicyCount = 0;
@@ -678,14 +675,14 @@ void Blaeck::_setSignalInterval(int16_t index, BlaeckIntervalMode mode, double d
   if (index < 0 || index >= _signalIndex)
     return;
   Signal &s = Signals[index];
-  if ((mode != BLAECK_OFF && mode != BLAECK_ALWAYS && mode != BLAECK_ON_CHANGE) ||
-      (mode == BLAECK_ON_CHANGE && s.DataType != Blaeck_bool && s.DataType != Blaeck_string &&
+  if ((mode != BLAECK_OFF && mode != BLAECK_ALWAYS && mode != BLAECK_IF_CHANGED) ||
+      (mode == BLAECK_IF_CHANGED && s.DataType != Blaeck_bool && s.DataType != Blaeck_string &&
        (delta < 0 || isnan(delta) || isinf(delta))))
   {
     _reportSignalPolicyError(F("Invalid interval reporting policy/threshold; previous policy retained."));
     return;
   }
-  if (mode == BLAECK_ON_CHANGE)
+  if (mode == BLAECK_IF_CHANGED)
   {
     ReportingState *r = _ensureReporting(index);
     if (r == nullptr)
@@ -693,7 +690,7 @@ void Blaeck::_setSignalInterval(int16_t index, BlaeckIntervalMode mode, double d
     r->intervalDelta = delta;
   }
   s.IntervalMode = mode;
-  if (mode != BLAECK_ON_CHANGE && s.Reporting != nullptr && !s.Reporting->immediate)
+  if (mode != BLAECK_IF_CHANGED && s.Reporting != nullptr && !s.Reporting->immediate)
   {
     delete s.Reporting;
     s.Reporting = nullptr;
@@ -732,7 +729,7 @@ void Blaeck::_setSignalOnChange(int16_t index, BlaeckIntervalMode mode)
   if (s.Reporting == nullptr)
     return;
   s.Reporting->immediate = false;
-  if (s.IntervalMode != BLAECK_ON_CHANGE)
+  if (s.IntervalMode != BLAECK_IF_CHANGED)
   {
     delete s.Reporting;
     s.Reporting = nullptr;
@@ -1402,7 +1399,7 @@ Blaeck &Blaeck::withFWVersion(BlaeckString fwVersion)
   return *this;
 }
 
-int Blaeck::_registerCommand(byte deviceId, const char *command, BlaeckCommandHandler handler,
+int Blaeck::_registerCommand(byte deviceId, BlaeckString commandName, BlaeckCommandHandler handler,
                              BlaeckButtonFunction press)
 {
 #if !BLAECK_ENABLE_IOT
@@ -1410,17 +1407,23 @@ int Blaeck::_registerCommand(byte deviceId, const char *command, BlaeckCommandHa
   if (press != nullptr)
     return -1;
 #endif
-  if (command == nullptr || (handler == nullptr && press == nullptr) || command[0] == '\0')
+  if (commandName == nullptr || (handler == nullptr && press == nullptr) || commandName.read() == 0)
   {
     _rejectedCommandCount++;
     return -1;
   }
-  if (strlen(command) >= MAX_COMMAND_NAME_COUNT)
+  // The table holds the name in RAM, so an F() name is copied like any other.
+  char command[MAX_COMMAND_NAME_COUNT];
+  size_t length = 0;
+  while (length < MAX_COMMAND_NAME_COUNT && (command[length] = (char)commandName.read(length)) != '\0')
+    ++length;
+  if (length >= MAX_COMMAND_NAME_COUNT)
   {
     if (_debugStream != nullptr)
     {
       _debugStream->print(F("Command name too long for handler table: "));
-      _debugStream->println(command);
+      commandName.printTo(*_debugStream);
+      _debugStream->println();
     }
     _rejectedCommandCount++;
     return -1;
@@ -1496,7 +1499,7 @@ void Blaeck::_resetCommand(CommandHandlerEntry &e)
   e.icon = nullptr;
 }
 
-void BlaeckDeviceBase::onCommand(const char *command, BlaeckCommandHandler handler)
+void BlaeckDeviceBase::onCommand(BlaeckString command, BlaeckCommandHandler handler)
 {
   _registerCommand(command, handler, nullptr);
 }
@@ -1614,7 +1617,7 @@ bool Blaeck::_storeString(detail::StoredString &slot, BlaeckString value)
   return false;
 }
 
-BlaeckButtonRef BlaeckDeviceBase::addButton(const char *name, BlaeckButtonFunction press)
+BlaeckButtonRef BlaeckDeviceBase::addButton(BlaeckString name, BlaeckButtonFunction press)
 {
   // A button always has a function; without one it would be a plain command.
   if (press == nullptr)
@@ -2950,7 +2953,7 @@ void Blaeck::writeIfDue(unsigned long long timestamp)
     Signal &s = Signals[i];
     ReportingState *r = s.Reporting;
     const bool interval = intervalDue && (s.IntervalMode == BLAECK_ALWAYS ||
-        (s.IntervalMode == BLAECK_ON_CHANGE &&
+        (s.IntervalMode == BLAECK_IF_CHANGED &&
          (initialInterval || _signalChanged(s, r->intervalDelta))));
     const bool immediate = r != nullptr && r->immediate &&
         (!r->valid || static_cast<uint32_t>(changeNow - r->lastWriteMs) >= r->minIntervalMs) &&
@@ -3438,7 +3441,7 @@ void Blaeck::validatePlatformSizes()
 
 // ----- BlaeckDeviceBase: calls into the board -----
 
-int BlaeckDeviceBase::_registerCommand(const char *command, BlaeckCommandHandler handler,
+int BlaeckDeviceBase::_registerCommand(BlaeckString command, BlaeckCommandHandler handler,
                                        BlaeckButtonFunction press)
 {
   return _core != nullptr ? _core->_registerCommand(_deviceId, command, handler, press) : -1;

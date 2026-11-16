@@ -22,7 +22,7 @@ void setup()
   server.begin();
   device.begin(server)
       .withClients(4)
-      .withDebugStream(&device.Terminal);
+      .withDebugStream(device.Terminal);
 }
 ```
 

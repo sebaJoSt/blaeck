@@ -94,7 +94,7 @@ void setup()
   }
 
   server.begin();
-  device.begin(server).withDebugStream(&Serial);
+  device.begin(server).withDebugStream(Serial);
 
   device.withName(F("Weather Station"));
 
@@ -187,7 +187,7 @@ than a plain upgrade. The main ones:
 |---|---|
 | `#include <BlaeckSerial.h>` and `BlaeckSerial BlaeckSerial;` | `#include <Blaeck.h>` and `Blaeck device;` |
 | `BlaeckSerial.begin(&Serial, 2)` | `device.begin(Serial)`. Tables grow as entries are added |
-| `BlaeckTCP.begin(clients, &Serial, 2, port)` | Start the server yourself, then `device.begin(server).withClients(clients)`. Add `.withDebugStream(&Serial)` for debug output |
+| `BlaeckTCP.begin(clients, &Serial, 2, port)` | Start the server yourself, then `device.begin(server).withClients(clients)`. Add `.withDebugStream(Serial)` for debug output |
 | `update()`, `markSignalUpdated()`, `writeUpdatedData()`, `timedWrite…()` | `write()` sends a value at once; `writeAtInterval()` and `writeOnChange()` choose when each signal is sent. See [Sending data](docs/sending-data.md) |
 | `setIntervalMs()` | Removed. The host sets the interval with `BLAECK.INTERVAL_START` |
 | Writes go out at once | Nothing goes out until the host sends `BLAECK.DATA_START` (data) or `BLAECK.ENTITIES_START` (controls, sensors and events) |
