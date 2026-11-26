@@ -11,8 +11,9 @@
 
   The circuit:
     - This board: an Arduino Mega, or another board with a second hardware serial port.
-    - Its TX1 (pin 18 on a Mega) to PumpBoard's link RX, its RX1 (pin 19) to PumpBoard's link TX,
-      and GND to GND. See PumpBoard.ino for the other side.
+    - Its TX1 (pin 18 on a Mega) to PumpBoard's RX1 (pin 19 on a Mega), its RX1 (pin 19) to
+      PumpBoard's TX1 (pin 18), and GND to GND. Never PumpBoard's pins 0 and 1: they carry USB.
+      See PumpBoard.ino for a PumpBoard without Serial1.
     - Connect only boards with the same logic level: 5 V to 5 V, 3.3 V to 3.3 V.
 
   Connect the host to this board's USB port at 115200 baud. Unplug the link to see the pump
